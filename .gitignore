@@ -1,0 +1,5 @@
+node_modules/
+deploy/nodes.local.sh
+*.wallet.json
+wallet.json
+.env

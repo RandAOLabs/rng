@@ -1,0 +1,15 @@
+{
+  "node": "https://hb.randao.net",
+  "owner": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
+  "token": "fZ6LdDKFVurqwtrK4AnRdJDRjRWPb_7cPiNe1plkbTw",
+  "beacon": "2SIbZKP8AFPCDpkBrKFZu4SgVlwQwyxPpVxpNsV_ZVM",
+  "groupKey": "8085ed55cb08a9193f3ef23ee16b3212033aa5f228402508502667d381d0b4e665ef32948a248634faa796a37e3a4658",
+  "committee": [
+    "mLw9gcjBKLekLhNDOrejq6l0MvQ9AOMFiMFDajFvvSI",
+    "AsQvMA7NYngw6rDw4D2CBcFDnOsWDXh0FOn0ZpiyRJw",
+    "ujHrIEF34b7IZ4vPMA7d4OX-ZknETCwG3uxk51Wqvm4"
+  ],
+  "retired": [
+    "3K_0gcFJixOwe5vsewbHztrzTyfImWxjHRfHwmbtz6A"
+  ]
+}
