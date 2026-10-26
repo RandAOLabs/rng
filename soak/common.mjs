@@ -37,9 +37,12 @@ export function readLines(file) {
   return fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
 
-export function loadOwner() {
-  if (!process.env.HB_WALLET) throw new Error('set HB_WALLET to the token/beacon owner wallet (mints soak funds)');
-  return JSON.parse(fs.readFileSync(process.env.HB_WALLET, 'utf8'));
+/** The wallet that funds the soak: FUNDER_WALLET (pre-funded TEST-RNG, pays by
+ *  transfer, safe to put on a server) or HB_WALLET (the token owner, mints). */
+export function loadFunder() {
+  const file = process.env.FUNDER_WALLET || process.env.HB_WALLET;
+  if (!file) throw new Error('set FUNDER_WALLET (pre-funded) or HB_WALLET (token owner)');
+  return { jwk: JSON.parse(fs.readFileSync(file, 'utf8')), mints: !process.env.FUNDER_WALLET };
 }
 
 /** n soak wallets, generated once and kept in soak/data/wallets. */

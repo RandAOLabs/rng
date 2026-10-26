@@ -1,16 +1,19 @@
 // Soak driver: many wallets and contracts using the beacon in different ways.
 //
-//   HB_WALLET=owner.json node soak/run.mjs
+//   FUNDER_WALLET=funder.json node soak/run.mjs    (or HB_WALLET=owner.json to mint)
 //
 // Env (defaults): WALLETS=50 CONTRACTS=100 INITIAL_CONTRACTS=50
 //   RATE=1 (actions/s) BURST_EVERY_MIN=60 BURST=60 (actions) HOURS=72
 //   NEW_CONTRACT_EVERY_MIN=30 RAMP_MIN=60 (minutes to reach RATE)
-//   CHAOS_EVERY_H=6 CHAOS_MIN=10 (needs deploy/nodes.local.sh; 0 = off)
+//   CHAOS_EVERY_H=6 CHAOS_MIN=10 (0 = off). CHAOS=ssh rotates through all nodes
+//   (needs deploy/nodes.local.sh); CHAOS=docker stops this host's own daemon
+//   through /var/run/docker.sock.
 // Everything it does is appended to soak/data/actions.jsonl for the checker.
 import { execFileSync } from 'node:child_process';
+import http from 'node:http';
 import path from 'node:path';
 import {
-  BEACON, TOKEN, UNIT, ROOT, appendLine, env, loadOwner, log, pick, read, readJson, send, sleep,
+  BEACON, TOKEN, UNIT, ROOT, appendLine, env, loadFunder, log, pick, read, readJson, send, sleep,
   spawnConsumer, wallets as loadWallets, writeJson,
 } from './common.mjs';
 
@@ -27,7 +30,9 @@ const CHAOS_EVERY = env('CHAOS_EVERY_H', 6) * 3_600_000;
 const CHAOS_FOR = env('CHAOS_MIN', 10) * 60_000;
 const MAX_IN_FLIGHT = env('MAX_IN_FLIGHT', 8);
 
-const owner = loadOwner();
+const funder = loadFunder();
+const owner = funder.jwk; // spawns the soak contracts and pays for funding
+const CHAOS = process.env.CHAOS || 'ssh';
 const ws = loadWallets(N_WALLETS + 1);
 const pauper = ws.pop(); // never funded: its requests must be refused
 const contracts = readJson('contracts.json', []);
@@ -45,7 +50,9 @@ async function record(kind, fields, fn) {
   }
 }
 
-const mint = (to, rng) => send(owner, TOKEN, 'Admin.Mint', { Recipient: to, Quantity: String(rng * UNIT) });
+const mint = (to, rng) => funder.mints
+  ? send(owner, TOKEN, 'Admin.Mint', { Recipient: to, Quantity: String(rng * UNIT) })
+  : send(owner, TOKEN, 'Transfer', { Recipient: to, Quantity: String(rng * UNIT) });
 const fundBeacon = (jwk, forWho, rng) => send(jwk, TOKEN, 'Transfer', { Recipient: BEACON, Quantity: String(rng * UNIT), 'X-For': forWho });
 
 async function setup() {
@@ -115,9 +122,21 @@ async function topUp() {
   }
 }
 
-function chaos(name, action) {
+function dockerApi(verb) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ socketPath: '/var/run/docker.sock', method: 'POST', path: `/containers/randao-provider/${verb}` }, (res) => {
+      res.resume();
+      res.statusCode < 400 ? resolve() : reject(new Error(`docker ${verb}: HTTP ${res.statusCode}`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function chaos(name, action) {
   try {
-    execFileSync('bash', [path.join(ROOT, 'deploy', 'nodes.sh'), action, name], { stdio: 'pipe' });
+    if (CHAOS === 'docker') await dockerApi(action === 'stop-one' ? 'stop' : 'start');
+    else execFileSync('bash', [path.join(ROOT, 'deploy', 'nodes.sh'), action, name], { stdio: 'pipe' });
     appendLine('actions.jsonl', { t: Date.now(), kind: `chaos-${action}`, node: name });
     log(`chaos: ${action} ${name}`);
   } catch (e) { log(`chaos ${action} ${name} failed: ${e.message.split('\n')[0]}`); }
@@ -130,7 +149,7 @@ async function main() {
   let nextBurst = start + BURST_EVERY;
   let nextContract = start + NEW_EVERY;
   let nextChaos = CHAOS_EVERY > 0 ? start + CHAOS_EVERY : Infinity;
-  const chaosNodes = ['main', 'paralith', 'randao'];
+  const chaosNodes = CHAOS === 'docker' ? ['this-host'] : ['main', 'paralith', 'randao'];
   let chaosI = 0;
   let inFlight = 0;
   const fire = () => { inFlight++; act().catch((e) => log('act:', e.message)).finally(() => { inFlight--; }); };
