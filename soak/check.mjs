@@ -112,10 +112,15 @@ async function checkContracts() {
 
 function checkInvariants(state, info) {
   const accrued = Object.values(state.accrued ?? {}).reduce((a, b) => a + Number(b), 0);
-  if (accrued !== info.threshold * Number(state.protocolAccrued)) {
-    problem('fee-mismatch', { accrued, protocol: state.protocolAccrued, threshold: info.threshold });
+  // Report each new imbalance or equivocation once, not every cycle.
+  const gap = info.threshold * Number(state.protocolAccrued) - accrued;
+  if (gap !== 0 && gap !== s.lastFeeGap) problem('fee-mismatch', { accrued, protocol: state.protocolAccrued, gap });
+  s.lastFeeGap = gap;
+  s.equivocations ||= {};
+  for (const [m, n] of Object.entries(state.equivocations ?? {})) {
+    if (Number(n) > (s.equivocations[m] ?? 0)) problem('equivocation', { member: m, n });
+    s.equivocations[m] = Number(n);
   }
-  for (const [m, n] of Object.entries(state.equivocations ?? {})) if (Number(n) > 0) problem('equivocation', { member: m, n });
   // Liveness: requests waiting, but no round for 3 cadences (+ 30 s slack).
   if (info.round > s.lastRound) { s.lastRound = info.round; s.lastRoundSeenAt = Date.now(); }
   if (info.pendingCount > 0 && Date.now() - s.lastRoundSeenAt > 3 * state.cadenceMs + 30_000) {

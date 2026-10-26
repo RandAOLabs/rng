@@ -280,6 +280,23 @@ local function deviceVerify(groupKey, message, sig)
     and (res.valid == true or res.valid == "true")
 end
 
+--- Who gets paid for a device-verified round: the first `threshold` members
+--- (by committee index) that posted a partial for it, since those partials
+--- are the on-record contributions. The poster stands in if none were posted.
+local function partialSigners(r, poster)
+  local posted = {}
+  if int(Beacon.partials.round, 0) == r then
+    for m in pairs(Beacon.partials.by) do
+      if Beacon.committee[m] then posted[#posted + 1] = m end
+    end
+  end
+  table.sort(posted, function(x, y) return Beacon.committee[x] < Beacon.committee[y] end)
+  local out = {}
+  for i = 1, math.min(#posted, int(Beacon.threshold, 2)) do out[i] = posted[i] end
+  if #out == 0 then out[1] = poster end
+  return out
+end
+
 local function finalize(base, r, sig, signers, now)
   local value = rng.hex(rng.sha256("round|" .. sig))
   local key = tostring(r)
@@ -337,7 +354,7 @@ H["Round"] = function(base, msg, from, now)
 
   if Beacon.useDevice then
     if not deviceVerify(Beacon.groupKey, roundMessage(r), sig) then return fail(base, "Bad-Signature") end
-    return finalize(base, r, sig, { member }, now)
+    return finalize(base, r, sig, partialSigners(r, member), now)
   end
   local key = tostring(r)
   local byRound = Beacon.attest[key] or { by = {}, sigs = {} }

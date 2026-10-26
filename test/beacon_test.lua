@@ -147,8 +147,14 @@ function runBeaconTests()
   send(delivery(F.game, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = "r-four" }))
   r = send(wallet(F.members[1], { Action = "Round", Data = encode({ round = 3, signature = F.fake1 }) }))
   eq("device rejects a forged signature", r.error, "Bad-Signature")
+  local before2, before3 = Beacon.accrued[F.members[2]] or 0, Beacon.accrued[F.members[3]] or 0
+  send(wallet(F.members[3], { Action = "Partial", Data = encode({ round = 3, signature = "p3" }) }))
+  send(wallet(F.members[2], { Action = "Partial", Data = encode({ round = 3, signature = "p2" }) }))
   send(wallet(F.members[1], { Action = "Round", Data = encode({ round = 3, signature = F.sig3 }) }))
   eq("device-verified round finalizes on one post", info().round, 3)
+  eq("partial poster 2 paid", (Beacon.accrued[F.members[2]] or 0) - before2, 1)
+  eq("partial poster 3 paid", (Beacon.accrued[F.members[3]] or 0) - before3, 1)
+  eq("fees balance: signers = threshold x protocol", (function() local a = 0 for _, v in pairs(Beacon.accrued) do a = a + v end return a end)() + 3, 2 * Beacon.protocolAccrued)
   ao = savedAo
 
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
