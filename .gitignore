@@ -5,3 +5,6 @@ wallet.json
 .env
 web/dist/
 soak/data/
+deploy/*.local.sh
+deploy/soak.json
+deploy/soak-committee.json

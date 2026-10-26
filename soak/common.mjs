@@ -3,13 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { spawnProcess, sendMessage, readState, jwkToAddress } from '../vendor/hbclient.mjs';
+import { readState, jwkToAddress } from '../vendor/hbclient.mjs';
+import { spawnLua, message } from '../provider/hb.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DATA = process.env.SOAK_DATA || path.join(ROOT, 'soak', 'data');
 fs.mkdirSync(path.join(DATA, 'wallets'), { recursive: true });
 
-export const testnet = JSON.parse(fs.readFileSync(path.join(ROOT, 'deploy', 'testnet.json'), 'utf8'));
+export const testnet = JSON.parse(fs.readFileSync(process.env.DEPLOY_STATE || path.join(ROOT, 'deploy', 'testnet.json'), 'utf8'));
 export const NODE = process.env.HB_NODE || testnet.node;
 export const BEACON = testnet.beacon;
 export const TOKEN = testnet.token;
@@ -62,8 +63,7 @@ export function wallets(n) {
 }
 
 export async function send(jwk, pid, action, tags = {}, data) {
-  const { slot } = await sendMessage({ node: NODE, jwk, process: pid, action, tags, data });
-  return Number(slot);
+  return message({ node: NODE, jwk, process: pid, action, tags, data });
 }
 
 export async function read(pid, key) {
@@ -81,7 +81,7 @@ export async function spawnConsumer(owner) {
     'rng = (function()', src('lib/rng.lua'), 'end)()',
     src('soak/consumer.lua'),
   ].join('\n');
-  const pid = await spawnProcess({ node: NODE, jwk: owner, lua, name: 'RNG-Soak-Consumer' });
+  const pid = await spawnLua({ node: NODE, jwk: owner, lua, tags: { name: 'RNG-Soak-Consumer' } });
   await send(owner, pid, 'Configure', {}, JSON.stringify({ beacon: BEACON, self: pid }));
   return pid;
 }

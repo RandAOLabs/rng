@@ -8,13 +8,12 @@
 //   node deploy/deploy.mjs info                       print the beacon's published info
 //
 // Env: HB_NODE (default https://hb.randao.net), HB_WALLET (path to the
-// owner/deployer wallet JWK). State: deploy/testnet.json.
+// owner/deployer wallet JWK), DEPLOY_STATE (default deploy/testnet.json).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  spawnProcess, sendMessage, readState, jwkToAddress, awaitComputedSlot, pendingPushes,
-} from '../vendor/hbclient.mjs';
+import { readState, jwkToAddress, awaitComputedSlot, pendingPushes } from '../vendor/hbclient.mjs';
+import { spawnLua, message } from '../provider/hb.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const V2 = path.resolve(HERE, '..');
@@ -22,7 +21,8 @@ const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
 const NODE = process.env.HB_NODE || 'https://hb.randao.net';
 const WALLET = process.env.HB_WALLET;
 if (!WALLET) throw new Error('set HB_WALLET to the deployer wallet JWK path');
-const STATE = path.join(HERE, 'testnet.json');
+// DEPLOY_STATE picks another network's record (e.g. the soak network).
+const STATE = process.env.DEPLOY_STATE ? path.resolve(process.env.DEPLOY_STATE) : path.join(HERE, 'testnet.json');
 const jwk = JSON.parse(fs.readFileSync(WALLET, 'utf8'));
 const me = jwkToAddress(jwk);
 const state = fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : {};
@@ -37,7 +37,7 @@ const tokenSource = () => [...json(), read('token/rng-token.lua')].join('\n');
 const beaconSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('beacon/beacon.lua')].join('\n');
 
 async function send(pid, action, { tags = {}, data } = {}) {
-  const { slot } = await sendMessage({ node: NODE, jwk, process: pid, action, tags, data });
+  const slot = await message({ node: NODE, jwk, process: pid, action, tags, data });
   await awaitComputedSlot({ node: NODE, process: pid, slot });
   const out = await readState({ node: NODE, process: pid, path: `compute&slot=${slot}/results/output/data` });
   await pendingPushes({ node: NODE, process: pid });
@@ -55,10 +55,10 @@ if (cmd === 'spawn') {
   if (state.beacon) throw new Error(`already deployed (${STATE}); move it aside to redeploy`);
   state.node = NODE;
   state.owner = me;
-  state.token = await spawnProcess({ node: NODE, jwk, lua: tokenSource(), name: 'TEST-RNG' });
+  state.token = await spawnLua({ node: NODE, jwk, lua: tokenSource(), tags: { name: 'TEST-RNG' } });
   console.log('token ', state.token);
   save();
-  state.beacon = await spawnProcess({ node: NODE, jwk, lua: beaconSource(), name: 'RandAO-Beacon' });
+  state.beacon = await spawnLua({ node: NODE, jwk, lua: beaconSource(), tags: { name: 'RNG-Beacon' } });
   console.log('beacon', state.beacon);
   save();
   // First messages initialise each process and publish its read keys.
@@ -68,7 +68,7 @@ if (cmd === 'spawn') {
 
 if (cmd === 'spawn-beacon') {
   if (state.beacon) (state.retired ||= []).push(state.beacon);
-  state.beacon = await spawnProcess({ node: NODE, jwk, lua: beaconSource(), name: 'RandAO-Beacon' });
+  state.beacon = await spawnLua({ node: NODE, jwk, lua: beaconSource(), tags: { name: 'RNG-Beacon' } });
   console.log('beacon', state.beacon);
   save();
   console.log('beacon info', (await send(state.beacon, 'Get-Info')).output);
@@ -81,7 +81,7 @@ if (cmd === 'configure') {
   save();
   const r = await send(state.beacon, 'Configure', { data: JSON.stringify({
     self: state.beacon, token: state.token, unit: 1000000, threshold: committee.t, cadenceMs: 5000,
-    groupKey: committee.groupKey, committee: committee.members,
+    groupKey: committee.groupKey, committee: committee.members, useDevice: committee.useDevice,
   }) });
   console.log(r.output);
 }

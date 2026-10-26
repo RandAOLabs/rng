@@ -13,12 +13,13 @@
 # firewall decides who can reach port $PORT. Files live in /opt/randao-provider.
 set -euo pipefail
 
-# Operator-specific settings live in deploy/nodes.local.sh (untracked):
+# Operator-specific settings live in deploy/nodes.local.sh (untracked), or the
+# file named by NODES_FILE:
 #   SSH_KEY=~/.ssh/<key>
 #   NODES=("1 <name> <host>" "2 <name> <host>" "3 <name> <host>")
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
-source "$HERE/nodes.local.sh"
+source "${NODES_FILE:-$HERE/nodes.local.sh}"
 KEY="${SSH_KEY:?set SSH_KEY in deploy/nodes.local.sh}"
 PORT=7477
 BASE=/opt/randao-provider
