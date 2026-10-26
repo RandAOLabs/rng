@@ -4,3 +4,4 @@ deploy/nodes.local.sh
 wallet.json
 .env
 web/dist/
+soak/data/

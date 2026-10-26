@@ -7,6 +7,7 @@
 #   deploy/nodes.sh dkg-offline      same ceremony, deals relayed through this machine over SSH
 #   deploy/nodes.sh start            start the daemon (docker, restart unless-stopped)
 #   deploy/nodes.sh status | logs    health and recent logs
+#   deploy/nodes.sh stop-one|start-one <name>   stop or start one node's daemon (soak chaos)
 #
 # The daemon runs in node:22-slim with host networking, so each host's own
 # firewall decides who can reach port $PORT. Files live in /opt/randao-provider.
@@ -73,6 +74,12 @@ case "${1:-}" in
   start)
     for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
       ssh_ "$ip" "docker rm -f randao-provider >/dev/null 2>&1; docker run -d --name randao-provider --restart unless-stopped --network host -v $BASE:/srv $IMAGE node /srv/app/provider/daemon.mjs run /srv/config.json >/dev/null && echo $name started"
+    done ;;
+  stop-one|start-one) # chaos testing: stop-one <name> / start-one <name>
+    for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
+      [ "$name" = "$2" ] || continue
+      if [ "$1" = stop-one ]; then ssh_ "$ip" "docker stop randao-provider >/dev/null && echo $name stopped"
+      else ssh_ "$ip" "docker start randao-provider >/dev/null && echo $name started"; fi
     done ;;
   status)
     for n in "${NODES[@]}"; do read -r i name ip <<<"$n"

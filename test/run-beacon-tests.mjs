@@ -52,9 +52,9 @@ const bundle = [
   'json = require(".json")',
   'Owner = nil -- AOS presets Owner; on a node the contract resolves it from the spawn signer',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
-  read('beacon/beacon.lua'),
-  fixtures,
-  read('test/beacon_test.lua'),
+  ...(process.env.SUITE === 'consumer'
+    ? [read('soak/consumer.lua'), read('soak/consumer_test.lua')]
+    : [read('beacon/beacon.lua'), fixtures, read('test/beacon_test.lua')]),
 ].join('\n');
 
 function verdict(text) {
@@ -76,7 +76,7 @@ if (live !== -1) {
   const pid = addr('beacon-tests');
   const result = await handle(null, {
     Id: 'eval-beacon-tests', Target: pid, Owner: pid, From: pid, Tags: [{ name: 'Action', value: 'Eval' }],
-    Data: bundle + '\nreturn runBeaconTests()', 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+    Data: bundle + (process.env.SUITE === 'consumer' ? '\nreturn runConsumerTests()' : '\nreturn runBeaconTests()'), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
   }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
   if (result.Error) { console.error(result.Error); process.exit(1); }
   const out = result.Output?.data;

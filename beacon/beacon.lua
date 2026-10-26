@@ -24,8 +24,11 @@
 
 local json = require(".json")
 
--- Finalized rounds kept in state for Get-Round reads; older ones age out.
-local ROUND_HISTORY = 256
+-- The whole state is published after every message, so everything in it is
+-- bounded. Finalized rounds kept for readers (indexers archive them):
+local ROUND_HISTORY = 64
+-- Duplicate guards remember a request or a credit for this many rounds.
+local GUARD_ROUNDS = 200
 
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
@@ -50,8 +53,8 @@ local function freshState()
     protocolAccrued = 0,
     pending = {},         -- "r" -> list of { requester, requestId, tier }
     pendingCount = 0,
-    seen = {},            -- requester|requestId -> true
-    credited = {},        -- token|reference -> true (notices may arrive twice)
+    seen = {},            -- requester|requestId -> round it was bound to
+    credited = {},        -- token|reference -> round when credited (notices may arrive twice)
     attest = {},          -- "r" -> { by = member -> sig, sigs = sig -> members }
     equivocations = {},   -- member -> conflicting signatures posted
     partials = { round = 0, by = {} }, -- open round's partial signatures, by member
@@ -222,7 +225,7 @@ H["Credit-Notice"] = function(base, msg, from)
   local amount = atoms // int(Beacon.unit, 1)
   local who = msg["X-For"] or msg.Sender
   if amount <= 0 or not isAoAddress(who) then return fail(base, "Nothing to credit") end
-  if msg.Reference then Beacon.credited[key] = true end
+  if msg.Reference then Beacon.credited[key] = int(Beacon.round, 0) end
   add(Beacon.balances, who, amount)
   return reply(base, { credited = amount, account = who, balance = Beacon.balances[who] }, {
     ["rng-funded"] = { target = who, Action = "RNG-Funded",
@@ -256,7 +259,7 @@ H["Request-Random"] = function(base, msg, from)
     return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost })
   end
   Beacon.balances[from] = bal - cost
-  Beacon.seen[key] = true
+  Beacon.seen[key] = int(Beacon.round, 0) + 1
   -- Bind to the next round, which nobody has signed yet.
   local r = tostring(int(Beacon.round, 0) + 1)
   local list = Beacon.pending[r] or {}
@@ -281,8 +284,15 @@ local function finalize(base, r, sig, signers, now)
   local value = rng.hex(rng.sha256("round|" .. sig))
   local key = tostring(r)
   Beacon.round, Beacon.lastRoundAt = r, now
-  Beacon.rounds[key] = { signature = sig, value = value, signers = signers }
+  Beacon.rounds[key] = { signature = sig, value = value, signers = signers, at = now }
   Beacon.rounds[tostring(r - ROUND_HISTORY)] = nil
+  if r % 50 == 0 then
+    for _, guard in ipairs({ Beacon.seen, Beacon.credited }) do
+      for k, at in pairs(guard) do
+        if int(at, 0) < r - GUARD_ROUNDS then guard[k] = nil end
+      end
+    end
+  end
   Beacon.attest[key] = nil
   Beacon.partials = { round = 0, by = {} }
 

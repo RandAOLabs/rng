@@ -2,7 +2,7 @@
   "node": "https://hb.randao.net",
   "owner": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
   "token": "fZ6LdDKFVurqwtrK4AnRdJDRjRWPb_7cPiNe1plkbTw",
-  "beacon": "Pqd2KuG9lql30f2G4NWeD5-hDMHzrODc74Hddve0BiQ",
+  "beacon": "iemOXtva737vy-N22lCQhU5i6R2WdGbErjNj2UpligY",
   "groupKey": "8085ed55cb08a9193f3ef23ee16b3212033aa5f228402508502667d381d0b4e665ef32948a248634faa796a37e3a4658",
   "committee": [
     "mLw9gcjBKLekLhNDOrejq6l0MvQ9AOMFiMFDajFvvSI",
@@ -11,6 +11,7 @@
   ],
   "retired": [
     "3K_0gcFJixOwe5vsewbHztrzTyfImWxjHRfHwmbtz6A",
-    "2SIbZKP8AFPCDpkBrKFZu4SgVlwQwyxPpVxpNsV_ZVM"
+    "2SIbZKP8AFPCDpkBrKFZu4SgVlwQwyxPpVxpNsV_ZVM",
+    "Pqd2KuG9lql30f2G4NWeD5-hDMHzrODc74Hddve0BiQ"
   ]
 }
