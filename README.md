@@ -68,6 +68,7 @@ Live on `https://hb.randao.net`; process ids in `deploy/testnet.json`.
 | `deploy/` | spawn, configure, fund; node install over SSH + Docker |
 | `test/` | library, beacon and BLS suites |
 | `web/` | the site: live beacon, try a draw, docs, committee (`cd web && npm i && npm run dev`) |
+| `device/` | the `vrf@1.0` HyperBEAM device: patch, sources, rollout gates |
 | `vendor/` | JSON and HyperBEAM client from paralith-mono (see `vendor/SOURCE`) |
 
 ## Test
