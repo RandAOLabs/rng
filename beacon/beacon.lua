@@ -18,8 +18,9 @@
 --
 -- Until the vrf@1.0 device ships, a round finalizes only when `threshold`
 -- committee members post the same signature (each verifies it off-chain
--- first), so one stolen key cannot inject a value. With Beacon.verify set to
--- the device call, one post carrying a valid group signature is enough.
+-- first), so one stolen key cannot inject a value. With `useDevice` on (the
+-- node runs HyperBEAM's vrf@1.0), the beacon checks the group signature itself
+-- and one post is enough.
 
 local json = require(".json")
 
@@ -54,6 +55,7 @@ local function freshState()
     attest = {},          -- "r" -> { by = member -> sig, sigs = sig -> members }
     equivocations = {},   -- member -> conflicting signatures posted
     partials = { round = 0, by = {} }, -- open round's partial signatures, by member
+    useDevice = false,    -- verify rounds with vrf@1.0 instead of attestations
   }
 end
 Beacon = Beacon or freshState()
@@ -264,6 +266,17 @@ H["Request-Random"] = function(base, msg, from)
   return reply(base, { requestId = requestId, round = int(r, 0), price = cost, balance = Beacon.balances[from] })
 end
 
+--- The group signature, checked by the node's vrf@1.0 device (BLS12-381,
+--- pubkey in G1, signature in G2). Any failure to reach the device is a no.
+local function deviceVerify(groupKey, message, sig)
+  if type(ao) ~= "table" or type(ao.resolve) ~= "function" then return false end
+  local ok, status, res = pcall(ao.resolve, {
+    path = "/~vrf@1.0/verify-bls", ["public-key"] = groupKey, message = message, signature = sig,
+  })
+  return ok and status == "ok" and type(res) == "table"
+    and (res.valid == true or res.valid == "true")
+end
+
 local function finalize(base, r, sig, signers, now)
   local value = rng.hex(rng.sha256("round|" .. sig))
   local key = tostring(r)
@@ -312,8 +325,8 @@ H["Round"] = function(base, msg, from, now)
   end
   if int(Beacon.pendingCount, 0) == 0 then return fail(base, "Nothing-Pending") end
 
-  if Beacon.verify then
-    if not Beacon.verify(Beacon.groupKey, roundMessage(r), sig) then return fail(base, "Bad-Signature") end
+  if Beacon.useDevice then
+    if not deviceVerify(Beacon.groupKey, roundMessage(r), sig) then return fail(base, "Bad-Signature") end
     return finalize(base, r, sig, { member }, now)
   end
   local key = tostring(r)
@@ -352,8 +365,7 @@ H["Partial"] = function(base, msg)
   return reply(base, { round = r, partials = count })
 end
 
---- Testnet upgrades without a redeploy (e.g. switching Beacon.verify to the
---- vrf@1.0 device). Owner only. Remove before mainnet.
+--- Testnet upgrades without a redeploy. Owner only. Remove before mainnet.
 H["Admin.Eval"] = function(base, msg)
   if provenSigner(msg) ~= Owner then return fail(base, "Not authorised") end
   local chunk, err = load(msg.Data or msg.data or "", "admin-eval", "t")
@@ -389,6 +401,7 @@ H["Configure"] = function(base, msg)
   if d.cadenceMs then Beacon.cadenceMs = int(d.cadenceMs, Beacon.cadenceMs) end
   if d.threshold then Beacon.threshold = int(d.threshold, Beacon.threshold) end
   if d.groupKey then Beacon.groupKey = d.groupKey end
+  if d.useDevice ~= nil then Beacon.useDevice = d.useDevice == true end
   if d.committee then
     Beacon.committee = {}
     for i, address in ipairs(d.committee) do Beacon.committee[address] = i end

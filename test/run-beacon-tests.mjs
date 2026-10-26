@@ -30,6 +30,8 @@ const shares = [1, 2, 3].map((j) => bls.dkgFinish(j, 3, Object.fromEntries(deals
 const sign = (msg, idx) => bls.combine(idx.map((i) => ({ index: shares[i].index, signature: bls.partialSign(shares[i], msg) })));
 F.sig1 = sign(`${F.beacon}|1`, [0, 2]);
 F.sig2 = sign(`${F.beacon}|2`, [1, 2]);
+F.sig3 = sign(`${F.beacon}|3`, [0, 1]);
+F.groupKey = shares[0].groupKey;
 if (!bls.verify(shares[0].groupKey, `${F.beacon}|1`, F.sig1)) throw new Error('fixture signature does not verify');
 const forged = bls.dealerKeygen(3, 2);
 F.fake1 = bls.combine([0, 1].map((i) => ({ index: forged.shares[i].index, signature: bls.partialSign(forged.shares[i], `${F.beacon}|1`) })));

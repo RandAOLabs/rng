@@ -137,6 +137,20 @@ function runBeaconTests()
   r = send(wallet(F.owner, { Action = "Admin.Eval", Data = "Beacon.cadenceMs = 4000" }))
   eq("owner eval applies", Beacon.cadenceMs, 4000)
 
+  -- With the device on, one post with a valid group signature finalizes.
+  local savedAo = ao
+  ao = { resolve = function(m)
+    return "ok", { valid = m.signature == F.sig3 and m.message == F.beacon .. "|3" and m["public-key"] == F.groupKey }
+  end }
+  send(wallet(F.owner, { Action = "Configure", Data = encode({ useDevice = true, cadenceMs = 0 }) }))
+  send(delivery(F.token, { Action = "Credit-Notice", Sender = F.game, Quantity = tostring(3 * U), Reference = "t2" }))
+  send(delivery(F.game, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = "r-four" }))
+  r = send(wallet(F.members[1], { Action = "Round", Data = encode({ round = 3, signature = F.fake1 }) }))
+  eq("device rejects a forged signature", r.error, "Bad-Signature")
+  send(wallet(F.members[1], { Action = "Round", Data = encode({ round = 3, signature = F.sig3 }) }))
+  eq("device-verified round finalizes on one post", info().round, 3)
+  ao = savedAo
+
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
   return table.concat(lines, "\n")
 end
