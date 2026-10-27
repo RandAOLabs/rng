@@ -1,5 +1,7 @@
-// The time-lock tier, live: the open round's validators locking in and
-// revealing, and recent rounds with every answer re-checked in this page.
+// The time-lock tier, live: rounds run every second whether or not anyone is
+// waiting, overlapping (the next locks in while the last reveals). Shows the
+// newest value, the rounds in flight, the validators, and recent rounds with
+// every answer re-checked in this page.
 import { useEffect, useMemo, useState } from 'react';
 import { readKey, short, useRoundHistory } from '../lib/beacon';
 import { TIMELOCK } from '../lib/config';
@@ -7,10 +9,11 @@ import { roundValue, seedFor, verifyCrack, verifyReveal } from '../lib/timelock'
 
 type Output = { y: string; via: 'reveal' | 'crack'; p?: string; proof?: string; cracker?: string };
 type Round = { round: number; commits: Record<string, string>; outputs: Record<string, Output>; value: string; requests: number; opened: number; finalizedAt: number };
+type InFlight = { round: number; phase: string; pending: number; revealDeadline?: number };
 type Info = {
-  round: number; price: number; params: { T: number; commitWindowMs: number };
-  validators: { address: string; suspended: boolean; strikes: number }[];
-  open: { round: number; phase: string; pending: number; active?: string[]; committed?: Record<string, string>; revealed?: string[] };
+  round: number; price: number; params: { T: number; commitWindowMs: number; heartbeat?: number };
+  validators: { address: string; suspended: boolean; idle?: boolean; strikes: number; bond?: number }[];
+  open: InFlight; revealing?: InFlight[];
 };
 type State = { self: string; params: { T: number }; rounds: Record<string, Round> };
 
@@ -30,11 +33,17 @@ function checkRound(st: State, r: Round): boolean {
   return checked.get(key)!;
 }
 
-const PHASE: Record<string, string> = {
-  collecting: 'Waiting for a request',
-  commit: 'Validators are locking in their puzzles',
-  reveal: 'Validators are revealing their answers',
-};
+function phaseOf(r: InFlight) {
+  if (r.phase === 'reveal') return r.revealDeadline && Date.now() > r.revealDeadline ? 'being cracked' : 'revealing';
+  return r.phase === 'commit' ? 'locking in' : 'starting';
+}
+
+/** Rounds a minute over the history seen so far. */
+function perMinute(rounds: Round[]) {
+  const ts = rounds.map((r) => r.finalizedAt).sort((a, b) => a - b);
+  if (ts.length < 3) return null;
+  return Math.round(((ts.length - 1) / (ts[ts.length - 1] - ts[0])) * 60_000);
+}
 
 export function TimelockLive() {
   const [info, setInfo] = useState<Info | null>(null);
@@ -56,26 +65,50 @@ export function TimelockLive() {
   const rounds = useRoundHistory(published);
   if (!TIMELOCK) return null;
 
-  const o = info?.open;
   const validators = info?.validators ?? [];
+  const inFlight = info ? [...(info.revealing ?? []), info.open].sort((a, b) => b.round - a.round) : [];
+  const newest = rounds[0];
+  const rate = perMinute(rounds);
   return (
     <section className="block">
       <h2>Time-lock tier, live</h2>
       <p className="sub">
         Our flagship. Every validator locks in a puzzle, then reveals it; one honest validator keeps the result fair.
+        A new round starts every second whether anyone is waiting or not, so a request joins the next one.
         Each answer below is re-checked in this page.
       </p>
       <div className="tl-open">
-        <p className="tl-phase"><strong>Round {o?.round ?? '–'}</strong> {o ? PHASE[o.phase] ?? o.phase : 'Loading…'}</p>
+        <div className="tl-now">
+          <span className="tl-label">Newest value</span>
+          <span key={newest?.value} className="tl-value mono">{newest ? newest.value : 'Waiting for the first round…'}</span>
+          {newest && (
+            <span className="tl-meta">
+              Round {newest.round}, {((newest.finalizedAt - newest.opened) / 1000).toFixed(1)} s from first lock-in to value
+              {rate !== null && `, ${rate} rounds a minute`}
+            </span>
+          )}
+        </div>
+        {inFlight.length > 0 && (
+          <p className="tl-flight">
+            <span className="tl-label">In flight</span>
+            {inFlight.map((r) => (
+              <span key={r.round} className={`tl-chip tl-chip-${phaseOf(r).replace(' ', '-')}`}>
+                {r.round} {phaseOf(r)}{r.pending ? `, ${r.pending} waiting` : ''}
+              </span>
+            ))}
+          </p>
+        )}
         <ul className="tl-validators">
           {validators.map((v, i) => {
-            const locked = !!o?.committed?.[v.address];
-            const revealed = !!o?.revealed?.includes(v.address);
-            const state = v.suspended ? 'suspended' : revealed ? 'revealed' : locked ? 'locked' : 'idle';
+            const state = v.suspended ? (v.idle ? 'idle' : 'suspended') : 'active';
             return (
               <li key={v.address} className={`tl-v tl-${state}`}>
                 <span className="tl-name">Validator {i + 1}</span>
-                <span className="tl-state">{{ idle: 'Ready', locked: 'Locked in', revealed: 'Revealed', suspended: 'Suspended' }[state]}</span>
+                <span className="tl-state">
+                  {{ active: 'Active', idle: 'Offline, rejoins when back', suspended: 'Suspended and slashed' }[state]}
+                  {v.bond !== undefined && `. Bond ${v.bond.toLocaleString()} RNG`}
+                  {v.strikes > 0 && `, ${v.strikes} ${v.strikes === 1 ? 'strike' : 'strikes'}`}
+                </span>
               </li>
             );
           })}

@@ -191,11 +191,20 @@ pre code { font-size: inherit; }
 .tl-v { border: 2px solid var(--rule); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; transition: border-color 200ms, background 200ms; }
 .tl-name { font-weight: 600; }
 .tl-state { color: var(--muted); font-size: 14px; }
-.tl-locked { border-color: var(--live); }
-.tl-revealed { border-color: var(--ok); }
-.tl-revealed .tl-state { color: var(--ok); }
+.tl-active { border-color: var(--ok); }
+.tl-idle { border-style: dashed; }
 .tl-suspended { opacity: 0.5; }
 @media (prefers-reduced-motion: reduce) { .tl-v { transition: none; } }
+.tl-now { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.tl-label { color: var(--muted); font-size: 14px; margin-right: 10px; }
+.tl-value { font-size: 15px; overflow-wrap: anywhere; animation: tl-flash 900ms ease-out; }
+.tl-meta { color: var(--muted); font-size: 14px; }
+@keyframes tl-flash { from { color: var(--live); } }
+.tl-flight { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
+.tl-chip { border: 1px solid var(--rule); border-radius: 4px; padding: 2px 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.tl-chip-locking-in { border-color: var(--live); }
+.tl-chip-being-cracked { border-style: dashed; }
+@media (prefers-reduced-motion: reduce) { .tl-value { animation: none; } }
 .tl-diagram { margin: 16px 0 32px; }
 .tl-diagram svg { width: 100%; height: auto; display: block; }
 .tld-head { font: 700 17px var(--text); fill: var(--ink); }

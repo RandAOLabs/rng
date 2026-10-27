@@ -157,6 +157,13 @@ function runBeaconTests()
   eq("fees balance: signers = threshold x protocol", (function() local a = 0 for _, v in pairs(Beacon.accrued) do a = a + v end return a end)() + 3, 2 * Beacon.protocolAccrued)
   ao = savedAo
 
+  -- Heartbeat on (the default), rounds run with nobody waiting; off, they wait for a request.
+  r = send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 4, signature = "p1" }) }))
+  check("heartbeat on: partial with nobody waiting", r.error == nil, r.error)
+  send(wallet(F.owner, { Action = "Configure", Data = encode({ heartbeat = false }) }))
+  r = send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 4, signature = "p1" }) }))
+  eq("heartbeat off: no round without a request", r.error, "Nothing-Pending")
+
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
   return table.concat(lines, "\n")
 end

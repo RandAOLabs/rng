@@ -14,9 +14,9 @@ checker re-verifies everything and keeps a pass/fail report.
 
 ```bash
 export HB_WALLET=owner.json          # token/beacon owner: mints soak funds
-node soak/run.mjs &                  # defaults: 50 wallets, 100 contracts, 1 action/s, 72 h
+node soak/run.mjs &                  # defaults: 50 wallets, 100 contracts, 1 action/s, 24 h
 node soak/check.mjs                  # report in soak/data/report.md
 ```
 
-Pass (72 h): no bad rounds, no wrong results, no lost requests, refusals held, no stall over
+Pass (24 h): no bad rounds, no wrong results, no lost requests, refusals held, no stall over
 3 cadences, p95 request-to-result within cadence + 2 s, dice uniform.

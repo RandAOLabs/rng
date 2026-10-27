@@ -61,8 +61,7 @@ async function crackNative(N, x, T) {
 }
 
 const cracking = new Set();
-async function crack(info, target) {
-  const o = info.open;
+async function crack(info, o, target) {
   const key = `${o.round}|${target}`;
   if (cracking.has(key)) return;
   cracking.add(key);
@@ -93,10 +92,13 @@ if (cfg.listen) {
 log(`validator ${me} watching ${cfg.beacon}`);
 
 // What we last sent per round. The beacon's published state is the truth;
-// this only stops resending more often than every 3 s while it catches up.
-const sent = { commit: { round: 0, at: 0 }, reveal: { round: 0, at: 0 }, rejoin: { round: 0, at: 0 } };
-const due = (kind, round, now) => sent[kind].round !== round || now - sent[kind].at > 3000;
+// this only stops resending more often than every 1-3 s while it catches up.
+const sent = { commit: { round: 0, at: 0 }, rejoin: { round: 0, at: 0 } };
+const due = (kind, round, now, ms = 3000) => sent[kind].round !== round || now - sent[kind].at > ms;
 const mark = (kind, round, now) => { sent[kind] = { round, at: now }; };
+// Several rounds can be revealing at once, so reveals are tracked per round.
+const revealed = new Map();
+const dueReveal = (round, now) => !revealed.has(round) || now - revealed.get(round) > 3000;
 for (;;) {
   try {
     const i = await info();
@@ -107,17 +109,18 @@ for (;;) {
     const committed = o.committed ?? {};
     const now = Date.now();
 
-    // Suspended: rejoin on our own once the cooldown is over, while the bond
-    // still covers the next slash (SPEC.md §2.2).
-    if (mine?.suspended && mine.bond >= i.params.slash && i.round >= mine.suspendedAt + i.params.rejoinAfter && due('rejoin', i.round, now)) {
-      log(`suspended at round ${mine.suspendedAt}; rejoining with bond ${mine.bond}`);
+    // Suspended: rejoin on our own (idle at once, slashed after the cooldown)
+    // while the bond still covers the next slash (SPEC.md §2.2).
+    if (mine?.suspended && mine.bond >= i.params.slash && (mine.idle || i.round >= mine.suspendedAt + i.params.rejoinAfter) && due('rejoin', i.round, now)) {
+      log(`${mine.idle ? 'idle' : 'suspended'} since round ${mine.suspendedAt}; rejoining with bond ${mine.bond}`);
       await post('Rejoin', {});
       mark('rejoin', i.round, now);
     }
 
-    // Commit as soon as the round has work and the cadence allows.
-    if (mine && !mine.suspended && (o.phase === 'collecting' || o.phase === 'commit') && o.pending > 0
-        && now >= i.nextRoundAt && !committed[me] && due('commit', o.round, now)) {
+    // Commit as soon as the cadence allows: every round with the heartbeat
+    // on, else only rounds with requests waiting.
+    if (mine && !mine.suspended && (o.phase === 'collecting' || o.phase === 'commit') && (o.pending > 0 || i.params.heartbeat)
+        && now >= i.nextRoundAt && !committed[me] && due('commit', o.round, now, 1000)) {
       // Reuse this round's modulus on a resend: it was never revealed.
       const m = fs.existsSync(puzzleFile(o.round)) ? JSON.parse(fs.readFileSync(puzzleFile(o.round), 'utf8')) : pool.shift();
       fs.writeFileSync(puzzleFile(o.round), JSON.stringify(m), { mode: 0o600 });
@@ -125,39 +128,45 @@ for (;;) {
       mark('commit', o.round, now);
     }
 
-    // Reveal once commits close (or the window has passed by our clock: the
-    // reveal itself makes the beacon close the commits).
-    const windowOver = o.commitDeadline > 0 && now >= o.commitDeadline;
-    if (committed[me] && !(o.revealed ?? []).includes(me) && (o.phase === 'reveal' || windowOver) && due('reveal', o.round, now)) {
-      const m = JSON.parse(fs.readFileSync(puzzleFile(o.round), 'utf8'));
-      if (m.N !== committed[me]) {
-        log(`round ${o.round}: committed modulus is not the one on disk; cannot reveal`);
-      } else {
-        const y = tl.solveWithTrapdoor(m, tl.seedFor(i.self, o.round, me), i.params.T);
-        await post('Reveal', { round: o.round, y, p: m.p });
-        mark('reveal', o.round, now);
+    // Rounds overlap: the open round takes commits while older ones reveal.
+    const rounds = [...(i.revealing ?? []), o];
+    for (const x of rounds) {
+      const committedX = x.committed ?? {};
+      // Reveal once commits close (or the window has passed by our clock:
+      // the reveal itself makes the beacon close the commits).
+      const windowOver = x.commitDeadline > 0 && now >= x.commitDeadline;
+      if (committedX[me] && !(x.revealed ?? []).includes(me) && (x.phase === 'reveal' || windowOver) && dueReveal(x.round, now)) {
+        const m = JSON.parse(fs.readFileSync(puzzleFile(x.round), 'utf8'));
+        if (m.N !== committedX[me]) {
+          log(`round ${x.round}: committed modulus is not the one on disk; cannot reveal`);
+        } else {
+          const y = tl.solveWithTrapdoor(m, tl.seedFor(i.self, x.round, me), i.params.T);
+          await post('Reveal', { round: x.round, y, p: m.p });
+          revealed.set(x.round, now);
+        }
+      }
+
+      // Crack reveals still missing after the deadline. Validators take turns
+      // by address order, one reveal window apart, so one cracks and the rest wait.
+      if (x.phase === 'reveal' && x.revealDeadline > 0) {
+        const order = (x.active ?? []).filter((a) => committedX[a]).sort();
+        for (const target of Object.keys(committedX)) {
+          if ((x.revealed ?? []).includes(target) || target === me) continue;
+          const turns = order.filter((a) => a !== target);
+          const myTurn = turns.indexOf(me);
+          if (myTurn >= 0 && now >= x.revealDeadline + myTurn * i.params.revealWindowMs) crack(i, x, target);
+        }
       }
     }
 
-    // Crack reveals still missing after the deadline. Validators take turns
-    // by address order, one reveal window apart, so one cracks and the rest wait.
-    if (o.phase === 'reveal' && o.revealDeadline > 0) {
-      const order = (o.active ?? []).filter((a) => committed[a]).sort();
-      for (const target of Object.keys(committed)) {
-        if ((o.revealed ?? []).includes(target) || target === me) continue;
-        const turns = order.filter((a) => a !== target);
-        const myTurn = turns.indexOf(me);
-        if (myTurn >= 0 && now >= o.revealDeadline + myTurn * i.params.revealWindowMs) crack(i, target);
-      }
-    }
-
-    // Old trapdoors are only needed until their round is done.
+    // A trapdoor is only needed until its round is done.
+    const oldest = Math.min(...rounds.map((x) => x.round));
     for (const f of fs.readdirSync(file('puzzles'))) {
-      const r = Number(f.replace('.json', ''));
-      if (r < (i.round ?? 0) - 5) fs.rmSync(file('puzzles', f));
+      if (Number(f.replace('.json', '')) < oldest) fs.rmSync(file('puzzles', f));
     }
+    for (const r of revealed.keys()) if (r < oldest) revealed.delete(r);
   } catch (e) {
     log('loop error:', e.message);
   }
-  await sleep(400);
+  await sleep(150);
 }

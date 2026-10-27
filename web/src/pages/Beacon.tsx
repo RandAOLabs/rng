@@ -35,10 +35,14 @@ function RoundRow({ r, groupKey, self, members }: { r: { round: number; signatur
 }
 
 export function BeaconPage() {
-  const { info, state, error } = useBeacon();
+  const { info, state, error } = useBeacon(1000);
   const published = useMemo(() => recentRounds(state), [state]);
   const rounds = useRoundHistory(published);
   const latest = rounds[0];
+  const rate = useMemo(() => {
+    const ts = rounds.map((r) => r.at ?? 0).filter(Boolean).sort((a, b) => a - b);
+    return ts.length < 3 ? null : Math.round(((ts.length - 1) / (ts[ts.length - 1] - ts[0])) * 60_000);
+  }, [rounds]);
   const latestOk = useVerified(state?.groupKey, state?.self, latest?.round ?? 0, latest?.signature ?? '');
   const members = state?.committee ?? {};
 
@@ -63,7 +67,7 @@ export function BeaconPage() {
       <dl className="facts facts-strip">
         <div><dt>Quick round</dt><dd className="num">{latest ? latest.round : '–'}</dd></div>
         <div><dt>Signature</dt><dd>{latest ? <Check ok={latestOk} /> : 'No rounds yet'}</dd></div>
-        <div><dt>Waiting for the next round</dt><dd>{info ? `${info.pendingCount} ${info.pendingCount === 1 ? 'request' : 'requests'}` : '–'}</dd></div>
+        <div><dt>Quick rounds a minute</dt><dd className="num">{rate ?? '–'}</dd></div>
         <div><dt>Price per request</dt><dd>{info ? `${info.price.beacon} RNG` : '–'}</dd></div>
       </dl>
 
@@ -77,7 +81,7 @@ export function BeaconPage() {
           Each signature is checked in this page against the committee's public key. Nothing here is taken on trust.
         </p>
         {rounds.length === 0 ? (
-          <p className="empty">No rounds yet. A round is signed only when someone is waiting for one. <Link to="/try">Request one</Link>.</p>
+          <p className="empty">No rounds yet. Rounds start every second once the committee is up. <Link to="/try">Try a draw</Link>.</p>
         ) : (
           <div className="rounds-scroll" tabIndex={0} aria-label="Quick rounds, newest first">
           <table className="rounds">

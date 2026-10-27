@@ -7,28 +7,36 @@
 -- proof). The round value hashes every output, so one honest validator keeps
 -- it unpredictable.
 --
+-- Rounds overlap: the next round takes commits as soon as the last one's
+-- commits close, so a slow (cracked) round never holds up the ones after it.
+-- With `heartbeat` on, rounds run whether or not anyone is waiting.
+--
 -- Native ~lua@5.3a contract, same conventions as beacon.lua. Bundled after
 -- vendor/json.lua, vendor/jsonenc.lua and lib/rng.lua (global `rng`).
 
 local json = require(".json")
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 local ROUND_HISTORY = 8      -- finalized round records kept in published state
-local GUARD_ROUNDS = 200     -- how long duplicate guards remember
-local STRIKE_WINDOW = 100    -- strikes count within this many rounds
+local GUARD_ROUNDS = 600     -- how long duplicate guards remember (~10 min at 1 round/s)
+local STRIKE_WINDOW = 3600   -- strikes count within this many rounds (~1 h)
 
 local function freshState()
   return {
     rev = 0, self = "", token = "", unit = 1000000,
     params = {
       T = 134217728, modulusBits = 2048, commitWindowMs = 3000, revealWindowMs = 10000,
-      minCommits = 2, cadenceMs = 5000, suspendAfter = 3,
-      slash = 1000, rejoinAfter = 10,
+      minCommits = 2, cadenceMs = 1000, suspendAfter = 3,
+      slash = 1000, rejoinAfter = 600, heartbeat = 1,
     },
-    validators = {},       -- address -> { strikes = { round, ... }, suspended = bool, suspendedAt = round }
+    -- address -> { strikes = { round, ... }, missed = n, suspended = bool, idle = bool, suspendedAt = round }
+    validators = {},
     bonds = {},            -- address -> RNG bonded; each suspension takes `slash` of it
-    round = 0,             -- last finalized round
+    round = 0,             -- highest finalized round
     lastRoundAt = 0,
-    open = nil,            -- the round being built (see openRound)
+    lastOpenAt = 0,        -- first commit of the newest round; cadence counts from here
+    next = 1,              -- the round taking requests and commits
+    opens = {},            -- "r" -> round being built (see openRound): `next`, plus older ones revealing
+    recent = {},           -- finalized round numbers, oldest first (cracked rounds finish late)
     pending = {},          -- "r" -> list of { requester, requestId, charged }
     rounds = {},           -- "r" -> finalized record
     balances = {}, accrued = {}, protocolAccrued = 0,
@@ -186,7 +194,19 @@ local function strike(addr, r)
     local cut = math.min(int(Timelock.params.slash, 1000), int(Timelock.bonds[addr], 0))
     Timelock.bonds[addr] = int(Timelock.bonds[addr], 0) - cut
     Timelock.protocolAccrued = int(Timelock.protocolAccrued, 0) + cut
-    v.suspended, v.suspendedAt = true, r
+    v.suspended, v.idle, v.suspendedAt = true, false, r
+  end
+end
+
+--- A missed commit costs nothing but the round's fee. `suspendAfter` in a
+--- row makes the validator idle (suspended, no slash) so rounds stop waiting
+--- out its commit window; it rejoins whenever it is back.
+local function missed(addr, r)
+  local v = Timelock.validators[addr]
+  if not v then return end
+  v.missed = int(v.missed, 0) + 1
+  if v.missed >= int(Timelock.params.suspendAfter, 3) and not v.suspended then
+    v.suspended, v.idle, v.suspendedAt = true, true, r
   end
 end
 
@@ -201,24 +221,31 @@ local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n 
 -- Round state machine
 ---------------------------------------------------------------------------
 
-local function closeCommits(now)
-  local o = Timelock.open
+--- The round taking commits (always `collecting` or `commit`).
+local function current()
+  local key = tostring(Timelock.next)
+  if not Timelock.opens[key] then Timelock.opens[key] = openRound(Timelock.next) end
+  return Timelock.opens[key]
+end
+
+local function closeCommits(o, now)
   o.phase = "reveal"
   o.commitClose = math.min(now, o.firstCommitAt + int(Timelock.params.commitWindowMs, 3000))
   o.revealDeadline = o.commitClose + int(Timelock.params.revealWindowMs, 10000)
   for _, addr in ipairs(o.active) do
-    if not o.commits[addr] then strike(addr, o.round) end
+    if not o.commits[addr] then missed(addr, o.round) end
   end
   if count(o.commits) < int(Timelock.params.minCommits, 2) then
     -- Void: requests stay on this round number; validators commit fresh moduli.
-    Timelock.open = openRound(o.round)
+    Timelock.opens[tostring(o.round)] = openRound(o.round)
     return "void"
   end
+  -- Reveals run from here; the next round takes commits alongside.
+  Timelock.next = o.round + 1
   return "reveal"
 end
 
-local function finalize(base, now)
-  local o = Timelock.open
+local function finalize(base, o, now)
   local r, key = o.round, tostring(o.round)
   local addrs = {}
   for addr in pairs(o.commits) do addrs[#addrs + 1] = addr end
@@ -252,10 +279,12 @@ local function finalize(base, now)
   end
   Timelock.rounds[key] = { round = r, opened = o.firstCommitAt, commitClose = o.commitClose, finalizedAt = now,
     commits = o.commits, outputs = o.outputs, value = value, requests = served }
-  Timelock.rounds[tostring(r - ROUND_HISTORY)] = nil
+  local recent = Timelock.recent
+  recent[#recent + 1] = r
+  while #recent > ROUND_HISTORY do Timelock.rounds[tostring(table.remove(recent, 1))] = nil end
   Timelock.pending[key] = nil
-  Timelock.round, Timelock.lastRoundAt = r, now
-  Timelock.open = openRound(r + 1)
+  Timelock.opens[key] = nil
+  Timelock.round, Timelock.lastRoundAt = math.max(int(Timelock.round, 0), r), now
   if r % 50 == 0 then
     for _, guard in ipairs({ Timelock.seen, Timelock.credited }) do
       for k, at in pairs(guard) do if int(at, 0) < r - GUARD_ROUNDS then guard[k] = nil end end
@@ -264,15 +293,22 @@ local function finalize(base, now)
   return reply(base, { round = r, value = value, served = served }, outbox)
 end
 
---- Move the open round along with time; called before every round action.
+--- Close the committing round's commits once everyone is in or its window
+--- has passed; called before every round action.
 local function advance(now)
-  local o = Timelock.open
+  local o = current()
   if o.phase == "commit" then
     local all = true
     for _, addr in ipairs(o.active) do if not o.commits[addr] then all = false end end
-    if all or now >= o.firstCommitAt + int(Timelock.params.commitWindowMs, 3000) then return closeCommits(now) end
+    if all or now >= o.firstCommitAt + int(Timelock.params.commitWindowMs, 3000) then return closeCommits(o, now) end
   end
   return o.phase
+end
+
+--- A round past its commits, by number.
+local function revealing(r)
+  local o = Timelock.opens[tostring(int(r, -1))]
+  return o and o.phase == "reveal" and o or nil
 end
 
 local function complete(o)
@@ -329,7 +365,7 @@ H["Request-Random"] = function(base, msg, from, now)
   local bal = int(Timelock.balances[from], 0)
   if bal < cost then return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost }) end
   advance(now)
-  local o = Timelock.open
+  local o = current()
   -- Bind to a round whose commits have not started.
   local r = o.phase == "collecting" and o.round or o.round + 1
   Timelock.balances[from] = bal - cost
@@ -352,11 +388,14 @@ H["Commit"] = function(base, msg, from, now)
   if not addr then return fail(base, "Not an active validator") end
   local d = dataOf(msg)
   advance(now)
-  local o = Timelock.open
-  if int(d.round, -1) ~= o.round then return fail(base, "Wrong-Round") end
-  if o.phase == "reveal" then return fail(base, "Commits-Closed") end
-  if #(Timelock.pending[tostring(o.round)] or {}) == 0 then return fail(base, "Nothing-Pending") end
-  if Timelock.round > 0 and now < int(Timelock.lastRoundAt, 0) + int(Timelock.params.cadenceMs, 0) then return fail(base, "Too-Early") end
+  local o = current()
+  if int(d.round, -1) ~= o.round then return fail(base, revealing(d.round) and "Commits-Closed" or "Wrong-Round") end
+  if int(Timelock.params.heartbeat, 1) == 0 and #(Timelock.pending[tostring(o.round)] or {}) == 0 then
+    return fail(base, "Nothing-Pending")
+  end
+  if o.phase == "collecting" and now < int(Timelock.lastOpenAt, 0) + int(Timelock.params.cadenceMs, 0) then
+    return fail(base, "Too-Early")
+  end
   -- The validator set is fixed when the round's first commit arrives.
   if o.phase == "collecting" then o.active = activeValidators() end
   local inSet = false
@@ -364,8 +403,9 @@ H["Commit"] = function(base, msg, from, now)
   if not inSet then return fail(base, "Joined-After-Round-Opened") end
   if o.commits[addr] then return fail(base, "Already-Committed") end
   if not isModulus(d.modulus) then return fail(base, "Bad-Modulus") end
-  if o.phase == "collecting" then o.phase, o.firstCommitAt = "commit", now end
+  if o.phase == "collecting" then o.phase, o.firstCommitAt, Timelock.lastOpenAt = "commit", now, now end
   o.commits[addr] = d.modulus
+  Timelock.validators[addr].missed = 0
   local phase = advance(now)
   return reply(base, { round = o.round, committed = count(o.commits), phase = phase })
 end
@@ -373,9 +413,9 @@ end
 H["Reveal"] = function(base, msg, from, now)
   local addr = provenSigner(msg)
   local d = dataOf(msg)
-  if advance(now) ~= "reveal" then return fail(base, "Not-Revealing") end
-  local o = Timelock.open
-  if int(d.round, -1) ~= o.round then return fail(base, "Wrong-Round") end
+  advance(now)
+  local o = revealing(d.round)
+  if not o then return fail(base, "Not-Revealing") end
   if not addr or not o.commits[addr] then return fail(base, "Not-Committed") end
   if o.outputs[addr] then return fail(base, "Already-Revealed") end
   if not isHex(d.y, 1024) or not isHex(d.p, 1024) then return fail(base, "Bad-Reveal") end
@@ -384,7 +424,7 @@ H["Reveal"] = function(base, msg, from, now)
     return fail(base, "Bad-Reveal")
   end
   o.outputs[addr] = { y = d.y, via = "reveal", p = d.p }
-  if complete(o) then return finalize(base, now) end
+  if complete(o) then return finalize(base, o, now) end
   return reply(base, { round = o.round, revealed = count(o.outputs) })
 end
 
@@ -392,9 +432,9 @@ H["Crack"] = function(base, msg, from, now)
   local cracker = validatorOf(msg)
   if not cracker then return fail(base, "Not an active validator") end
   local d = dataOf(msg)
-  if advance(now) ~= "reveal" then return fail(base, "Not-Revealing") end
-  local o = Timelock.open
-  if int(d.round, -1) ~= o.round then return fail(base, "Wrong-Round") end
+  advance(now)
+  local o = revealing(d.round)
+  if not o then return fail(base, "Not-Revealing") end
   if now < o.revealDeadline then return fail(base, "Too-Early") end
   local target = d.validator
   if not o.commits[target] or o.outputs[target] then return fail(base, "Nothing-To-Crack") end
@@ -405,7 +445,7 @@ H["Crack"] = function(base, msg, from, now)
   end
   o.outputs[target] = { y = d.y, via = "crack", proof = d.proof, cracker = cracker }
   strike(target, o.round)
-  if complete(o) then return finalize(base, now) end
+  if complete(o) then return finalize(base, o, now) end
   return reply(base, { round = o.round, cracked = target })
 end
 
@@ -427,8 +467,8 @@ H["Admin.Add-Validator"] = function(base, msg)
   if not ownerOnly(msg) then return fail(base, "Not authorised") end
   local a = dataOf(msg).address or msg.Address
   if not isAoAddress(a) then return fail(base, "Bad address") end
-  -- Unbonded validators start suspended and join with Rejoin once bonded.
-  Timelock.validators[a] = Timelock.validators[a] or { strikes = {}, suspended = not bonded(a), suspendedAt = 0 }
+  -- Unbonded validators start idle and join with Rejoin once bonded.
+  Timelock.validators[a] = Timelock.validators[a] or { strikes = {}, missed = 0, suspended = not bonded(a), idle = not bonded(a), suspendedAt = 0 }
   return reply(base, { validators = activeValidators() })
 end
 
@@ -444,15 +484,18 @@ H["Admin.Remove-Validator"] = function(base, msg)
     Quantity = string.format("%d", bond * int(Timelock.unit, 1)), ["X-Note"] = "RNG validator bond" } })
 end
 
---- A suspended validator brings itself back, `rejoinAfter` rounds after its
---- suspension, while its bond still covers another slash.
+--- A suspended validator brings itself back while its bond still covers
+--- another slash: an idle one at once, a slashed one `rejoinAfter` rounds on.
 H["Rejoin"] = function(base, msg, from)
   local v = from and Timelock.validators[from]
   if not v then return fail(base, "Not a validator") end
   if not v.suspended then return fail(base, "Not suspended") end
   if not bonded(from) then return fail(base, "Bond-Too-Low") end
-  if Timelock.round < int(v.suspendedAt, 0) + int(Timelock.params.rejoinAfter, 10) then return fail(base, "Too-Soon") end
-  v.suspended, v.strikes = false, {}
+  if not v.idle then
+    if Timelock.round < int(v.suspendedAt, 0) + int(Timelock.params.rejoinAfter, 600) then return fail(base, "Too-Soon") end
+    v.strikes = {}
+  end
+  v.suspended, v.idle, v.missed = false, false, 0
   return reply(base, { validators = activeValidators(), bond = int(Timelock.bonds[from], 0) })
 end
 
@@ -460,7 +503,7 @@ H["Admin.Reinstate"] = function(base, msg)
   if not ownerOnly(msg) then return fail(base, "Not authorised") end
   local v = Timelock.validators[dataOf(msg).address or msg.Address or ""]
   if not v then return fail(base, "Unknown validator") end
-  v.suspended, v.strikes = false, {}
+  v.suspended, v.idle, v.missed, v.strikes = false, false, 0, {}
   return reply(base, { validators = activeValidators() })
 end
 
@@ -484,7 +527,6 @@ H["Configure"] = function(base, msg)
   for k in pairs(Timelock.params) do
     if d[k] ~= nil then Timelock.params[k] = int(d[k], Timelock.params[k]) end
   end
-  if Timelock.open == nil then Timelock.open = openRound(Timelock.round + 1) end
   return reply(base, { ok = true })
 end
 
@@ -527,25 +569,30 @@ end
 local function info()
   local vs = {}
   for addr, v in pairs(Timelock.validators) do
-    vs[#vs + 1] = { address = addr, suspended = v.suspended == true, strikes = #(v.strikes or {}),
-                    bond = int(Timelock.bonds and Timelock.bonds[addr], 0), suspendedAt = int(v.suspendedAt, 0) }
+    vs[#vs + 1] = { address = addr, suspended = v.suspended == true, idle = v.idle == true, strikes = #(v.strikes or {}),
+                    missed = int(v.missed, 0), bond = int(Timelock.bonds and Timelock.bonds[addr], 0),
+                    suspendedAt = int(v.suspendedAt, 0) }
   end
   table.sort(vs, function(a, b) return a.address < b.address end)
-  local o = Timelock.open or {}
-  local pendingOpen = #(Timelock.pending[tostring(o.round or 0)] or {})
+  local function roundInfo(o)
+    local revealed = {}
+    for addr in pairs(o.outputs or {}) do revealed[#revealed + 1] = addr end
+    table.sort(revealed)
+    return { round = o.round, phase = o.phase, pending = #(Timelock.pending[tostring(o.round)] or {}),
+             firstCommitAt = o.firstCommitAt,
+             commitDeadline = (o.firstCommitAt or 0) > 0 and o.firstCommitAt + Timelock.params.commitWindowMs or 0,
+             revealDeadline = o.revealDeadline, active = o.active, committed = o.commits, revealed = revealed }
+  end
+  local older = {}
+  for _, o in pairs(Timelock.opens) do if o.phase == "reveal" then older[#older + 1] = roundInfo(o) end end
+  table.sort(older, function(a, b) return a.round < b.round end)
   local pendingTotal = 0
   for _, list in pairs(Timelock.pending) do pendingTotal = pendingTotal + #list end
-  local revealed = {}
-  for addr in pairs(o.outputs or {}) do revealed[#revealed + 1] = addr end
-  table.sort(revealed)
   return {
     tier = "timelock", round = Timelock.round, params = Timelock.params, validators = vs,
     price = price(), token = Timelock.token, unit = Timelock.unit,
-    nextRoundAt = int(Timelock.lastRoundAt, 0) + int(Timelock.params.cadenceMs, 0),
-    open = { round = o.round, phase = o.phase, pending = pendingOpen, firstCommitAt = o.firstCommitAt,
-             commitDeadline = (o.firstCommitAt or 0) > 0 and o.firstCommitAt + Timelock.params.commitWindowMs or 0,
-             revealDeadline = o.revealDeadline, active = o.active,
-             committed = o.commits, revealed = revealed },
+    nextRoundAt = int(Timelock.lastOpenAt, 0) + int(Timelock.params.cadenceMs, 0),
+    open = roundInfo(current()), revealing = older,
     pendingCount = pendingTotal, protocolAccrued = Timelock.protocolAccrued, self = Timelock.self,
   }
 end
@@ -554,7 +601,6 @@ function compute(base, req)
   base = type(base) == "table" and base or {}
   restore(base)
   resolveOwner(base)
-  if Timelock.open == nil then Timelock.open = openRound(Timelock.round + 1) end
   local raw = (req and req.body) or {}
   local msg = caseInsensitive(raw.Tags or raw)
   local now = int(req and (req.timestamp or req.Timestamp), 0)

@@ -173,7 +173,7 @@ if (cmd === 'run') {
       info = await ao.beaconInfo();
       const r = info.nextRound;
       const message = `${cfg.beacon}|${r}`;
-      if (info.pendingCount > 0 && Date.now() >= info.nextRoundAt) {
+      if ((info.pendingCount > 0 || info.heartbeat) && Date.now() >= info.nextRoundAt) {
         const mine = bls.partialSign(share, message);
         if (partialFor < r) {
           await ao.postPartial(r, mine);
@@ -195,13 +195,13 @@ if (cmd === 'run') {
             if (!bls.verify(share.groupKey, message, signature)) throw new Error(`combined signature for round ${r} does not verify`);
             await ao.postRound(r, signature);
             attested = r;
-            log(`attested round ${r} (${info.pendingCount} pending)`);
+            if (info.pendingCount > 0 || r % 100 === 0) log(`attested round ${r} (${info.pendingCount} pending)`);
           }
         }
       }
     } catch (e) {
       log('loop error:', e.message);
     }
-    await sleep(1000);
+    await sleep(250);
   }
 }

@@ -36,7 +36,7 @@ function puzzle(round, i) {
   return { N: m.N, y, p: m.p, badp: bad(m.p) };
 }
 const P = {};
-for (const [r, idx] of [[1, [0, 1, 2]], [2, [0, 1, 2]], [3, [0, 1]], [4, [0, 1]], [5, [0]]]) {
+for (const [r, idx] of [[1, [0, 1, 2]], [2, [0, 1, 2]], [3, [0, 1]], [4, [0, 1, 2]], [5, [0]]]) {
   for (const i of idx) P[`r${r}v${i}`] = puzzle(r, i);
 }
 // Round 2: validator c withholds; a cracks it.
@@ -44,6 +44,10 @@ const c2 = puzzles['2|2'];
 const cracked = tl.crack(c2.N, c2.seed, T);
 F.ok[`verify-crack|${c2.N}|${c2.seed}|${cracked.y}|${cracked.proof}`] = true;
 F.crack2 = cracked;
+// Round 4: c withholds again.
+const c4 = puzzles['4|2'];
+F.crack4 = tl.crack(c4.N, c4.seed, T);
+F.ok[`verify-crack|${c4.N}|${c4.seed}|${F.crack4.y}|${F.crack4.proof}`] = true;
 const value = (r, idx) => tl.roundValue(F.beacon, r, Object.fromEntries(idx.map((i) => [F.v[i], puzzles[`${r}|${i}`].y])));
 F.value1 = value(1, [0, 1, 2]);
 F.value2 = tl.roundValue(F.beacon, 2, { [F.v[0]]: puzzles['2|0'].y, [F.v[1]]: puzzles['2|1'].y, [F.v[2]]: cracked.y });

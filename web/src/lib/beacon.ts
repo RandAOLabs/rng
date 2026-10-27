@@ -8,7 +8,7 @@ export type BeaconInfo = {
   threshold: number; committee: Member[]; groupKey: string; roundMessage: string;
   price: { beacon: number }; token: string; unit: number; protocolAccrued: number;
 };
-export type Round = { signature: string; value: string; signers: string[] };
+export type Round = { signature: string; value: string; signers: string[]; at?: number };
 export type BeaconState = {
   self: string; round: number; lastRoundAt: number; cadenceMs: number;
   rounds: Record<string, Round>; balances: Record<string, number>;

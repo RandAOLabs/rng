@@ -33,10 +33,11 @@ request, plus 1 RNG to the protocol. `quick` is the existing beacon process;
 | `commitWindowMs` | time from a round's first commit until commits close | 3000 |
 | `revealWindowMs` | time from commit close until reveals are due | 10000 |
 | `minCommits` | committed validators needed for a round to count | 2 |
-| `cadenceMs` | minimum time between rounds | 5000 |
-| `suspendAfter` | strikes within 100 rounds that suspend a validator | 3 |
+| `cadenceMs` | minimum time between the first commits of consecutive rounds | 1000 |
+| `heartbeat` | 1: rounds run whether or not requests are waiting; 0: only when they are | 1 |
+| `suspendAfter` | strikes within 3,600 rounds that suspend (and slash) a validator; also missed commits in a row that make it idle | 3 |
 | `slash` | RNG taken from the bond on each suspension | 1000 |
-| `rejoinAfter` | rounds after a suspension before `Rejoin` is accepted | 10 |
+| `rejoinAfter` | rounds after a slashed suspension before `Rejoin` is accepted | 600 |
 
 Security condition: a puzzle must take longer to solve than the commit
 window, even on an attacker's fastest hardware. With `T` = 2^27 and an
@@ -57,13 +58,18 @@ on the test network). A validator is active only while its bond covers one
 `slash` (default 1,000 RNG); one added without that starts suspended.
 Removing a validator returns what is left of its bond.
 
-Strikes: a missed commit or a withheld reveal (cracked by someone else) adds a
-strike. A validator with `suspendAfter` strikes (default 3) within the last
-100 rounds is suspended, and `slash` RNG moves from its bond to the protocol.
-A suspended validator neither commits nor earns. `rejoinAfter` rounds
-(default 10) after its suspension it may send `Rejoin`, which reactivates it
-and clears its strikes as long as its bond still covers another slash; a
-25,000 RNG bond allows 25 suspensions. The admin can also `Admin.Reinstate`.
+Strikes: a withheld reveal (cracked by someone else) adds a strike. A
+validator with `suspendAfter` strikes (default 3) within the last 3,600 rounds
+is suspended, and `slash` RNG moves from its bond to the protocol. A
+suspended validator neither commits nor earns. `rejoinAfter` rounds (default
+600) after its suspension it may send `Rejoin`, which reactivates it and
+clears its strikes as long as its bond still covers another slash; a 25,000
+RNG bond allows 25 suspensions. The admin can also `Admin.Reinstate`.
+
+Idle: a missed commit only loses that round's fee. `suspendAfter` missed
+commits in a row make the validator idle (suspended without a slash), so
+rounds stop waiting out its commit window; it sends `Rejoin` when it is back
+and is active again at once.
 
 ### 2.3 Puzzle
 
@@ -87,9 +93,16 @@ squarings.
 
 ### 2.4 Round
 
-A round opens when requests are pending and `cadenceMs` has passed since the
-previous round. Requests bind to the open round only until its first commit;
-later requests bind to the next round.
+Rounds overlap. The open round takes commits; as soon as its commits close
+it moves to reveals and the next round opens, so several rounds can be
+revealing at once and they can finish out of order (a cracked round finishes
+minutes after the ones behind it). A round's first commit is accepted once
+`cadenceMs` has passed since the previous round's first commit and, with
+`heartbeat` off, only while requests are waiting for it. With `heartbeat` on
+(the default) rounds run continuously, so a request waits for at most one
+cadence plus one round (~1-2 s) unless that round needs a crack. Requests
+bind to the open round only until its first commit; later requests bind to
+the next round. A value already published is never used for a later request.
 
 1. **Commit.** Each active validator posts `Commit { round, modulus }` (hex
    `N`). The first commit sets `commitDeadline = t + commitWindowMs`. Commits
@@ -136,9 +149,9 @@ Each finalized round keeps a record `{ round, opened, commitClose,
 finalizedAt, commits: { addr: N }, outputs: { addr: { y, via: reveal | crack,
 p | proof } }, value, requests }`, so anyone can re-verify it. The last
 `ROUND_HISTORY` records are in `beaconstate`; indexers archive older ones.
-Reads: `beaconinfo` (parameters, open round, phase, deadlines, validators,
-strikes), `beaconstate`, `beaconround-open` (the current round's commits and
-reveals, for validators).
+Reads: `beaconinfo` (parameters, the open round and the rounds still
+revealing with their phases, deadlines, commits and reveals, validators,
+strikes), `beaconstate` (which also holds the rounds in progress as `opens`).
 
 ### 2.7 Messages (time-lock beacon)
 
@@ -154,7 +167,7 @@ reveals, for validators).
 | `Configure` | owner | parameters from 2.1, token, unit |
 | `Withdraw`, `Balance`, `Get-Info` | anyone | as the `quick` beacon |
 
-A `Request-Id` is refused as `Duplicate-Request` for 200 rounds after it is
+A `Request-Id` is refused as `Duplicate-Request` for 600 rounds after it is
 used, on both beacons; after that the beacon forgets it, and reusing it is a
 new paid request. The library never reuses an id.
 

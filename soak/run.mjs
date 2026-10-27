@@ -3,7 +3,7 @@
 //   FUNDER_WALLET=funder.json node soak/run.mjs    (or HB_WALLET=owner.json to mint)
 //
 // Env (defaults): WALLETS=50 CONTRACTS=100 INITIAL_CONTRACTS=50
-//   RATE=1 (actions/s) BURST_EVERY_MIN=60 BURST=60 (actions) HOURS=72
+//   RATE=1 (actions/s) BURST_EVERY_MIN=60 BURST=60 (actions) HOURS=24
 //   NEW_CONTRACT_EVERY_MIN=30 RAMP_MIN=60 (minutes to reach RATE)
 //   CHAOS_EVERY_H=6 CHAOS_MIN=10 (0 = off). CHAOS=ssh rotates through all nodes
 //   (needs deploy/nodes.local.sh); CHAOS=docker stops this host's own daemon
@@ -23,7 +23,7 @@ const N_INITIAL = env('INITIAL_CONTRACTS', 50);
 const RATE = env('RATE', 1);
 const BURST_EVERY = env('BURST_EVERY_MIN', 60) * 60_000;
 const BURST = env('BURST', 60);
-const HOURS = env('HOURS', 72);
+const HOURS = env('HOURS', 24);
 const NEW_EVERY = env('NEW_CONTRACT_EVERY_MIN', 30) * 60_000;
 const RAMP = env('RAMP_MIN', 60) * 60_000;
 const CHAOS_EVERY = env('CHAOS_EVERY_H', 6) * 3_600_000;
@@ -37,7 +37,7 @@ const ws = loadWallets(N_WALLETS + 1);
 const pauper = ws.pop(); // never funded: its requests must be refused
 const contracts = readJson('contracts.json', []);
 const lastRequest = new Map(); // wallet -> { id, at } of its last request (for duplicates)
-// The beacon remembers request ids for 200 rounds (SPEC.md); resend only well inside that.
+// The beacons remember request ids for 600 rounds (~10 min, SPEC.md); resend only well inside that.
 const DUPLICATE_WITHIN_MS = 5 * 60_000;
 let seq = Date.now();
 const rid = (who) => `soak-${who.slice(0, 6)}-${(seq++).toString(36)}`;

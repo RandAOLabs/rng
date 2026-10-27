@@ -26,9 +26,9 @@ local json = require(".json")
 
 -- The whole state is published after every message, so everything in it is
 -- bounded. Finalized rounds kept for readers (indexers archive them):
-local ROUND_HISTORY = 64
+local ROUND_HISTORY = 16
 -- Duplicate guards remember a request or a credit for this many rounds.
-local GUARD_ROUNDS = 200
+local GUARD_ROUNDS = 600
 
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
@@ -44,7 +44,8 @@ local function freshState()
     committee = {},       -- address -> index
     threshold = 2,        -- signers needed per round
     groupKey = "",        -- group public key (hex)
-    cadenceMs = 5000,     -- minimum time between rounds
+    cadenceMs = 500,      -- minimum time between rounds
+    heartbeat = true,     -- rounds run with nobody waiting
     round = 0,            -- last finalized round
     lastRoundAt = 0,
     rounds = {},          -- "r" -> { signature, value, signers }
@@ -207,7 +208,7 @@ local function info()
     pendingCount = int(Beacon.pendingCount, 0), threshold = int(Beacon.threshold, 0),
     committee = members, groupKey = Beacon.groupKey, roundMessage = roundMessage(r + 1),
     price = { beacon = price("beacon") }, token = Beacon.token, unit = int(Beacon.unit, 1),
-    protocolAccrued = int(Beacon.protocolAccrued, 0),
+    protocolAccrued = int(Beacon.protocolAccrued, 0), heartbeat = Beacon.heartbeat ~= false,
   }
 end
 
@@ -351,7 +352,7 @@ H["Round"] = function(base, msg, from, now)
   if int(Beacon.round, 0) > 0 and now < int(Beacon.lastRoundAt, 0) + int(Beacon.cadenceMs, 0) then
     return fail(base, "Too-Early")
   end
-  if int(Beacon.pendingCount, 0) == 0 then return fail(base, "Nothing-Pending") end
+  if int(Beacon.pendingCount, 0) == 0 and Beacon.heartbeat == false then return fail(base, "Nothing-Pending") end
 
   if Beacon.useDevice then
     if not deviceVerify(Beacon.groupKey, roundMessage(r), sig) then return fail(base, "Bad-Signature") end
@@ -385,7 +386,7 @@ H["Partial"] = function(base, msg)
   if r ~= int(Beacon.round, 0) + 1 or type(sig) ~= "string" or sig == "" or #sig > 512 then
     return fail(base, "Bad-Round")
   end
-  if int(Beacon.pendingCount, 0) == 0 then return fail(base, "Nothing-Pending") end
+  if int(Beacon.pendingCount, 0) == 0 and Beacon.heartbeat == false then return fail(base, "Nothing-Pending") end
   if int(Beacon.partials.round, 0) ~= r then Beacon.partials = { round = r, by = {} } end
   Beacon.partials.by[member] = sig
   local count = 0
@@ -430,6 +431,7 @@ H["Configure"] = function(base, msg)
   if d.threshold then Beacon.threshold = int(d.threshold, Beacon.threshold) end
   if d.groupKey then Beacon.groupKey = d.groupKey end
   if d.useDevice ~= nil then Beacon.useDevice = d.useDevice == true end
+  if d.heartbeat ~= nil then Beacon.heartbeat = d.heartbeat == true end
   if d.committee then
     Beacon.committee = {}
     for i, address in ipairs(d.committee) do Beacon.committee[address] = i end

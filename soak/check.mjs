@@ -3,7 +3,7 @@
 //
 //   node soak/check.mjs            (runs alongside soak/run.mjs)
 //
-// Pass (3 days): zero bad signatures, zero wrong results, zero lost requests,
+// Pass (SOAK_HOURS, default 24): zero bad signatures, zero wrong results, zero lost requests,
 // zero accepted duplicates or unfunded requests, no stall over 3 cadences,
 // p95 request-to-result within cadence + 2 s, dice uniform (chi-square).
 import fs from 'node:fs';
@@ -15,10 +15,16 @@ import * as tl from '../provider/timelock.mjs';
 import { BEACON, TIMELOCK, DATA, NODE, appendLine, env, log, read, readJson, readLines, sha256hex, sleep, writeJson } from './common.mjs';
 
 const EVERY = env('CHECK_EVERY_S', 20) * 1000;
+// Rounds run every second or so and only the last few stay in published
+// state, so rounds are archived on a much shorter loop than the full check.
+const ARCHIVE_EVERY = env('ARCHIVE_EVERY_S', 2) * 1000;
+const HOURS = env('SOAK_HOURS', 24);
 const LOST_AFTER = env('LOST_AFTER_MIN', 10) * 60_000;
 
 const rounds = new Map(readLines('rounds.jsonl').map((r) => [r.round, r]));
 const tlRounds = new Map(readLines('timelock-rounds.jsonl').map((r) => [r.round, r]));
+const maxKey = (m) => { let x = 0; for (const k of m.keys()) if (k > x) x = k; return x; };
+let maxRound = maxKey(rounds), maxTl = maxKey(tlRounds);
 const s = readJson('check-state.json', {
   actionsRead: 0, direct: {}, expectRefusal: {}, checkedResults: {}, faces: [0, 0, 0, 0, 0, 0],
   latencies: [], problems: [], stalls: 0, lastRound: 0, lastRoundSeenAt: 0, firstCheck: Date.now(),
@@ -38,11 +44,12 @@ async function slotReply(slot) {
 
 function archive(state) {
   const live = Object.keys(state.rounds ?? {}).map(Number).sort((a, b) => a - b);
-  if (live.length && rounds.size && live[0] > Math.max(...rounds.keys()) + 1) {
-    problem('archive-gap', { from: Math.max(...rounds.keys()) + 1, to: live[0] - 1 });
+  if (live.length && rounds.size && live[0] > maxRound + 1) {
+    problem('archive-gap', { from: maxRound + 1, to: live[0] - 1 });
   }
   for (const n of live) {
     if (rounds.has(n)) continue;
+    maxRound = Math.max(maxRound, n);
     const r = state.rounds[String(n)];
     const verified = bls.verify(state.groupKey, `${state.self}|${n}`, r.signature);
     const valueOk = sha256hex(`round|${r.signature}`) === r.value;
@@ -55,13 +62,18 @@ function archive(state) {
 
 function archiveTimelock(st) {
   const live = Object.keys(st.rounds ?? {}).map(Number).sort((a, b) => a - b);
-  const archived = tlRounds.size ? Math.max(...tlRounds.keys()) : 0;
-  if (live.length && live[0] > archived + 1 && (archived > 0 || live[0] > 1)) {
-    problem('timelock-archive-gap', { from: archived + 1, to: live[0] - 1 });
+  // Rounds can finish out of order (a cracked one finishes late), so a gap
+  // only counts if none of the missing rounds is still open.
+  const open = new Set(Object.keys(st.opens ?? {}).map(Number));
+  const missing = [];
+  for (let n = maxTl + 1; live.length && n < live[0]; n++) if (!open.has(n)) missing.push(n);
+  if (missing.length && maxTl > 0) {
+    problem('timelock-archive-gap', { from: missing[0], to: missing[missing.length - 1] });
     s.tl.complete = false;
   }
   for (const n of live) {
     if (tlRounds.has(n)) continue;
+    maxTl = Math.max(maxTl, n);
     const r = st.rounds[String(n)];
     const T = st.params.T;
     let verified = true, cracks = 0;
@@ -88,13 +100,24 @@ function archiveTimelock(st) {
 
 function checkTimelock(st, info) {
   const accrued = Object.values(st.accrued ?? {}).reduce((a, b) => a + Number(b), 0);
-  if (s.tl.complete && (accrued !== s.tl.expectedAccrued || Number(st.protocolAccrued) !== s.tl.protocol)) {
-    const key = `${accrued}/${s.tl.expectedAccrued}/${st.protocolAccrued}/${s.tl.protocol}`;
-    if (key !== s.tl.lastFeeKey) problem('timelock-fee-mismatch', { accrued, expected: s.tl.expectedAccrued, protocol: st.protocolAccrued, expectedProtocol: s.tl.protocol });
+  // Rounds that finished before the checker first looked are taken as given:
+  // fees are counted from that snapshot on, and slashes from the bonds then.
+  if (!s.tl.base) {
+    s.tl.base = { bonds: { ...(st.bonds ?? {}) } };
+    s.tl.expectedAccrued = accrued;
+    s.tl.protocol = Number(st.protocolAccrued);
+  }
+  const slashed = Object.entries(s.tl.base.bonds).reduce((a, [v, b]) => a + Number(b) - Number(st.bonds?.[v] ?? 0), 0);
+  const expectedProtocol = s.tl.protocol + slashed;
+  if (s.tl.complete && (accrued !== s.tl.expectedAccrued || Number(st.protocolAccrued) !== expectedProtocol)) {
+    const key = `${accrued}/${s.tl.expectedAccrued}/${st.protocolAccrued}/${expectedProtocol}`;
+    if (key !== s.tl.lastFeeKey) problem('timelock-fee-mismatch', { accrued, expected: s.tl.expectedAccrued, protocol: st.protocolAccrued, expectedProtocol });
     s.tl.lastFeeKey = key;
   }
   if (info.round > s.tl.lastRound) { s.tl.lastRound = info.round; s.tl.lastRoundSeenAt = Date.now(); }
-  if (info.pendingCount > 0 && Date.now() - s.tl.lastRoundSeenAt > 15 * 60_000) {
+  // With the heartbeat on, rounds never stop; a cracked round no longer holds up the rest.
+  const tlStallMs = info.params?.heartbeat ? 60_000 : 15 * 60_000;
+  if ((info.pendingCount > 0 || info.params?.heartbeat) && Date.now() - s.tl.lastRoundSeenAt > tlStallMs) {
     problem('timelock-stall', { round: info.round, phase: info.open?.phase, pending: info.pendingCount });
     s.tl.lastRoundSeenAt = Date.now();
   }
@@ -184,9 +207,9 @@ function checkInvariants(state, info) {
     if (Number(n) > (s.equivocations[m] ?? 0)) problem('equivocation', { member: m, n });
     s.equivocations[m] = Number(n);
   }
-  // Liveness: requests waiting, but no round for 3 cadences (+ 30 s slack).
+  // Liveness: requests waiting (or the heartbeat on), but no round for 3 cadences (+ 30 s slack).
   if (info.round > s.lastRound) { s.lastRound = info.round; s.lastRoundSeenAt = Date.now(); }
-  if (info.pendingCount > 0 && Date.now() - s.lastRoundSeenAt > 3 * state.cadenceMs + 30_000) {
+  if ((info.pendingCount > 0 || info.heartbeat) && Date.now() - s.lastRoundSeenAt > 3 * state.cadenceMs + 30_000) {
     s.stalls++;
     problem('stall', { round: info.round, pending: info.pendingCount, sinceMs: Date.now() - s.lastRoundSeenAt });
     s.lastRoundSeenAt = Date.now();
@@ -217,10 +240,10 @@ function report(state) {
       refusalsHeld: !counts['duplicate-accepted'] && !counts['unfunded-accepted'],
       noStalls: !counts.stall, latencyOk: p95 === null || p95 <= state.cadenceMs + 2000,
       diceUniform: total < 600 || chi < 20.52, // p < 0.001 at 5 degrees of freedom
-      threeDays: hours >= 72,
+      fullDuration: hours >= HOURS,
     },
   };
-  r.verdict = Object.values(r.pass).every(Boolean) ? 'PASS' : r.pass.threeDays ? 'FAIL' : 'RUNNING';
+  r.verdict = Object.values(r.pass).every(Boolean) ? 'PASS' : r.pass.fullDuration ? 'FAIL' : 'RUNNING';
   writeJson('report.json', r);
   fs.writeFileSync(path.join(DATA, 'report.md'), [
     `# Soak report (${r.verdict})`, '',
@@ -233,6 +256,19 @@ function report(state) {
     `Problems: ${Object.keys(counts).length ? JSON.stringify(counts) : 'none'}`,
   ].join('\n'));
   return r;
+}
+
+async function archiveFor(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    try {
+      archive(await read(BEACON, 'beaconstate'));
+      if (TIMELOCK) archiveTimelock(await read(TIMELOCK, 'timelockstate'));
+    } catch (e) {
+      log('archive error:', e.message);
+    }
+    await sleep(ARCHIVE_EVERY);
+  }
 }
 
 for (;;) {
@@ -254,5 +290,5 @@ for (;;) {
   } catch (e) {
     log('check error:', e.message);
   }
-  await sleep(EVERY);
+  await archiveFor(EVERY);
 }

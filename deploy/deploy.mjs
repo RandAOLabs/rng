@@ -94,7 +94,7 @@ if (cmd === 'configure') {
   state.committee = committee.members;
   save();
   const r = await send(state.beacon, 'Configure', { data: JSON.stringify({
-    self: state.beacon, token: state.token, unit: 1000000, threshold: committee.t, cadenceMs: 5000,
+    self: state.beacon, token: state.token, unit: 1000000, threshold: committee.t, cadenceMs: 500,
     groupKey: committee.groupKey, committee: committee.members, useDevice: committee.useDevice,
   }) });
   console.log(r.output);

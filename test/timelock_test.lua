@@ -78,6 +78,13 @@ function runTimelockTests()
   commit(B, 1, "r1v1")
   r = commit(C, 1, "r1v2")
   eq("all committed: reveals open", r.phase, "reveal")
+  -- Rounds overlap: round 2 takes commits while round 1 reveals.
+  r = commit(A, 2, "r2v0")
+  eq("next round commits while round 1 reveals", r.round, 2)
+  eq("round 2 is the open round", info().open.round, 2)
+  eq("round 1 listed as revealing", info().revealing[1].round, 1)
+  r = commit(B, 1, "r1v1")
+  eq("late commit to a revealing round", r.error, "Commits-Closed")
   r = reveal(A, 1, "r1v0", P.r1v0.badp)
   eq("wrong factor refused", r.error, "Bad-Reveal")
   reveal(A, 1, "r1v0")
@@ -94,56 +101,70 @@ function runTimelockTests()
   local rec = json.decode(base.timelockstate).rounds["1"]
   check("round record keeps commits and outputs", rec and rec.commits[A] == P.r1v0.N and rec.outputs[B].p == P.r1v1.p)
 
-  -- Round 2: c withholds; a cracks it after the reveal deadline.
-  commit(A, 2, "r2v0"); commit(B, 2, "r2v1"); commit(C, 2, "r2v2")
+  -- Round 2: c withholds; round 3 runs and finishes while round 2 waits for its crack.
+  commit(B, 2, "r2v1"); commit(C, 2, "r2v2")
   reveal(A, 2, "r2v0"); reveal(B, 2, "r2v1")
   local crack = { round = 2, validator = C, y = F.crack2.y, proof = F.crack2.proof }
   r = send(wallet(A, { Action = "Crack", Data = encode(crack) }))
   eq("crack before the deadline refused", r.error, "Too-Early")
-  r = send(wallet(A, { Action = "Crack", Data = encode({ round = 2, validator = C, y = F.crack2.y, proof = "1" .. F.crack2.proof }) }), 10000)
-  eq("bad proof refused", r.error, "Bad-Crack")
-  r = send(wallet(A, { Action = "Crack", Data = encode(crack) }))
-  eq("crack finalizes round 2", info().round, 2)
-  eq("cracked value matches the reference", r.value, F.value2)
-  eq("cracker takes the withholder's fee", Timelock.accrued[A], 3)
-  eq("withholder earns nothing", Timelock.accrued[C], 1)
-  eq("withholder struck", #Timelock.validators[C].strikes, 1)
 
   -- Round 3: c misses the commit window; 2 commits still count; 1 RNG refunded.
-  request("req-3")
+  r = request("req-3")
+  eq("request binds to round 3", r.round, 3)
   commit(A, 3, "r3v0"); commit(B, 3, "r3v1")
   r = reveal(A, 3, "r3v0", nil)
   eq("reveal waits for the commit window", r.error, "Not-Revealing")
-  reveal(A, 3, "r3v0")
   send(wallet(A, { Action = "Get-Info" }), 3000)
   reveal(A, 3, "r3v0")
   r = reveal(B, 3, "r3v1")
-  eq("round 3 finalized with 2 commits", info().round, 3)
-  eq("missed commit struck", #Timelock.validators[C].strikes, 2)
+  eq("round 3 finalized before round 2", info().round, 3)
+  check("round 2 still open", json.decode(base.timelockstate).rounds["2"] == nil)
+  eq("missed commit is not a strike", #Timelock.validators[C].strikes, 0)
+  eq("missed commit counted", Timelock.validators[C].missed, 1)
   eq("unserved validator's share refunded", Timelock.balances[F.game], 32 - 4 + 1)
 
-  -- Round 4: another miss suspends c and slashes 1,000 from its bond; price drops to 3.
+  r = send(wallet(A, { Action = "Crack", Data = encode({ round = 2, validator = C, y = F.crack2.y, proof = "1" .. F.crack2.proof }) }), 10000)
+  eq("bad proof refused", r.error, "Bad-Crack")
+  r = send(wallet(A, { Action = "Crack", Data = encode(crack) }))
+  check("crack finalizes round 2 late", json.decode(base.timelockstate).rounds["2"] ~= nil)
+  eq("highest round stays 3", info().round, 3)
+  eq("cracked value matches the reference", r.value, F.value2)
+  eq("cracker takes the withholder's fee", Timelock.accrued[A], 4)
+  eq("withholder earns nothing", Timelock.accrued[C], 1)
+  eq("withholder struck", #Timelock.validators[C].strikes, 1)
+
+  -- Round 4: c withholds again; with suspendAfter 2 that suspends it and
+  -- slashes 1,000 from its bond; price drops to 3.
+  send(wallet(F.owner, { Action = "Configure", Data = encode({ suspendAfter = 2 }) }))
   local protocolBefore = Timelock.protocolAccrued
   request("req-4")
-  commit(A, 4, "r4v0"); commit(B, 4, "r4v1")
-  send(wallet(A, { Action = "Get-Info" }), 3000)
+  commit(A, 4, "r4v0"); commit(B, 4, "r4v1"); commit(C, 4, "r4v2")
+  eq("a commit resets missed", Timelock.validators[C].missed, 0)
   reveal(A, 4, "r4v0"); reveal(B, 4, "r4v1")
+  send(wallet(A, { Action = "Crack", Data = encode({ round = 4, validator = C, y = F.crack4.y, proof = F.crack4.proof }) }), 10000)
   eq("round 4 finalized", info().round, 4)
-  check("c suspended after 3 strikes", Timelock.validators[C].suspended == true)
+  check("c suspended after 2 strikes", Timelock.validators[C].suspended == true and not Timelock.validators[C].idle)
   eq("suspension slashes the bond", Timelock.bonds[C], 24000)
   eq("slash goes to the protocol", Timelock.protocolAccrued - protocolBefore, 1000 + 1)
   eq("price without c", info().price, 3)
   r = send(wallet(C, { Action = "Commit", Data = encode({ round = 5, modulus = P.r5v0.N }) }))
   eq("suspended validator cannot commit", r.error, "Not an active validator")
 
-  -- Round 5: only a commits: the round is void and the request waits.
+  -- Round 5: only a commits, twice: void both times, and b, missing both,
+  -- goes idle: suspended without a slash.
   request("req-5")
-  commit(A, 5, "r5v0")
-  send(wallet(A, { Action = "Get-Info" }), 3000)
-  r = reveal(A, 5, "r5v0")
+  for _ = 1, 2 do
+    commit(A, 5, "r5v0")
+    send(wallet(A, { Action = "Get-Info" }), 3000)
+    reveal(A, 5, "r5v0")
+  end
   eq("void round reopens", info().open.phase, "collecting")
   eq("void round keeps its number", info().open.round, 5)
   eq("request still pending", info().open.pending, 1)
+  check("b idle after 2 missed commits", Timelock.validators[B].suspended == true and Timelock.validators[B].idle == true)
+  eq("idle is not slashed", Timelock.bonds[B], 25000)
+  r = send(wallet(B, { Action = "Rejoin" }))
+  check("idle validator rejoins at once", r.error == nil and Timelock.validators[B].suspended == false, r.error)
 
   r = send(wallet(C, { Action = "Rejoin" }))
   eq("rejoin waits rejoinAfter rounds", r.error, "Too-Soon")
@@ -174,6 +195,16 @@ function runTimelockTests()
   r, ob = send(wallet(A, { Action = "Claim" }))
   check("claim pays out through the token", ob["rng-claim"] and ob["rng-claim"].Quantity == string.format("%d", owed * U), owed)
   eq("accrued reset", Timelock.accrued[A], 0)
+  -- Heartbeat on (the default), rounds run with nobody waiting; off, a round needs a request.
+  Timelock.pending = {}
+  local open = info().open.round
+  send(wallet(F.owner, { Action = "Configure", Data = encode({ heartbeat = 0 }) }))
+  r = send(wallet(A, { Action = "Commit", Data = encode({ round = open, modulus = P.r5v0.N }) }))
+  eq("heartbeat off: no round without a request", r.error, "Nothing-Pending")
+  send(wallet(F.owner, { Action = "Configure", Data = encode({ heartbeat = 1 }) }))
+  r = send(wallet(A, { Action = "Commit", Data = encode({ round = open, modulus = P.r5v0.N }) }))
+  check("heartbeat on: a round opens with nobody waiting", r.error == nil, r.error)
+
   r, ob = send(wallet(F.owner, { Action = "Admin.Remove-Validator", Data = encode({ address = B }) }))
   check("removal refunds the bond", ob["rng-bond-refund"] and ob["rng-bond-refund"].Recipient == B and ob["rng-bond-refund"].Quantity == string.format("%d", 25000 * U))
 
