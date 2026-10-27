@@ -49,7 +49,7 @@ it is why the verifiable tiers exist.
 
 ## What it costs hyper-aos
 
-- ~500 lines of Lua in the bundle, no new dependencies, no network calls for
+- ~330 lines of Lua in the bundle, no new dependencies, no network calls for
   the default path.
 - One line in `process.handle`.
 - No behaviour change for processes that never call `math.random` or `rng`.
