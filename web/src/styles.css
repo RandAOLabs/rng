@@ -133,6 +133,12 @@ pre code { font-size: inherit; }
 .steps li { margin: 0 0 12px; padding-left: 6px; }
 
 /* Try a draw */
+.tier-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 24px 0 8px; }
+.pick { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 8px;
+  border: 2px solid var(--rule); background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+.pick span { color: var(--muted); font-size: 14px; }
+.pick.on { border-color: var(--ink); }
+@media (max-width: 860px) { .tier-pick { grid-template-columns: 1fr; } }
 .flow { list-style: none; counter-reset: step; padding: 0; margin: 28px 0; }
 .flow li {
   counter-increment: step; position: relative; padding: 18px 0 18px 56px;
