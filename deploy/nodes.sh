@@ -9,6 +9,12 @@
 #   deploy/nodes.sh status | logs    health and recent logs
 #   deploy/nodes.sh stop-one|start-one <name>   stop or start one node's daemon (soak chaos)
 #
+# Time-lock validators (rng-validator image: daemon + native GMP cracker):
+#   deploy/nodes.sh validator-install <tgz>   build the image on every node (tgz from deploy/pack-validator.sh)
+#   deploy/nodes.sh validator-init            create each node's validator wallet, print addresses
+#   deploy/nodes.sh validator-start <beacon> <hbNode>
+#   deploy/nodes.sh validator-status | validator-logs
+#
 # The daemon runs in node:22-slim with host networking, so each host's own
 # firewall decides who can reach port $PORT. Files live in /opt/randao-provider.
 set -euo pipefail
@@ -81,6 +87,28 @@ case "${1:-}" in
       [ "$name" = "$2" ] || continue
       if [ "$1" = stop-one ]; then ssh_ "$ip" "docker stop randao-provider >/dev/null && echo $name stopped"
       else ssh_ "$ip" "docker start randao-provider >/dev/null && echo $name started"; fi
+    done ;;
+  validator-install)
+    for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
+      scp -i "$KEY" -o BatchMode=yes -o IdentitiesOnly=yes "$2" "root@$ip:/tmp/rng-validator.tgz"
+      ssh_ "$ip" "mkdir -p /opt/rng-validator/data && chmod 700 /opt/rng-validator/data && rm -rf /opt/rng-validator/src && mkdir -p /opt/rng-validator/src && tar -C /opt/rng-validator/src -xzf /tmp/rng-validator.tgz && cd /opt/rng-validator/src && docker build -q -t rng-validator -f provider/Dockerfile . >/dev/null && echo $name built" &
+    done
+    wait ;;
+  validator-init)
+    for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
+      echo "$name $(ssh_ "$ip" "echo '{\"dataDir\":\"/data\"}' > /opt/rng-validator/data/init.json && docker run --rm -v /opt/rng-validator/data:/data rng-validator provider/validator.mjs init /data/init.json")"
+    done ;;
+  validator-start)
+    for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
+      ssh_ "$ip" "echo '{\"beacon\":\"$2\",\"hbNode\":\"$3\",\"dataDir\":\"/data\",\"listen\":7478}' > /opt/rng-validator/data/config.json && docker rm -f rng-validator >/dev/null 2>&1; docker run -d --name rng-validator --restart unless-stopped --network host -v /opt/rng-validator/data:/data rng-validator provider/validator.mjs run /data/config.json >/dev/null && echo $name validator started"
+    done ;;
+  validator-status)
+    for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
+      echo "$name: $(ssh_ "$ip" "docker ps --filter name=rng-validator --format '{{.Status}}'; curl -s -m 3 http://127.0.0.1:7478/")"
+    done ;;
+  validator-logs)
+    for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
+      echo "== $name"; ssh_ "$ip" "docker logs --tail ${2:-15} rng-validator 2>&1"
     done ;;
   status)
     for n in "${NODES[@]}"; do read -r i name ip <<<"$n"

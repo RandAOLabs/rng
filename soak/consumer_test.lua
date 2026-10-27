@@ -40,7 +40,7 @@ function runConsumerTests()
   local ids = out.requested
   eq("two beacon requests", #ids, 2)
   local req = ob["rng-request-" .. ids[1]]
-  check("request goes to the beacon", req and req.target == BEACON and req.Action == "Request-Random" and req.Tier == "beacon")
+  check("request goes to the beacon", req and req.target == BEACON and req.Action == "Request-Random" and req.Tier == "quick")
   check("request ids unique", ids[1] ~= ids[2])
   eq("pending 2", stats().pendingCount, 2)
 

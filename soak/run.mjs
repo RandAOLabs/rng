@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import {
-  BEACON, TOKEN, UNIT, ROOT, appendLine, env, loadFunder, log, pick, read, readJson, send, sleep,
+  BEACON, TIMELOCK, TOKEN, UNIT, ROOT, appendLine, env, loadFunder, log, pick, read, readJson, send, sleep,
   spawnConsumer, wallets as loadWallets, writeJson,
 } from './common.mjs';
 
@@ -53,7 +53,11 @@ async function record(kind, fields, fn) {
 const mint = (to, rng) => funder.mints
   ? send(owner, TOKEN, 'Admin.Mint', { Recipient: to, Quantity: String(rng * UNIT) })
   : send(owner, TOKEN, 'Transfer', { Recipient: to, Quantity: String(rng * UNIT) });
-const fundBeacon = (jwk, forWho, rng) => send(jwk, TOKEN, 'Transfer', { Recipient: BEACON, Quantity: String(rng * UNIT), 'X-For': forWho });
+const fundBeacon = (jwk, forWho, rng, beacon = BEACON) => send(jwk, TOKEN, 'Transfer', { Recipient: beacon, Quantity: String(rng * UNIT), 'X-For': forWho });
+const fundBoth = async (jwk, forWho, rng) => {
+  await fundBeacon(jwk, forWho, rng, BEACON);
+  if (TIMELOCK) await fundBeacon(jwk, forWho, rng, TIMELOCK);
+};
 
 async function setup() {
   log(`setup: ${ws.length} wallets, ${contracts.length}/${N_INITIAL} initial contracts`);
@@ -62,7 +66,7 @@ async function setup() {
     if (funded[w.address]) continue;
     await mint(w.address, 2000);
     await sleep(500);
-    await fundBeacon(w.jwk, w.address, 300);
+    await fundBoth(w.jwk, w.address, 300);
     funded[w.address] = true;
     writeJson('funded.json', funded);
   }
@@ -72,39 +76,49 @@ async function setup() {
 async function addContract() {
   const pid = await spawnConsumer(owner);
   const funder = pick(ws);
-  await fundBeacon(funder.jwk, pid, 300);
+  await fundBoth(funder.jwk, pid, 300);
   contracts.push({ pid, born: Date.now() });
   writeJson('contracts.json', contracts);
   appendLine('actions.jsonl', { t: Date.now(), kind: 'contract-born', pid });
   log(`contract ${contracts.length}: ${pid}`);
 }
 
-// One random action. Weights roughly: contracts 55%, direct 25%, edge cases 20%.
+// One random action. Weights roughly: contracts 55% (quick, time-lock, local),
+// direct requests 25% (quick, time-lock), edge cases 20%.
 async function act() {
   const w = pick(ws);
   const r = Math.random();
-  if (r < 0.40 && contracts.length) {
+  if (r < 0.20 && contracts.length) {
     const c = pick(contracts).pid;
     const count = 1 + Math.floor(Math.random() * 3);
-    return record('play-beacon', { from: w.address, contract: c, count }, () => send(w.jwk, c, 'Play', { Count: String(count), Tier: 'beacon' }));
+    return record('play-beacon', { from: w.address, contract: c, count }, () => send(w.jwk, c, 'Play', { Count: String(count), Tier: 'quick' }));
+  }
+  if (r < 0.40 && contracts.length && TIMELOCK) {
+    const c = pick(contracts).pid;
+    const count = 1 + Math.floor(Math.random() * 3);
+    return record('play-timelock', { from: w.address, contract: c, count }, () => send(w.jwk, c, 'Play', { Count: String(count), Tier: 'timelock' }));
   }
   if (r < 0.55 && contracts.length) {
     const c = pick(contracts).pid;
     const count = 1 + Math.floor(Math.random() * 5);
     return record('play-local', { from: w.address, contract: c, count }, () => send(w.jwk, c, 'Play', { Count: String(count), Tier: 'local' }));
   }
-  if (r < 0.80) {
+  if (r < 0.68 || (r < 0.80 && !TIMELOCK)) {
     const id = rid(w.address);
     lastRequest.set(w.address, id);
-    return record('direct', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'beacon', 'Request-Id': id }));
+    return record('direct', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
+  }
+  if (r < 0.80) {
+    const id = rid(w.address);
+    return record('direct-timelock', { from: w.address, requestId: id }, () => send(w.jwk, TIMELOCK, 'Request-Random', { Tier: 'timelock', 'Request-Id': id }));
   }
   if (r < 0.85 && lastRequest.has(w.address)) {
     const id = lastRequest.get(w.address);
-    return record('duplicate', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'beacon', 'Request-Id': id }));
+    return record('duplicate', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
   }
   if (r < 0.90) {
     const id = rid(pauper.address);
-    return record('unfunded', { from: pauper.address, requestId: id }, () => send(pauper.jwk, BEACON, 'Request-Random', { Tier: 'beacon', 'Request-Id': id }));
+    return record('unfunded', { from: pauper.address, requestId: id }, () => send(pauper.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
   }
   if (r < 0.95) return record('withdraw', { from: w.address }, () => send(w.jwk, BEACON, 'Withdraw', { Quantity: '1' }));
   return topUp();
@@ -112,19 +126,23 @@ async function act() {
 
 // Keep balances from running dry: refill whoever is lowest.
 async function topUp() {
-  const state = await read(BEACON, 'beaconstate');
   const all = [...ws.map((w) => w.address), ...contracts.map((c) => c.pid)];
-  const low = all.filter((a) => (state.balances?.[a] ?? 0) < 60);
-  for (const a of low.slice(0, 5)) {
-    const funder = pick(ws);
-    await mint(funder.address, 300);
-    await record('top-up', { from: funder.address, for: a }, () => fundBeacon(funder.jwk, a, 300));
+  const beacons = [[BEACON, 'beaconstate'], ...(TIMELOCK ? [[TIMELOCK, 'timelockstate']] : [])];
+  for (const [pid, key] of beacons) {
+    const state = await read(pid, key);
+    const low = all.filter((a) => (state.balances?.[a] ?? 0) < 60);
+    for (const a of low.slice(0, 5)) {
+      const funder = pick(ws);
+      await mint(funder.address, 300);
+      await record('top-up', { from: funder.address, for: a, beacon: pid }, () => fundBeacon(funder.jwk, a, 300, pid));
+    }
   }
 }
 
-function dockerApi(verb) {
+const CHAOS_CONTAINERS = (process.env.CHAOS_CONTAINERS || 'randao-provider,rng-validator').split(',');
+function dockerApi(verb, container) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ socketPath: '/var/run/docker.sock', method: 'POST', path: `/containers/randao-provider/${verb}` }, (res) => {
+    const req = http.request({ socketPath: '/var/run/docker.sock', method: 'POST', path: `/containers/${container}/${verb}` }, (res) => {
       res.resume();
       res.statusCode < 400 ? resolve() : reject(new Error(`docker ${verb}: HTTP ${res.statusCode}`));
     });
@@ -135,7 +153,9 @@ function dockerApi(verb) {
 
 async function chaos(name, action) {
   try {
-    if (CHAOS === 'docker') await dockerApi(action === 'stop-one' ? 'stop' : 'start');
+    if (CHAOS === 'docker') {
+      for (const c of CHAOS_CONTAINERS) await dockerApi(action === 'stop-one' ? 'stop' : 'start', c).catch((e) => log(`chaos ${c}: ${e.message}`));
+    }
     else execFileSync('bash', [path.join(ROOT, 'deploy', 'nodes.sh'), action, name], { stdio: 'pipe' });
     appendLine('actions.jsonl', { t: Date.now(), kind: `chaos-${action}`, node: name });
     log(`chaos: ${action} ${name}`);

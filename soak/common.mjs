@@ -13,6 +13,7 @@ fs.mkdirSync(path.join(DATA, 'wallets'), { recursive: true });
 export const testnet = JSON.parse(fs.readFileSync(process.env.DEPLOY_STATE || path.join(ROOT, 'deploy', 'testnet.json'), 'utf8'));
 export const NODE = process.env.HB_NODE || testnet.node;
 export const BEACON = testnet.beacon;
+export const TIMELOCK = testnet.timelock;
 export const TOKEN = testnet.token;
 export const UNIT = 1_000_000;
 
@@ -82,6 +83,6 @@ export async function spawnConsumer(owner) {
     src('soak/consumer.lua'),
   ].join('\n');
   const pid = await spawnLua({ node: NODE, jwk: owner, lua, tags: { name: 'RNG-Soak-Consumer' } });
-  await send(owner, pid, 'Configure', {}, JSON.stringify({ beacon: BEACON, self: pid }));
+  await send(owner, pid, 'Configure', {}, JSON.stringify({ beacon: BEACON, timelock: TIMELOCK, self: pid }));
   return pid;
 }

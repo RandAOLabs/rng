@@ -1,0 +1,17 @@
+# The validator node: Node.js daemon + the native GMP cracker.
+#   docker build -t rng-validator -f provider/Dockerfile .
+FROM node:22-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libgmp-dev && rm -rf /var/lib/apt/lists/*
+COPY provider/cracker.c /src/cracker.c
+RUN gcc -O2 -o /src/cracker /src/cracker.c -lgmp
+
+FROM node:22-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libgmp10 && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json ./
+COPY node_modules/@noble ./node_modules/@noble
+COPY provider ./provider
+COPY vendor ./vendor
+COPY --from=build /src/cracker /usr/local/bin/rng-cracker
+ENV RNG_CRACKER=/usr/local/bin/rng-cracker
+ENTRYPOINT ["node"]

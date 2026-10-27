@@ -2,8 +2,8 @@
 -- would. Bundled after vendor/json.lua, vendor/jsonenc.lua and lib/rng.lua
 -- (global `rng`). Publishes `consumerstats` for the soak checker.
 --
---   Configure  (owner)  Data { beacon, self }
---   Play       (anyone) Count = 1..10, Tier = local | beacon
+--   Configure  (owner)  Data { beacon (quick), timelock, self }
+--   Play       (anyone) Count = 1..10, Tier = local | quick | timelock
 --   RNG-Result / RNG-Error  from the beacon
 
 local json = require(".json")
@@ -12,7 +12,7 @@ local RESULT_HISTORY = 40
 
 local function fresh()
   return {
-    rev = 0, beacon = "", self = "",
+    rev = 0, beacon = "", timelock = "", self = "",
     plays = 0, requested = 0, received = 0, errors = 0, localDraws = 0,
     faces = { 0, 0, 0, 0, 0, 0 },     -- beacon dice, for the distribution check
     localFaces = { 0, 0, 0, 0, 0, 0 },
@@ -102,7 +102,7 @@ rng.on("Roll", function(r, ctx, info)
   Consumer.pending[info.requestId] = nil
   Consumer.received = Consumer.received + 1
   Consumer.faces[die] = Consumer.faces[die] + 1
-  record(Consumer.results, { requestId = info.requestId, round = info.round, value = info.value, die = die, latencyMs = NOW - at })
+  record(Consumer.results, { requestId = info.requestId, round = info.round, tier = info.tier, value = info.value, die = die, latencyMs = NOW - at })
 end)
 
 local H = {}
@@ -111,6 +111,7 @@ H["Configure"] = function(base, msg)
   if provenSigner(msg) ~= Owner then return { error = "Not authorised" } end
   local d = json.decode(field(msg, "Data") or "{}")
   Consumer.beacon = d.beacon or Consumer.beacon
+  Consumer.timelock = d.timelock or Consumer.timelock
   Consumer.self = d.self or Consumer.self
   return { ok = true }
 end
@@ -139,7 +140,7 @@ H["RNG-Result"] = function(base, msg, from)
 end
 
 H["RNG-Error"] = function(base, msg, from)
-  if from ~= Consumer.beacon then return { ignored = true } end
+  if from ~= Consumer.beacon and from ~= Consumer.timelock then return { ignored = true } end
   local d = json.decode(field(msg, "Data") or "{}")
   Consumer.errors = Consumer.errors + 1
   Consumer.lastError = tostring(d.error)
@@ -169,7 +170,8 @@ function compute(base, req)
   NOW = int(req and req.timestamp, 0)
   local msg = (req and req.body) or {}
   local outbox = {}
-  rng.config({ beacon = Consumer.beacon, outbox = outbox })
+  rng.config({ beacons = { quick = Consumer.beacon ~= "" and Consumer.beacon or nil,
+                           timelock = Consumer.timelock ~= "" and Consumer.timelock or nil }, outbox = outbox })
   local action = field(msg, "Action") or "none"
   local handler = H[action]
   local out

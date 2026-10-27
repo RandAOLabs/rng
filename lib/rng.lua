@@ -182,11 +182,14 @@ RngPending = RngPending or {}
 RngNonce = RngNonce or { id = nil, n = 0 }
 
 local continuations = {}
-local cfg = { beacon = nil, send = nil, json = nil, outbox = nil }
+local cfg = { beacon = nil, beacons = nil, send = nil, json = nil, outbox = nil }
 
-local TIERS = { ["local"] = 0, fast = 1, beacon = 2, max = 3 }
+-- Tier -> the beacon tier name it asks for. "beacon" is the old name of "quick".
+local TIERS = { ["local"] = "local", quick = "quick", beacon = "quick", timelock = "timelock" }
 
---- Set the beacon process id and, optionally, how to send and decode.
+--- Point tiers at beacons: rng.config{ beacons = { quick = <pid>, timelock = <pid> } }
+--- (`beacon = <pid>` alone still means the quick beacon), and optionally how
+--- to send and decode.
 --- send(msg) defaults to ao.send; json defaults to require(".json") or
 --- require("json"). Native compute() processes (no ao.send) instead set
 --- outbox = base.results.outbox for each message; requests are written there.
@@ -233,7 +236,7 @@ local function run(name, stream, ctx, info)
 end
 
 --- Ask for randomness. opts: on (continuation name, required), ctx (table
---- passed back), tier ("local" default, "fast", "beacon", "max"), salt.
+--- passed back), tier ("local" default, "quick", "timelock"), salt.
 --- Returns the request id. Tier "local" runs the continuation before returning.
 function rng.request(msg, opts)
   opts = opts or {}
@@ -247,18 +250,20 @@ function rng.request(msg, opts)
       { tier = "local", requestId = requestId })
     return requestId
   end
-  assert(cfg.beacon, "rng: paid tiers need rng.config{ beacon = <process id> }")
+  tier = TIERS[tier]
+  local target = (cfg.beacons and cfg.beacons[tier]) or (tier == "quick" and cfg.beacon) or nil
+  assert(target, "rng: tier '" .. tier .. "' needs rng.config{ beacons = { " .. tier .. " = <process id> } }")
   RngPending[requestId] = { on = opts.on, ctx = opts.ctx, tier = tier }
   if cfg.outbox then
     cfg.outbox["rng-request-" .. requestId] = {
-      target = cfg.beacon, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
+      target = target, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
     }
     return requestId
   end
   local send = cfg.send or (type(ao) == "table" and ao.send)
   assert(send, "rng: no send function; pass rng.config{ send = ... } or { outbox = ... }")
   send({
-    Target = cfg.beacon,
+    Target = target,
     Action = "Request-Random",
     Tier = tier,
     ["Request-Id"] = requestId,
@@ -273,7 +278,9 @@ end
 --- result, aos processes can omit it and msg.From is used.
 function rng.handle(msg, from)
   from = from or msg.From
-  if not cfg.beacon or from ~= cfg.beacon then
+  local known = from ~= nil and from == cfg.beacon
+  for _, pid in pairs(cfg.beacons or {}) do if from ~= nil and from == pid then known = true end end
+  if not known then
     return nil, "not from the configured beacon"
   end
   local json = cfg.json

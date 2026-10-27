@@ -11,15 +11,18 @@ import path from 'node:path';
 import { readState } from '../vendor/hbclient.mjs';
 import * as bls from '../provider/bls.mjs';
 import { stream } from '../test/reference.mjs';
-import { BEACON, DATA, NODE, appendLine, env, log, read, readJson, readLines, sha256hex, sleep, writeJson } from './common.mjs';
+import * as tl from '../provider/timelock.mjs';
+import { BEACON, TIMELOCK, DATA, NODE, appendLine, env, log, read, readJson, readLines, sha256hex, sleep, writeJson } from './common.mjs';
 
 const EVERY = env('CHECK_EVERY_S', 20) * 1000;
 const LOST_AFTER = env('LOST_AFTER_MIN', 10) * 60_000;
 
 const rounds = new Map(readLines('rounds.jsonl').map((r) => [r.round, r]));
+const tlRounds = new Map(readLines('timelock-rounds.jsonl').map((r) => [r.round, r]));
 const s = readJson('check-state.json', {
   actionsRead: 0, direct: {}, expectRefusal: {}, checkedResults: {}, faces: [0, 0, 0, 0, 0, 0],
   latencies: [], problems: [], stalls: 0, lastRound: 0, lastRoundSeenAt: 0, firstCheck: Date.now(),
+  directTl: {}, tl: { complete: true, expectedAccrued: 0, protocol: 0, cracks: 0, lastRound: 0, lastRoundSeenAt: Date.now() },
 });
 const problem = (kind, detail) => {
   const p = { t: Date.now(), kind, ...detail };
@@ -50,10 +53,69 @@ function archive(state) {
   }
 }
 
+function archiveTimelock(st) {
+  const live = Object.keys(st.rounds ?? {}).map(Number).sort((a, b) => a - b);
+  const archived = tlRounds.size ? Math.max(...tlRounds.keys()) : 0;
+  if (live.length && live[0] > archived + 1 && (archived > 0 || live[0] > 1)) {
+    problem('timelock-archive-gap', { from: archived + 1, to: live[0] - 1 });
+    s.tl.complete = false;
+  }
+  for (const n of live) {
+    if (tlRounds.has(n)) continue;
+    const r = st.rounds[String(n)];
+    const T = st.params.T;
+    let verified = true, cracks = 0;
+    const ys = {};
+    for (const [addr, out] of Object.entries(r.outputs ?? {})) {
+      const seed = tl.seedFor(st.self, n, addr);
+      const N = r.commits[addr];
+      ys[addr] = out.y;
+      const ok = out.via === 'crack' ? tl.verifyCrack(N, seed, T, out.y, out.proof) : tl.verifyReveal(N, seed, T, out.y, out.p);
+      if (out.via === 'crack') cracks++;
+      if (!ok) verified = false;
+    }
+    const valueOk = tl.roundValue(st.self, n, ys) === r.value;
+    const outputs = Object.keys(r.outputs ?? {}).length;
+    const rec = { round: n, opened: r.opened, finalizedAt: r.finalizedAt, requests: r.requests, outputs, cracks, value: r.value, verified, valueOk };
+    tlRounds.set(n, rec);
+    appendLine('timelock-rounds.jsonl', rec);
+    s.tl.expectedAccrued += r.requests * outputs;
+    s.tl.protocol += r.requests;
+    s.tl.cracks += cracks;
+    if (!verified || !valueOk) problem('bad-timelock-round', { round: n, verified, valueOk });
+  }
+}
+
+function checkTimelock(st, info) {
+  const accrued = Object.values(st.accrued ?? {}).reduce((a, b) => a + Number(b), 0);
+  if (s.tl.complete && (accrued !== s.tl.expectedAccrued || Number(st.protocolAccrued) !== s.tl.protocol)) {
+    const key = `${accrued}/${s.tl.expectedAccrued}/${st.protocolAccrued}/${s.tl.protocol}`;
+    if (key !== s.tl.lastFeeKey) problem('timelock-fee-mismatch', { accrued, expected: s.tl.expectedAccrued, protocol: st.protocolAccrued, expectedProtocol: s.tl.protocol });
+    s.tl.lastFeeKey = key;
+  }
+  if (info.round > s.tl.lastRound) { s.tl.lastRound = info.round; s.tl.lastRoundSeenAt = Date.now(); }
+  if (info.pendingCount > 0 && Date.now() - s.tl.lastRoundSeenAt > 15 * 60_000) {
+    problem('timelock-stall', { round: info.round, phase: info.open?.phase, pending: info.pendingCount });
+    s.tl.lastRoundSeenAt = Date.now();
+  }
+  for (const [key, d] of Object.entries(s.directTl)) {
+    const bound = st.seen?.[key];
+    const round = bound !== undefined ? tlRounds.get(Number(bound)) : undefined;
+    if (round) {
+      s.latencies.push({ t: d.t, ms: round.finalizedAt - d.t, via: 'timelock' });
+      delete s.directTl[key];
+    } else if (Date.now() - d.t > 30 * 60_000) {
+      if (bound !== undefined) problem('timelock-direct-lost', { key, bound });
+      delete s.directTl[key];
+    }
+  }
+}
+
 async function checkActions(state) {
   const actions = readLines('actions.jsonl');
   for (const a of actions.slice(s.actionsRead)) {
     if (a.kind === 'direct' && a.slot !== undefined) s.direct[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
+    if (a.kind === 'direct-timelock' && a.slot !== undefined) s.directTl[`${a.from}|${a.requestId}`] = { t: a.t };
     if ((a.kind === 'duplicate' || a.kind === 'unfunded') && a.slot !== undefined) s.expectRefusal[`${a.kind}|${a.slot}`] = { t: a.t, slot: a.slot, kind: a.kind };
   }
   s.actionsRead = actions.length;
@@ -92,13 +154,14 @@ async function checkContracts() {
     try { st = await read(pid, 'consumerstats'); } catch { continue; }
     for (const r of st.results ?? []) {
       if (s.checkedResults[r.requestId]) continue;
-      const round = rounds.get(Number(r.round));
+      const timelock = r.tier === 'timelock';
+      const round = (timelock ? tlRounds : rounds).get(Number(r.round));
       if (!round) continue; // round not archived yet; next cycle
       const want = sha256hex(`${round.value}|${r.requestId}`);
       const die = stream(`beacon|${want}`).int(1, 6);
       if (r.value !== want || r.die !== die) problem('wrong-result', { pid, requestId: r.requestId, round: r.round });
       s.faces[die - 1]++;
-      s.latencies.push({ t: Date.now(), ms: r.latencyMs, via: 'contract' });
+      s.latencies.push({ t: Date.now(), ms: r.latencyMs, via: timelock ? 'timelock' : 'contract' });
       s.checkedResults[r.requestId] = 1;
     }
     for (const [id, at] of Object.entries(st.pending ?? {})) {
@@ -133,7 +196,9 @@ function checkInvariants(state, info) {
 const pct = (xs, p) => (xs.length ? xs[Math.min(xs.length - 1, Math.floor((p / 100) * xs.length))] : null);
 
 function report(state) {
-  const ms = s.latencies.map((l) => l.ms).filter((x) => x >= 0).sort((a, b) => a - b);
+  const sorted = (f) => s.latencies.filter(f).map((l) => l.ms).filter((x) => x >= 0).sort((a, b) => a - b);
+  const ms = sorted((l) => l.via !== 'timelock');
+  const tms = sorted((l) => l.via === 'timelock');
   const total = s.faces.reduce((a, b) => a + b, 0);
   const chi = total ? s.faces.reduce((a, f) => a + (f - total / 6) ** 2 / (total / 6), 0) : 0;
   const counts = {};
@@ -143,9 +208,11 @@ function report(state) {
   const r = {
     updated: new Date().toISOString(), hours: +hours.toFixed(2), rounds: rounds.size,
     resultsChecked: total, latencyMs: { p50: pct(ms, 50), p95, p99: pct(ms, 99), n: ms.length },
+    timelock: { rounds: tlRounds.size, cracks: s.tl.cracks, latencyMs: { p50: pct(tms, 50), p95: pct(tms, 95), p99: pct(tms, 99), n: tms.length } },
     dice: { faces: s.faces, chiSquare: +chi.toFixed(2) }, problems: counts,
     pass: {
-      noBadRounds: !counts['bad-round'], noWrongResults: !counts['wrong-result'],
+      noBadRounds: !counts['bad-round'] && !counts['bad-timelock-round'],
+      timelockFeesBalance: !counts['timelock-fee-mismatch'], timelockNoStalls: !counts['timelock-stall'] && !counts['timelock-direct-lost'], noWrongResults: !counts['wrong-result'],
       noLostRequests: !counts['direct-lost'] && !counts['contract-lost'],
       refusalsHeld: !counts['duplicate-accepted'] && !counts['unfunded-accepted'],
       noStalls: !counts.stall, latencyOk: p95 === null || p95 <= state.cadenceMs + 2000,
@@ -158,7 +225,8 @@ function report(state) {
   fs.writeFileSync(path.join(DATA, 'report.md'), [
     `# Soak report (${r.verdict})`, '',
     `Updated ${r.updated}, ${r.hours} h in. ${r.rounds} rounds verified, ${r.resultsChecked} contract results checked.`, '',
-    `Latency (request to result): p50 ${r.latencyMs.p50} ms, p95 ${r.latencyMs.p95} ms, p99 ${r.latencyMs.p99} ms over ${r.latencyMs.n} requests.`, '',
+    `Quick tier latency: p50 ${r.latencyMs.p50} ms, p95 ${r.latencyMs.p95} ms, p99 ${r.latencyMs.p99} ms over ${r.latencyMs.n} requests.`, '',
+    `Time-lock tier: ${r.timelock.rounds} rounds verified (${r.timelock.cracks} cracked); latency p50 ${r.timelock.latencyMs.p50} ms, p95 ${r.timelock.latencyMs.p95} ms over ${r.timelock.latencyMs.n} requests.`, '',
     `Dice faces ${r.dice.faces.join(' / ')}, chi-square ${r.dice.chiSquare}.`, '',
     '| Check | Status |', '|---|---|',
     ...Object.entries(r.pass).map(([k, v]) => `| ${k} | ${v ? 'ok' : 'NOT YET / FAIL'} |`), '',
@@ -174,6 +242,11 @@ for (;;) {
     await checkActions(state);
     await checkContracts();
     checkInvariants(state, info);
+    if (TIMELOCK) {
+      const [tst, tinfo] = await Promise.all([read(TIMELOCK, 'timelockstate'), read(TIMELOCK, 'beaconinfo')]);
+      archiveTimelock(tst);
+      checkTimelock(tst, tinfo);
+    }
     if (s.latencies.length > 200_000) s.latencies = s.latencies.slice(-100_000);
     writeJson('check-state.json', s);
     const r = report(state);

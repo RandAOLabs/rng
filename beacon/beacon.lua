@@ -247,6 +247,7 @@ H["Request-Random"] = function(base, msg, from)
   local tier = msg.Tier or "beacon"
   local requestId = msg["Request-Id"]
   local ctx = { requestId = requestId }
+  if tier == "quick" then tier = "beacon" end
   if tier ~= "beacon" then return fail(base, "Tier-Unavailable", from, ctx) end
   if type(requestId) ~= "string" or requestId == "" or #requestId > 128 then
     return fail(base, "Missing-Request-Id", from, ctx)

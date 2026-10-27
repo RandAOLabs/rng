@@ -6,6 +6,9 @@
 //   node deploy/deploy.mjs fund <rng> [for]           faucet, then fund a beacon balance
 //   node deploy/deploy.mjs request [id]               ask for one beacon value
 //   node deploy/deploy.mjs info                       print the beacon's published info
+//   node deploy/deploy.mjs spawn-timelock             spawn the time-lock beacon (uses the token)
+//   node deploy/deploy.mjs configure-timelock <params.json>  token, unit and SPEC 2.1 parameters
+//   node deploy/deploy.mjs add-validator <address> | remove-validator <address>
 //
 // Env: HB_NODE (default https://hb.randao.net), HB_WALLET (path to the
 // owner/deployer wallet JWK), DEPLOY_STATE (default deploy/testnet.json).
@@ -34,6 +37,7 @@ const json = () => [
   'local encode, jsonObject = jsonx.encode, jsonx.object',
 ];
 const tokenSource = () => [...json(), read('token/rng-token.lua')].join('\n');
+const timelockSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('beacon/timelock.lua')].join('\n');
 const beaconSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('beacon/beacon.lua')].join('\n');
 
 async function send(pid, action, { tags = {}, data } = {}) {
@@ -112,3 +116,22 @@ if (cmd === 'request') {
 }
 
 if (cmd === 'info') console.log(JSON.stringify(await beaconInfo(), null, 1));
+
+if (cmd === 'spawn-timelock') {
+  if (state.timelock) (state.retiredTimelock ||= []).push(state.timelock);
+  state.timelock = await spawnLua({ node: NODE, jwk, lua: timelockSource(), tags: { name: 'RNG-Timelock-Beacon' } });
+  console.log('timelock', state.timelock);
+  save();
+}
+
+if (cmd === 'configure-timelock') {
+  const params = args[0] ? JSON.parse(fs.readFileSync(args[0], 'utf8')) : {};
+  console.log((await send(state.timelock, 'Configure', { data: JSON.stringify({ self: state.timelock, token: state.token, unit: 1000000, ...params }) })).output);
+}
+
+if (cmd === 'add-validator' || cmd === 'remove-validator') {
+  const action = cmd === 'add-validator' ? 'Admin.Add-Validator' : 'Admin.Remove-Validator';
+  console.log((await send(state.timelock, action, { data: JSON.stringify({ address: args[0] }) })).output);
+  const r = await readState({ node: NODE, process: state.timelock, path: 'now/beaconinfo' });
+  console.log('validators:', JSON.parse(r.value).validators.map((v) => v.address).join(', '));
+}
