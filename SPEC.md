@@ -21,6 +21,9 @@ Price rule everywhere: 1 RNG to each validator whose contribution served the
 request, plus 1 RNG to the protocol. `quick` is the existing beacon process;
 `timelock` is a separate beacon process specified below. Both deliver
 `RNG-Result` in the same shape, so the library treats them alike.
+`RNG-Result` and `RNG-Error` go only to requesters that are processes; a
+wallet reads its result from the published round (a message to a wallet makes
+the node look the address up on Arweave during every push).
 
 ## 2. Time-lock beacon (`timelock` tier)
 
