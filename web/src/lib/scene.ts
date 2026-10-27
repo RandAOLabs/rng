@@ -10,12 +10,13 @@ import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 export type SceneRound = { round: number; value: string; cracked: number[] };
 export type Phase = { round: number; label: string };
 
-const AMBER = new THREE.Color('#f0a63a');
-const TEAL = new THREE.Color('#3fe0b0');
-const EMBER = new THREE.Color('#ff5d4a');
-const DEEP = new THREE.Color('#2a2f6b');
-const GOLD = new THREE.Color('#ffd27a');
-const STAGE = new THREE.Color('#10133a');
+// Black and white: locked is dim, revealed is bright, cracked flickers.
+const LOCKED = new THREE.Color('#8a8a8a');
+const OPEN = new THREE.Color('#ffffff');
+const SILENT = new THREE.Color('#5a5a5a');
+const LOW = new THREE.Color('#202020');
+const HIGH = new THREE.Color('#ffffff');
+const STAGE = new THREE.Color('#000000');
 
 const N_VALIDATORS = 3;
 const RING = 3.3;
@@ -60,7 +61,7 @@ class Validator {
   readonly group = new THREE.Group();
   readonly orb: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   readonly shards: THREE.InstancedMesh;
-  readonly shardMat: THREE.MeshStandardMaterial;
+  readonly shardMat: THREE.MeshBasicMaterial;
   readonly stream: THREE.InstancedMesh;
   readonly helix: THREE.InstancedMesh;
   readonly faces = shellFaces();
@@ -68,25 +69,22 @@ class Validator {
 
   constructor(readonly index: number, readonly home: THREE.Vector3) {
     this.group.position.copy(home);
-    this.orb = new THREE.Mesh(new THREE.SphereGeometry(0.3, 32, 16), new THREE.MeshBasicMaterial({ color: AMBER.clone() }));
+    this.orb = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8), new THREE.MeshBasicMaterial({ color: LOCKED.clone(), wireframe: true }));
     this.group.add(this.orb);
 
     const tri = new THREE.BufferGeometry();
     const k = Math.sqrt(3) / 2;
     tri.setAttribute('position', new THREE.Float32BufferAttribute([1, 0, 0, -0.5, k, 0, -0.5, -k, 0], 3));
     tri.computeVertexNormals();
-    this.shardMat = new THREE.MeshStandardMaterial({
-      color: '#b9761f', emissive: AMBER.clone(), emissiveIntensity: 0.12,
-      metalness: 0.85, roughness: 0.28, side: THREE.DoubleSide, flatShading: true,
-    });
+    this.shardMat = new THREE.MeshBasicMaterial({ color: LOCKED.clone(), wireframe: true, side: THREE.DoubleSide });
     this.shards = new THREE.InstancedMesh(tri, this.shardMat, this.faces.length);
     this.group.add(this.shards);
     // Each shard tumbles on its own axis when it flies off.
     this.spin = this.faces.map((_, i) => new THREE.Vector3(Math.sin(i * 12.9898), Math.cos(i * 78.233), Math.sin(i * 3.7)).normalize());
 
     const dot = new THREE.SphereGeometry(0.045, 8, 6);
-    this.stream = new THREE.InstancedMesh(dot, new THREE.MeshBasicMaterial({ color: TEAL.clone() }), STREAM);
-    this.helix = new THREE.InstancedMesh(dot, new THREE.MeshBasicMaterial({ color: EMBER.clone() }), HELIX);
+    this.stream = new THREE.InstancedMesh(dot, new THREE.MeshBasicMaterial({ color: OPEN.clone() }), STREAM);
+    this.helix = new THREE.InstancedMesh(dot, new THREE.MeshBasicMaterial({ color: SILENT.clone() }), HELIX);
     this.helix.position.copy(home);
   }
 }
@@ -98,7 +96,7 @@ export class RoundScene {
   private camera = new THREE.PerspectiveCamera(36, 1, 0.1, 200);
   private world = new THREE.Group();
   private validators: Validator[] = [];
-  private core!: THREE.Mesh<THREE.IcosahedronGeometry, THREE.MeshStandardMaterial>;
+  private core!: THREE.Mesh<THREE.IcosahedronGeometry, THREE.MeshBasicMaterial>;
   private coreGlow!: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   private crown!: THREE.InstancedMesh;
   private m = new THREE.Matrix4();
@@ -124,19 +122,12 @@ export class RoundScene {
     this.renderer = new THREE.WebGPURenderer({ canvas: this.canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(STAGE, 1);
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMapping = THREE.NoToneMapping;
     await this.renderer.init();
     this.backend = (this.renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'WebGPU' : 'WebGL2';
 
     this.scene.background = STAGE;
     this.scene.add(this.world);
-    this.scene.add(new THREE.AmbientLight('#6670c0', 0.6));
-    const key = new THREE.PointLight('#ffe2b0', 60, 30);
-    key.position.set(2, 5, 6);
-    this.scene.add(key);
-    const rim = new THREE.PointLight('#5d7bff', 40, 30);
-    rim.position.set(-6, -2, -4);
-    this.scene.add(rim);
 
     this.buildStage();
     for (let i = 0; i < N_VALIDATORS; i++) {
@@ -148,7 +139,7 @@ export class RoundScene {
 
     const scenePass = pass(this.scene, this.camera);
     const color = scenePass.getTextureNode('output');
-    this.pipeline = new THREE.RenderPipeline(this.renderer, color.add(bloom(color, 0.55, 0.35, 0.45)));
+    this.pipeline = new THREE.RenderPipeline(this.renderer, color.add(bloom(color, 0.4, 0.25, 0.6)));
 
     this.resize();
     this.ro = new ResizeObserver(() => this.resize());
@@ -159,23 +150,23 @@ export class RoundScene {
     // Core: a faceted heart that takes in every answer.
     this.core = new THREE.Mesh(
       new THREE.IcosahedronGeometry(0.55, 0),
-      new THREE.MeshStandardMaterial({ color: '#8f96ff', emissive: '#6f78ff', emissiveIntensity: 0.25, metalness: 0.9, roughness: 0.15, transparent: true, opacity: 0.85, flatShading: true }),
+      new THREE.MeshBasicMaterial({ color: OPEN.clone(), wireframe: true }),
     );
-    this.coreGlow = new THREE.Mesh(new THREE.SphereGeometry(0.32, 32, 16), new THREE.MeshBasicMaterial({ color: GOLD.clone() }));
+    this.coreGlow = new THREE.Mesh(new THREE.SphereGeometry(0.2, 32, 16), new THREE.MeshBasicMaterial({ color: OPEN.clone() }));
     this.world.add(this.core, this.coreGlow);
 
     // Crown: one bar per byte of the round value.
     const bar = new THREE.BoxGeometry(0.1, 1, 0.1);
     bar.translate(0, 0.5, 0);
     this.crown = new THREE.InstancedMesh(bar, new THREE.MeshBasicMaterial({ color: '#ffffff' }), BYTES);
-    for (let i = 0; i < BYTES; i++) this.crown.setColorAt(i, DEEP);
+    for (let i = 0; i < BYTES; i++) this.crown.setColorAt(i, LOW);
     this.world.add(this.crown);
 
     // The validators' orbit and faint spokes to the core.
-    const orbit = new THREE.Mesh(new THREE.TorusGeometry(RING, 0.008, 6, 180), new THREE.MeshBasicMaterial({ color: '#39407e' }));
+    const orbit = new THREE.Mesh(new THREE.TorusGeometry(RING, 0.008, 6, 180), new THREE.MeshBasicMaterial({ color: '#3a3a3a' }));
     orbit.rotation.x = Math.PI / 2;
     this.world.add(orbit);
-    const inner = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.006, 6, 120), new THREE.MeshBasicMaterial({ color: '#2c3268' }));
+    const inner = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.006, 6, 120), new THREE.MeshBasicMaterial({ color: '#262626' }));
     inner.rotation.x = Math.PI / 2;
     this.world.add(inner);
 
@@ -188,7 +179,7 @@ export class RoundScene {
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: '#8f97d8', size: 0.12, sizeAttenuation: true })));
+    this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: '#555555', size: 0.08, sizeAttenuation: true })));
   }
 
   private resize() {
@@ -267,12 +258,12 @@ export class RoundScene {
     const cracked = new Set(cur?.r.cracked ?? []);
     const combine = cur ? (cracked.size ? T.crackEnd : T.revealEnd) + T.flow : 0;
 
-    if (!cur) this.label('Waiting for a round');
-    else if (t < T.commitEnd + 0.3) this.label('Validators lock in their puzzles');
-    else if (t < T.revealEnd + 0.2) this.label(cracked.size ? 'Two reveal; one stays silent' : 'Every validator reveals its answer');
-    else if (cracked.size && t < T.crackEnd) this.label('The silent puzzle is cracked by repeated squaring');
-    else if (t < combine + 0.2) this.label('Every answer is hashed together');
-    else this.label('Round value');
+    if (!cur) this.label('waiting for a round');
+    else if (t < T.commitEnd + 0.3) this.label('commit   validators lock their puzzles');
+    else if (t < T.revealEnd + 0.2) this.label(cracked.size ? 'reveal   2 open, 1 silent' : 'reveal   every puzzle opened');
+    else if (cracked.size && t < T.crackEnd) this.label('crack    solving the silent puzzle by repeated squaring');
+    else if (t < combine + 0.2) this.label('combine  sha256(every answer)');
+    else this.label(`value    ${cur.r.value.slice(0, 24)}…`);
 
     for (const val of this.validators) this.updateValidator(val, t, cracked.has(val.index), combine);
     this.updateCore(t, combine);
@@ -289,14 +280,15 @@ export class RoundScene {
     val.group.position.set(val.home.x, val.home.y + bob, val.home.z);
     val.group.rotation.y = this.clock * 0.4 + val.index;
 
-    // Orb: amber while hidden, teal once its answer is out.
+    // Orb: a dim wireframe while hidden, solid once its answer is out.
     const out = t >= burstAt;
-    val.orb.material.color.copy(out ? TEAL : AMBER).multiplyScalar(out ? 2.2 : 1.4 + 0.4 * Math.sin(this.clock * 3));
-    val.orb.scale.setScalar(out ? 1 + 0.25 * (1 - ease((t - burstAt) / 0.6)) : 1);
+    val.orb.material.wireframe = !out;
+    val.orb.material.color.copy(out ? OPEN : LOCKED).multiplyScalar(out ? 1.1 : 1);
+    val.orb.scale.setScalar(out ? 0.7 + 0.25 * (1 - ease((t - burstAt) / 0.6)) : 1);
 
     // Shell shards: fly in to close, fly out to burst.
-    val.shardMat.emissive.copy(isCracked && t > T.reveal ? EMBER : AMBER);
-    val.shardMat.emissiveIntensity = isCracked && t > T.reveal && !out ? 0.6 + 0.4 * Math.sin(this.clock * 18) : 0.12;
+    const flicker = isCracked && t > T.reveal && !out;
+    val.shardMat.color.copy(flicker ? (Math.sin(this.clock * 30) > 0 ? OPEN : SILENT) : LOCKED);
     val.faces.forEach((f, i) => {
       const jitter = (i % 7) * 0.025;
       const inP = ease(clamp01((close * 1.15) - jitter));
@@ -328,7 +320,7 @@ export class RoundScene {
         val.helix.setMatrixAt(k, this.m);
       }
       val.helix.instanceMatrix.needsUpdate = true;
-      (val.helix.material as THREE.MeshBasicMaterial).color.copy(EMBER).multiplyScalar(1.6 + p);
+      (val.helix.material as THREE.MeshBasicMaterial).color.copy(SILENT).lerp(OPEN, p);
     }
 
     // Stream: the answer flowing into the core.
@@ -349,16 +341,16 @@ export class RoundScene {
     }
     val.stream.visible = any;
     val.stream.instanceMatrix.needsUpdate = true;
-    (val.stream.material as THREE.MeshBasicMaterial).color.copy(isCracked ? EMBER : TEAL).multiplyScalar(2);
+    (val.stream.material as THREE.MeshBasicMaterial).color.copy(OPEN).multiplyScalar(1.4);
   }
 
   private updateCore(t: number, combine: number) {
     const flare = t < 0 ? 0 : Math.max(0, 1 - Math.abs(t - combine - 0.15) / 0.45);
     this.core.rotation.set(this.clock * 0.3, this.clock * 0.45, 0);
     this.core.scale.setScalar(1 + 0.35 * ease(flare));
-    this.core.material.emissiveIntensity = 0.25 + 1.6 * flare;
-    this.coreGlow.scale.setScalar(1 + 0.9 * flare + 0.06 * Math.sin(this.clock * 2.2));
-    this.coreGlow.material.color.copy(GOLD).multiplyScalar(1.2 + 3 * flare);
+    this.core.material.color.copy(OPEN).multiplyScalar(0.7 + 1.5 * flare);
+    this.coreGlow.scale.setScalar(1 + 1.2 * flare);
+    this.coreGlow.material.color.copy(OPEN).multiplyScalar(0.8 + 3 * flare);
   }
 
   private updateCrown(t: number, combine: number, bytes: number[] | null) {
@@ -374,7 +366,7 @@ export class RoundScene {
       this.s.set(1, Math.max(h, 0.02), 1);
       this.m.compose(this.v, this.q, this.s);
       this.crown.setMatrixAt(i, this.m);
-      this.col.copy(DEEP).lerp(GOLD, b / 255).multiplyScalar(0.6 + 0.9 * (b / 255));
+      this.col.copy(LOW).lerp(HIGH, b / 255);
       this.crown.setColorAt(i, this.col);
     }
     this.crown.instanceMatrix.needsUpdate = true;

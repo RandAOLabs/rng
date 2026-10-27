@@ -70,8 +70,8 @@ export function HeroScene({ fullscreen = false, fallback }: { fullscreen?: boole
     <figure className={fullscreen ? 'scene scene-full' : 'scene'}>
       <canvas ref={canvas} aria-hidden="true" />
       <figcaption aria-live="polite">
-        <span className="scene-round">{phase?.round ? `Round ${phase.round}` : 'Time-lock round'}{demo && !fullscreen ? ' (demo)' : ''}</span>
-        <span className="scene-phase">{phase?.label ?? 'Starting…'}</span>
+        <span className="scene-round">$ rng watch --tier timelock{phase?.round ? ` --round ${phase.round}` : ''}{demo && !fullscreen ? ' --demo' : ''}</span>
+        <span className="scene-phase">{'> '}{phase?.label ?? 'starting'}<i className="scene-cursor" aria-hidden="true" /></span>
       </figcaption>
     </figure>
   );
