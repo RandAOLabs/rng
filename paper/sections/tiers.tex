@@ -1,0 +1,22 @@
+\section{Tiers}\label{sec:tiers}
+
+\subsection{One Library}\label{sec:library}
+Applications use RandAO through one Lua library. Every call names a continuation that receives a deterministic random stream, so moving a call site from one tier to another changes one option and nothing else:
+\begin{verbatim}
+rng.request(msg, { tier = "timelock", on = "Loot-Roll" })
+\end{verbatim}
+A stream offers integers without modulo bias, floats, picks and shuffles, and draws the same numbers on every node and every replay.
+
+\subsection{The Tiers}\label{sec:tier_table}
+
+\begin{center}
+\begin{tabular}{p{2.2cm} p{4.2cm} p{3.6cm} p{1.8cm} p{1.4cm}}
+\textbf{Tier} & \textbf{Source} & \textbf{Who can cheat} & \textbf{Latency} & \textbf{Price} \\
+\hline
+\texttt{local} & SHA-256 stream over the message & the sender, by re-signing & none & free \\
+\texttt{quick} & threshold-BLS round, $t$ of $n$ validators & $t$ colluding validators & $\sim$1~s & $t+1$ RNG \\
+\texttt{timelock} & time-lock commit-reveal of every validator & all validators together & a few seconds & $n+1$ RNG \\
+\end{tabular}
+\end{center}
+
+The \texttt{local} tier needs no network and suits cosmetic effects and low-value draws. The \texttt{quick} tier answers in about a second and suits frequent game events. The \texttt{timelock} tier carries RandAO's any-honest guarantee and suits anything worth attacking: lotteries, rare drops, tournament brackets, validator selection.

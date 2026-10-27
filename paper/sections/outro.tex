@@ -1,0 +1,7 @@
+\section{Outro}\label{sec:outro}
+
+This whitepaper has outlined the ``\textbf{Onchain Randomness Problem}'' and why it now affects every AO process, since HyperBEAM's runtime no longer offers \texttt{math.random}.
+
+We presented the second version of RandAO. It keeps the any-honest time-lock commit-reveal at the heart of the original protocol: as long as a single validator is honest, nobody can predict or bias a result, and a validator who withholds can only delay it. It makes that design fast and cheap by checking each reveal with the puzzle's one-time trapdoor inside the node, through the \texttt{timelock@1.0} device, and it puts every security level an application might need behind one library call.
+
+The \$RNG token pays for randomness, one token to each validator that served a request and one to the protocol. With RandAO in place, verifiable randomness becomes the default for every application on AO.

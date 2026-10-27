@@ -1,0 +1,15 @@
+\section{Future Developments}\label{sec:opportunities}
+
+This section explores enhancements to the RandAO protocol that are not yet under development but would provide significant additional value.
+
+\subsection{Time-Lock Encryption}\label{sec:timelock_encryption}
+The puzzles that secure the beacon can also seal data. A message encrypted under a puzzle's answer stays sealed until the puzzle is solved, which enables sealed-bid auctions, hidden card hands, commit-reveal games without a reveal step and fair launches. The same device that verifies beacon reveals can verify that a sealed value was opened correctly.
+
+\subsection{Open Validator Set}\label{sec:open_set}
+The launch validators are run by RandAO Labs. Opening the set to outside operators, with admission rules and, where it adds security, staking, would make collusion progressively harder as the set grows: under the any-honest guarantee every additional independent validator is another party an attacker must corrupt.
+
+\subsection{Subscription RNG Service Layer}\label{sec:subscription_service}
+A subscription layer would let applications receive a stream of values per round rather than requesting each one, reducing messages further and enabling negotiated pricing such as volume discounts and fixed-rate packages.
+
+\subsection{Honey Pot Mechanism}\label{sec:honey_pot}
+A honey pot would reward anyone who proves a validator set is colluding by predicting a round's value before it is revealed. A correct prediction is evidence that validators leaked or coordinated their contributions; the reward would come from the colluding validators' fees, or their stake once staking exists. The mere existence of the mechanism deters collusion, since any member of a collusion could turn whistleblower.

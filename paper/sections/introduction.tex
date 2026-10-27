@@ -1,0 +1,28 @@
+\section{Introduction}\label{sec:introduction}
+
+
+\subsection{Motivation}\label{sec:motivation}
+
+Random values have been a fundamental building block of Web2 applications, powering everything from gaming mechanics to cryptographic protocols. As we transition to Web3, we must maintain these essential capabilities while upholding our core principles of decentralization and security. However, blockchain's inherently deterministic and public nature presents a unique challenge in preserving the unpredictability of random values.
+
+This fundamental limitation creates what we term the ``\textbf{Onchain Randomness Problem}'': as soon as entropy becomes available on the blockchain, all outcomes dependent on that entropy become predictable by any observer. Traditional attempts to generate randomness within blockchain systems have led to various compromises in security, integrity, or decentralization, undermining the very principles Web3 aims to uphold.
+
+The problem has become pressing on AO. Release v0.11-RC7 of HyperBEAM, the node software that runs AO processes, replaces \texttt{math.random} in its Lua runtime with a sandboxed placeholder, because a value drawn from a node's local generator differs between nodes and on every replay, and would fork a process's history. Every process that needs randomness now needs a source that every node computes identically and that nobody can predict.
+
+\subsection{Our Contribution}\label{sec:our_contribution}
+
+We present the second version of RandAO, rebuilt for HyperBEAM around the design of the first: a commit-reveal of time-lock puzzles across a set of independent validators. Its key properties are:
+
+\begin{itemize}
+    \item \textbf{Any-Honest Security}: The output is unpredictable and unbiasable as long as at least one committed validator is honest.
+
+    \item \textbf{Withholding Cannot Bias}: Once commitments close, every contribution is fixed. A validator that refuses to reveal is cracked; the worst it can do is delay the round.
+
+    \item \textbf{Verification on the Node}: A reveal carries the puzzle's one-time trapdoor, so the node checks it with one modular exponentiation through the \texttt{timelock@1.0} device. Cracks carry a Wesolowski proof. No verifier fleet is needed.
+
+    \item \textbf{Self-Contained}: Validators generate their own puzzles and hold their own keys. There is no shared secret, no key ceremony and no dependence on outside randomness.
+
+    \item \textbf{One Library, Several Tiers}: Applications call one function and choose per call between free local randomness, a fast threshold-signature beacon and the time-lock beacon. Moving up a tier changes one option, not the code.
+\end{itemize}
+
+Through this design, RandAO keeps the security of its original protocol while becoming fast and cheap enough to be the default way AO processes draw random values.

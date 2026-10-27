@@ -3,6 +3,7 @@ import { BeaconPage } from './pages/Beacon';
 import { TryPage } from './pages/Try';
 import { DocsPage } from './pages/Docs';
 import { CommitteePage } from './pages/Committee';
+import { TiersPage } from './pages/Tiers';
 import { REPO } from './lib/config';
 
 export function App() {
@@ -14,6 +15,7 @@ export function App() {
         </NavLink>
         <nav aria-label="Main">
           <NavLink to="/" end>Beacon</NavLink>
+          <NavLink to="/tiers">Tiers</NavLink>
           <NavLink to="/try">Try a draw</NavLink>
           <NavLink to="/docs">Docs</NavLink>
           <NavLink to="/committee">Committee</NavLink>
@@ -23,6 +25,7 @@ export function App() {
       <main>
         <Routes>
           <Route path="/" element={<BeaconPage />} />
+          <Route path="/tiers" element={<TiersPage />} />
           <Route path="/try" element={<TryPage />} />
           <Route path="/docs" element={<DocsPage />} />
           <Route path="/committee" element={<CommitteePage />} />
