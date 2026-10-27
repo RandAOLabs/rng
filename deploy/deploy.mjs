@@ -2,6 +2,7 @@
 //
 //   node deploy/deploy.mjs spawn                     spawn TEST-RNG and the beacon
 //   node deploy/deploy.mjs spawn-beacon              replace only the beacon (keeps the token)
+//   node deploy/deploy.mjs spawn-token               replace only the token (then reconfigure the beacons)
 //   node deploy/deploy.mjs configure <committee.json> set token, committee, group key
 //   node deploy/deploy.mjs fund <rng> [for]           faucet, then fund a beacon balance
 //   node deploy/deploy.mjs request [id]               ask for one beacon value
@@ -68,6 +69,14 @@ if (cmd === 'spawn') {
   // First messages initialise each process and publish its read keys.
   console.log('token info ', (await send(state.token, 'Info')).output);
   console.log('beacon info', (await send(state.beacon, 'Get-Info')).output);
+}
+
+if (cmd === 'spawn-token') {
+  if (state.token) (state.retiredTokens ||= []).push(state.token);
+  state.token = await spawnLua({ node: NODE, jwk, lua: tokenSource(), tags: { name: 'TEST-RNG' } });
+  console.log('token', state.token);
+  save();
+  console.log('token info', (await send(state.token, 'Info')).output);
 }
 
 if (cmd === 'spawn-beacon') {

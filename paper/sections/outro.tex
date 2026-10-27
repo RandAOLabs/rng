@@ -1,7 +1,7 @@
 \section{Outro}\label{sec:outro}
 
-This whitepaper has outlined the ``\textbf{Onchain Randomness Problem}'' and why it now affects every AO process, since HyperBEAM's runtime no longer offers \texttt{math.random}.
+This whitepaper has outlined the ``\textbf{Onchain Randomness Problem}'' and why it now affects every AO process: HyperBEAM's runtime no longer offers \texttt{math.random}, because node-local randomness forks process state and can be steered by whoever controls the seed.
 
-We presented the second version of RandAO. It keeps the any-honest time-lock commit-reveal at the heart of the original protocol: as long as a single validator is honest, nobody can predict or bias a result, and a validator who withholds can only delay it. It makes that design fast and cheap by checking each reveal with the puzzle's one-time trapdoor inside the node, through the \texttt{timelock@1.0} device, and it puts every security level an application might need behind one library call.
+RandAO brings it back safely, as the first tool in a suite of cryptographic tools for the new age of the internet. One library gives every process deterministic randomness for free and upgrades the same call to verifiable randomness when value is at stake. Its flagship tier keeps the any-honest time-lock commit-reveal RandAO was founded on: as long as a single validator is honest, nobody can predict or bias a draw, and a validator who withholds can only delay it. Checking each reveal with the puzzle's one-time trapdoor inside the node, through the \texttt{timelock@1.0} device, makes that guarantee fast and cheap. Time-lock encryption follows on the same puzzles.
 
-The \$RNG token pays for randomness, one token to each validator that served a request and one to the protocol. With RandAO in place, verifiable randomness becomes the default for every application on AO.
+The \$RNG token pays for randomness: one token to each validator that served a request and one to the protocol. RandAO runs on testnet today, with launch validators operated by RandAO Labs; opening the validator set comes next.

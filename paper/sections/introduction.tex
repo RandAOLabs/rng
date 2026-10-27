@@ -7,11 +7,20 @@ Random values have been a fundamental building block of Web2 applications, power
 
 This fundamental limitation creates what we term the ``\textbf{Onchain Randomness Problem}'': as soon as entropy becomes available on the blockchain, all outcomes dependent on that entropy become predictable by any observer. Traditional attempts to generate randomness within blockchain systems have led to various compromises in security, integrity, or decentralization, undermining the very principles Web3 aims to uphold.
 
-The problem has become pressing on AO. Release v0.11-RC7 of HyperBEAM, the node software that runs AO processes, replaces \texttt{math.random} in its Lua runtime with a sandboxed placeholder, because a value drawn from a node's local generator differs between nodes and on every replay, and would fork a process's history. Every process that needs randomness now needs a source that every node computes identically and that nobody can predict.
+\subsection{Bringing Back \texttt{math.random}}\label{sec:math_random}
+
+On AO the problem is now concrete. Release v0.11-RC7 of HyperBEAM, the node software that runs AO processes, replaces \texttt{math.random} in its Lua runtime with a sandboxed placeholder, together with \texttt{os.time}, \texttt{os.clock} and \texttt{os.date}. Each of these returns a value that depends on the node running it: its random seed, its clock, its time zone. That makes them unsafe in two ways:
+
+\begin{itemize}
+    \item \textbf{Forks}: an AO process is defined by replaying its messages. If two nodes, or the same node on a replay, draw different numbers, they compute different states for the same process, and its history forks.
+    \item \textbf{Manipulation}: whoever controls the seed controls the draw. A node operator can choose or observe the seed and predict or steer every roll, which makes node-local randomness worthless for anything of value.
+\end{itemize}
+
+RandAO brings \texttt{math.random} back safely. A single call, \texttt{rng.install(msg)}, gives \texttt{math.random} a deterministic stream derived from the message, identical on every node and every replay, so existing code keeps working at no cost. When a draw carries value, \texttt{rng.request} upgrades the same code to verifiable randomness from the network, at the security level the application chooses.
 
 \subsection{Our Contribution}\label{sec:our_contribution}
 
-We present the second version of RandAO, rebuilt for HyperBEAM around the design of the first: a commit-reveal of time-lock puzzles across a set of independent validators. Its key properties are:
+RandAO is a suite of cryptographic tools for the new age of the internet, delivered through one library and one HyperBEAM device. Its first tool is tiered randomness; time-lock encryption follows. The flagship is the second version of the time-lock protocol RandAO was founded on, rebuilt for HyperBEAM:
 
 \begin{itemize}
     \item \textbf{Any-Honest Security}: The output is unpredictable and unbiasable as long as at least one committed validator is honest.
@@ -22,7 +31,5 @@ We present the second version of RandAO, rebuilt for HyperBEAM around the design
 
     \item \textbf{Self-Contained}: Validators generate their own puzzles and hold their own keys. There is no shared secret, no key ceremony and no dependence on outside randomness.
 
-    \item \textbf{One Library, Several Tiers}: Applications call one function and choose per call between free local randomness, a fast threshold-signature beacon and the time-lock beacon. Moving up a tier changes one option, not the code.
+    \item \textbf{Any Security Level, Per Call}: Applications choose between free local randomness, a fast threshold-signature beacon and the time-lock beacon on every call. Moving up a tier changes one option, not the code.
 \end{itemize}
-
-Through this design, RandAO keeps the security of its original protocol while becoming fast and cheap enough to be the default way AO processes draw random values.

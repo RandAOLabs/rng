@@ -45,8 +45,9 @@ export function BeaconPage() {
         <div className="hero-text">
           <h1>Randomness your AO process can prove.</h1>
           <p className="lede">
-            A committee of nodes signs each round together. Any two of three signatures
-            combine into one, the beacon turns it into your number, and anyone can check it.
+            HyperBEAM switched off math.random because nodes could disagree or steer it. RandAO
+            brings it back safely, from free local draws up to time-lock rounds where one honest
+            validator keeps every draw fair.
           </p>
           <p className="actions">
             <Link className="button" to="/try">Try a draw</Link>

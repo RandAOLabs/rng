@@ -1,7 +1,11 @@
-\section{Tiers}\label{sec:tiers}
+\section{Tiers and Distribution}\label{sec:tiers}
 
 \subsection{One Library}\label{sec:library}
-Applications use RandAO through one Lua library. Every call names a continuation that receives a deterministic random stream, so moving a call site from one tier to another changes one option and nothing else:
+Applications use RandAO through one Lua library. Code that already calls \texttt{math.random} needs one line:
+\begin{verbatim}
+rng.install(msg)    -- math.random now draws a deterministic stream
+\end{verbatim}
+When a draw carries value, the same logic moves to a network tier. Every request names a continuation that receives a deterministic random stream, so moving a call site between tiers changes one option and nothing else:
 \begin{verbatim}
 rng.request(msg, { tier = "timelock", on = "Loot-Roll" })
 \end{verbatim}
@@ -20,3 +24,12 @@ A stream offers integers without modulo bias, floats, picks and shuffles, and dr
 \end{center}
 
 The \texttt{local} tier needs no network and suits cosmetic effects and low-value draws. The \texttt{quick} tier answers in about a second and suits frequent game events. The \texttt{timelock} tier carries RandAO's any-honest guarantee and suits anything worth attacking: lotteries, rare drops, tournament brackets, validator selection.
+
+\subsection{Distribution}\label{sec:distribution}
+The aim is for safe randomness to be what developers get without thinking about it. The plan:
+\begin{itemize}
+    \item \textbf{Arweave module}: the library is published on Arweave as a HyperBEAM Lua module. A process lists it in its \texttt{module} map and calls \texttt{require("rng")}.
+    \item \textbf{APM}: the library is published on APM, AO's package manager.
+    \item \textbf{aos and hyper-aos}: we will propose the library to the aos and hyper-aos maintainers as the safe default behind \texttt{math.random}.
+    \item \textbf{HyperBEAM}: the \texttt{timelock@1.0} device will be proposed upstream to HyperBEAM once it has passed its soak test on our nodes.
+\end{itemize}

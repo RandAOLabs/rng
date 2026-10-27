@@ -1,19 +1,26 @@
 # RNG: verifiable randomness for AO
 
-HyperBEAM's RC7 Lua runtime sandboxes `math.random`, so every process needs a
-new source of randomness. RNG gives it one API with four security tiers:
-start free, and upgrade a call site by changing one option.
+RandAO is a suite of cryptographic tools for the new age of the internet, on
+HyperBEAM: tiered randomness today, time-lock encryption next, all from one
+library and one node device (`timelock@1.0`).
 
-| Tier | How | Who could cheat | Messages | Price |
-|---|---|---|---|---|
-| 0 `local` | SHA-256 stream seeded from the message | the sender (re-signing) | 0 | free |
-| 1 `fast` | one provider's BLS signature (planned) | that provider, by refusing | 2 | 2 RNG |
-| 2 `beacon` | threshold BLS beacon, 2 of 3 nodes | 2+ colluding nodes | 2 + shared round post | 3 RNG |
-| 3 `max` | beacon + VDF (planned) | practically no one | 2 + 2 shared | 4 RNG |
+**Bringing back `math.random`.** HyperBEAM v0.11-RC7 sandboxes `math.random`
+(and `os.time`, `os.clock`, `os.date`) because the result depends on the
+node's seed and clock: two nodes or a replay compute different values, so
+process state forks, and whoever picks the seed can predict or steer the draw.
+`rng.install(msg)` brings it back safely as a deterministic stream (the same on
+every node and replay), and `rng.request` upgrades the same code to verifiable
+randomness when value is at stake.
+
+| Tier | How | Who could cheat | Price |
+|---|---|---|---|
+| `local` | SHA-256 stream seeded from the message | the sender (re-signing) | free |
+| `quick` | threshold-BLS round, 2 of 3 validators | 2 colluding validators | 3 RNG |
+| `timelock` | any-honest commit-reveal of time-lock puzzles (flagship) | only all validators together | 4 RNG |
 
 Price rule: 1 RNG to each validator that served the request, plus 1 RNG to
-the protocol. The launch committee is 3 nodes run by the RandAO team; seats
-open to outside operators as the network grows.
+the protocol. Testnet today; launch validators are run by RandAO Labs, no
+staking yet. Protocol details: [SPEC.md](SPEC.md).
 
 ## Use it
 
@@ -68,7 +75,7 @@ Live on `https://hb.randao.net`; process ids in `deploy/testnet.json`.
 | `deploy/` | spawn, configure, fund; node install over SSH + Docker |
 | `test/` | library, beacon and BLS suites |
 | `web/` | the site: live beacon, try a draw, docs, committee (`cd web && npm i && npm run dev`) |
-| `device/` | the `vrf@1.0` HyperBEAM device: patch, sources, rollout gates |
+| `device/` | the `timelock@1.0` HyperBEAM device: patch, sources, rollout gates |
 | `soak/` | the 3-day soak test: driver, checker, consumer contract |
 | `vendor/` | JSON and HyperBEAM client from paralith-mono (see `vendor/SOURCE`) |
 

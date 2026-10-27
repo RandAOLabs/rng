@@ -53,8 +53,8 @@ export function TiersPage() {
     <section className="block tiers-page">
       <h1>Pick how safe each draw needs to be</h1>
       <p className="lede">
-        One library, three tiers. Use local randomness while you build, and switch a single option when
-        real value is on the line.
+        One library, any security level per call. Start with free local randomness, and switch one
+        option to the time-lock tier when real value is on the line.
       </p>
 
       <div className="tiers" role="list">

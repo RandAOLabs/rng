@@ -30,8 +30,9 @@ export function DocsPage() {
     <article className="block narrow docs">
       <h1>Docs</h1>
       <p className="lede">
-        One library covers every security level. Start with free local randomness, then switch a call to the
-        beacon when what's at stake grows. Your code stays the same.
+        One library brings math.random back to HyperBEAM safely. <code>rng.install(msg)</code> gives you
+        deterministic local draws for free; <code>rng.request</code> moves the same code to the quick or
+        time-lock tier when value is at stake.
       </p>
 
       <h2 id="quickstart">Quickstart</h2>
