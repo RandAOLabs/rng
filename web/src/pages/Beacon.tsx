@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { EntropyPlate } from '../components/EntropyPlate';
 import { recentRounds, short, useBeacon } from '../lib/beacon';
 import { roundValue, verifySignature } from '../lib/crypto';
+import { TimelockLive } from '../components/TimelockLive';
 
 const checked = new Map<string, boolean>(); // signature -> verified, so each is checked once
 
@@ -67,8 +68,10 @@ export function BeaconPage() {
 
       {error && <p className="notice bad" role="status">Can't reach the beacon: {error} Retrying every few seconds.</p>}
 
+      <TimelockLive />
+
       <section className="block">
-        <h2>Recent rounds</h2>
+        <h2>Quick tier: recent rounds</h2>
         <p className="sub">
           Each signature is checked in this page against the committee's public key. Nothing here is taken on trust.
         </p>

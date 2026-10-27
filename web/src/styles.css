@@ -177,6 +177,36 @@ pre code { font-size: inherit; }
 .meter i.on { background: var(--ink); }
 @media (max-width: 860px) { .tiers { grid-template-columns: 1fr; } .tier-line { min-height: 0; } }
 
+/* Time-lock live + diagram */
+.tl-open { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 20px; margin: 16px 0; }
+.tl-phase { margin: 0 0 12px; }
+.tl-phase strong { margin-right: 10px; }
+.tl-validators { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tl-v { border: 2px solid var(--rule); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; transition: border-color 200ms, background 200ms; }
+.tl-name { font-weight: 600; }
+.tl-state { color: var(--muted); font-size: 14px; }
+.tl-locked { border-color: var(--live); }
+.tl-revealed { border-color: var(--ok); }
+.tl-revealed .tl-state { color: var(--ok); }
+.tl-suspended { opacity: 0.5; }
+@media (prefers-reduced-motion: reduce) { .tl-v { transition: none; } }
+.tl-diagram { margin: 16px 0 32px; }
+.tl-diagram svg { width: 100%; height: auto; display: block; }
+.tld-head { font: 700 17px var(--text); fill: var(--ink); }
+.tld-sub, .tld-note { font: 400 13px var(--text); fill: var(--muted); }
+.tld-label { font: 600 14px var(--text); fill: var(--ink); }
+.tld-mark { font: 600 11px var(--text); fill: var(--bad); }
+.tld-line { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+.tld-dash { stroke-dasharray: 5 5; }
+.tld-box { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; }
+.tld-ok { stroke: var(--ok); stroke-width: 2; }
+.tld-crack { stroke: var(--bad); stroke-width: 2; }
+.tld-value { stroke-width: 2.5; }
+.tld-stroke { stroke: var(--ink); stroke-width: 2.5; fill: none; }
+.tld-ink-fill { fill: var(--ink); }
+.tld-check { stroke: var(--ok); stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 860px) { .tl-validators { grid-template-columns: 1fr; } }
+
 .foot { max-width: 1160px; margin: 0 auto; padding: 24px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--rule); }
 
 @media (max-width: 860px) {

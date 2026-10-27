@@ -15,7 +15,7 @@ moves between tiers by changing `tier`.
 |---|---|---|---|---|
 | `local` | SHA-256 stream over the message (in-process) | the sender, by re-signing | same message | free |
 | `quick` | threshold-BLS round from the committee (`t` of `n`) | `t` colluding validators can predict future rounds | ~1 s | `t + 1` RNG |
-| `timelock` | commit-reveal of time-lock puzzles from every validator | only *all* validators together (any-honest) | ~2-4 s; worst case one crack | `n + 1` RNG |
+| `timelock` | commit-reveal of time-lock puzzles from every validator | only *all* validators together (any-honest) | ~1-2 s; worst case one crack (~7 min) | `n + 1` RNG |
 
 Price rule everywhere: 1 RNG to each validator whose contribution served the
 request, plus 1 RNG to the protocol. `quick` is the existing beacon process;

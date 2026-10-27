@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { TimelockDiagram } from '../components/TimelockDiagram';
 
 type Tier = {
   key: string; name: string; line: string; price: string;
@@ -23,7 +24,7 @@ const TIERS: Tier[] = [
   },
   {
     key: 'timelock', name: 'Time-lock', line: 'Our original protocol: safe while any one validator is honest.',
-    price: '4 RNG', speed: 1, speedText: '~3–5 s',
+    price: '4 RNG', speed: 2, speedText: '~1–2 s',
     security: 3, securityText: 'Any one honest',
     cheat: 'Only every validator together. A stalled validator is cracked open, so it can delay but never steer.',
     steps: [
@@ -73,6 +74,9 @@ export function TiersPage() {
           </article>
         ))}
       </div>
+
+      <h2>How a time-lock round works</h2>
+      <TimelockDiagram />
 
       <h2>Switching is one option</h2>
       <pre><code>{snippet}</code></pre>
