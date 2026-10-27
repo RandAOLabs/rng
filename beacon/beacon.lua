@@ -16,10 +16,10 @@
 -- partials from the published `beaconpartials` key, combines t of them, and
 -- posts the result (Round).
 --
--- Until the vrf@1.0 device ships, a round finalizes only when `threshold`
+-- Until the timelock@1.0 device ships, a round finalizes only when `threshold`
 -- committee members post the same signature (each verifies it off-chain
 -- first), so one stolen key cannot inject a value. With `useDevice` on (the
--- node runs HyperBEAM's vrf@1.0), the beacon checks the group signature itself
+-- node runs HyperBEAM's timelock@1.0), the beacon checks the group signature itself
 -- and one post is enough.
 
 local json = require(".json")
@@ -58,7 +58,7 @@ local function freshState()
     attest = {},          -- "r" -> { by = member -> sig, sigs = sig -> members }
     equivocations = {},   -- member -> conflicting signatures posted
     partials = { round = 0, by = {} }, -- open round's partial signatures, by member
-    useDevice = false,    -- verify rounds with vrf@1.0 instead of attestations
+    useDevice = false,    -- verify rounds with timelock@1.0 instead of attestations
   }
 end
 Beacon = Beacon or freshState()
@@ -270,12 +270,12 @@ H["Request-Random"] = function(base, msg, from)
   return reply(base, { requestId = requestId, round = int(r, 0), price = cost, balance = Beacon.balances[from] })
 end
 
---- The group signature, checked by the node's vrf@1.0 device (BLS12-381,
+--- The group signature, checked by the node's timelock@1.0 device (BLS12-381,
 --- pubkey in G1, signature in G2). Any failure to reach the device is a no.
 local function deviceVerify(groupKey, message, sig)
   if type(ao) ~= "table" or type(ao.resolve) ~= "function" then return false end
   local ok, status, res = pcall(ao.resolve, {
-    path = "/~vrf@1.0/verify-bls", ["public-key"] = groupKey, message = message, signature = sig,
+    path = "/~timelock@1.0/verify-bls", ["public-key"] = groupKey, message = message, signature = sig,
   })
   return ok and status == "ok" and type(res) == "table"
     and (res.valid == true or res.valid == "true")

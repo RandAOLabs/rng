@@ -1,24 +1,26 @@
-# vrf@1.0: the HyperBEAM device
+# timelock@1.0: the HyperBEAM device
 
-Lets the beacon check a round's BLS signature on the node itself, so one
-signed post finalizes a round instead of two matching attestations. Stateless
-and deterministic: every node computes the same answer.
+Stateless, deterministic checks the beacons run on the node, so verifying a
+round is one call instead of a fleet of verifier processes:
 
 | Key | Inputs | Returns |
 |---|---|---|
-| `verify-bls` | `public-key` (48-byte G1, hex), `message`, `signature` (96-byte G2, hex) | `valid`, and `value` = SHA-256("round\|" .. signature) when valid |
-| `derive` | `seed`, `counter`, `bytes` (≤ 1024) | hex of SHA-256(seed .. counter + k) blocks |
+| `verify-reveal` | `modulus`, `seed`, `t`, `y`, `p` | `valid`, `x`: a time-lock answer opened with its factor (SPEC 2.4) |
+| `verify-crack` | `modulus`, `seed`, `t`, `y`, `proof` | `valid`, `x`: a cracked answer with its Wesolowski proof (SPEC 2.5) |
+| `derive-x` | `modulus`, `seed` | `x`: the round's puzzle input |
+| `verify-bls` | `public-key`, `message`, `signature` | `valid`, `value`: the quick tier's committee signature |
+| `derive` | `seed`, `counter`, `bytes` | `value`: SHA-256 counter-mode bytes |
 
-BLS12-381 minimal-pubkey scheme, hash-to-curve DST
-`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_`, subgroup-checked points, via
+Hex must be lowercase without leading zeros. Measured at 2048 bits and
+t = 2^27: verify-reveal 1.4 ms, verify-crack 0.7 ms. BLS uses
 [blst](https://github.com/supranational/blst) v0.3.16 in a dirty-scheduler NIF.
-Full reference: `vrf-at-1-0.md`.
+Full reference: `timelock-at-1-0.md`.
 
 From a Lua process:
 
 ```lua
-local status, res = ao.resolve({ path = "/~vrf@1.0/verify-bls",
-  ["public-key"] = groupKey, message = beaconId .. "|" .. round, signature = sigHex })
+local status, res = ao.resolve({ path = "/~timelock@1.0/verify-reveal",
+  modulus = N, seed = beaconId .. "|" .. round .. "|" .. validator, t = "134217728", y = y, p = p })
 -- res.valid == true
 ```
 
@@ -27,24 +29,24 @@ local status, res = ao.resolve({ path = "/~vrf@1.0/verify-bls",
 The device compiles into the node, so it is built in our HyperBEAM fork. This
 folder is the canonical copy:
 
-- `vrf-device.patch`: the whole change (device, NIF, blst submodule, build
-  hooks, eunit vectors, docs), made against `paralith/v0.11` @ `b5387693d`.
-- `dev_vrf.erl`, `blst_nif.erl`, `blst_nif.c`: the sources, for reading.
-- Test vectors come from `test/gen-vrf-vectors.mjs` (the beacon's own BLS code).
+- `timelock-device.patch`: the whole change (two commits: BLS device, then the time-lock
+  keys and the rename), made against `paralith/v0.11` @ `58b3d2b32`.
+- `dev_timelock.erl`, `blst_nif.erl`, `blst_nif.c`: the sources, for reading.
+- Test vectors come from `test/gen-vrf-vectors.mjs` (BLS) and `test/gen-timelock-vectors.mjs` (time-lock).
 
 Apply to a HyperBEAM checkout, then test in Docker:
 
 ```bash
-git am /path/to/rng/device/vrf-device.patch
+git am /path/to/rng/device/timelock-device.patch
 git submodule update --init native/lib/blst
-scripts/vrf-test.sh        # builds in erlang:27 and runs dev_vrf + dev_lua tests
+scripts/timelock-test.sh   # builds in erlang:27 and runs dev_timelock + dev_lua tests
 ```
 
 ## Rollout gates (proposed)
 
 Nothing moves to the next step until the one before it passes.
 
-1. **Build.** The patch applies on the finished RC7 port; `vrf-test.sh` passes;
+1. **Build.** The patch applies on the finished RC7 port; `timelock-test.sh` passes;
    the full eunit suite and the release image build.
 2. **Our nodes.** Roll the image to all 3 committee nodes; switch the testnet
    beacon to `useDevice: true` with one `Configure`.
