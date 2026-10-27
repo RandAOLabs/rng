@@ -118,18 +118,26 @@ local function schedulerAddress(base)
   return nil
 end
 
+--- Replies (RNG-Result, RNG-Error) go only to processes. A wallet reads its
+--- result from the published state; a message to a wallet makes the node look
+--- the address up on Arweave on every push, which stalls delivery whenever the
+--- gateway is slow.
+local FromProcess = false
+
 --- A wallet is its signer; a process is the `from-process` our own scheduler
 --- vouches for. Nothing unsigned is anybody.
 local function actor(msg, base)
   local signed = provenSigner(msg)
   local fromProcess = msg["from-process"] or msg.FromProcess
+  FromProcess = false
   if signed then
     local scheduler = schedulerAddress(base)
-    if fromProcess and scheduler and signed == scheduler then return fromProcess end
+    if fromProcess and scheduler and signed == scheduler then FromProcess = true; return fromProcess end
     return signed
   end
   local commitments = msg.commitments or msg.Commitments
   if type(commitments) == "table" and next(commitments) ~= nil then return nil end
+  FromProcess = fromProcess ~= nil
   return fromProcess
 end
 
@@ -167,7 +175,7 @@ end
 
 local function fail(base, message, to, extra)
   local outbox = {}
-  if to then
+  if to and FromProcess then
     local data = { error = message }
     for k, v in pairs(extra or {}) do data[k] = v end
     outbox["rng-error"] = { target = to, Action = "RNG-Error", Data = encode(data) }
@@ -265,7 +273,7 @@ H["Request-Random"] = function(base, msg, from)
   -- Bind to the next round, which nobody has signed yet.
   local r = tostring(int(Beacon.round, 0) + 1)
   local list = Beacon.pending[r] or {}
-  list[#list + 1] = { requester = from, requestId = requestId, tier = tier }
+  list[#list + 1] = { requester = from, requestId = requestId, tier = tier, process = FromProcess or nil }
   Beacon.pending[r] = list
   Beacon.pendingCount = int(Beacon.pendingCount, 0) + 1
   return reply(base, { requestId = requestId, round = int(r, 0), price = cost, balance = Beacon.balances[from] })
@@ -321,7 +329,7 @@ local function finalize(base, r, sig, signers, now)
     if not out then
       out = {}
       byRequester[p.requester] = out
-      order[#order + 1] = p.requester
+      if p.process then order[#order + 1] = p.requester end
     end
     out[#out + 1] = { requestId = p.requestId, round = r, value = rng.hex(rng.sha256(value .. "|" .. p.requestId)) }
     served = served + 1

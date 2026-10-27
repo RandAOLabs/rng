@@ -90,15 +90,23 @@ local function schedulerAddress(base)
   return nil
 end
 
+--- Replies (RNG-Result, RNG-Error) go only to processes. A wallet reads its
+--- result from the published state; a message to a wallet makes the node look
+--- the address up on Arweave on every push, which stalls delivery whenever the
+--- gateway is slow.
+local FromProcess = false
+
 local function actor(msg, base)
   local signed = provenSigner(msg)
   local fromProcess = msg["from-process"] or msg.FromProcess
+  FromProcess = false
   if signed then
-    if fromProcess and signed == schedulerAddress(base) then return fromProcess end
+    if fromProcess and signed == schedulerAddress(base) then FromProcess = true; return fromProcess end
     return signed
   end
   local c = msg.commitments or msg.Commitments
   if type(c) == "table" and next(c) ~= nil then return nil end
+  FromProcess = fromProcess ~= nil
   return fromProcess
 end
 
@@ -130,7 +138,7 @@ end
 
 local function fail(base, message, to, extra)
   local outbox = {}
-  if to then
+  if to and FromProcess then
     local data = { error = message }
     for k, v in pairs(extra or {}) do data[k] = v end
     outbox["rng-error"] = { target = to, Action = "RNG-Error", Data = encode(data) }
@@ -258,7 +266,7 @@ local function finalize(base, o, now)
   local contributors = #addrs
   for _, p in ipairs(Timelock.pending[key] or {}) do
     local out = byRequester[p.requester]
-    if not out then out = {}; byRequester[p.requester] = out; order[#order + 1] = p.requester end
+    if not out then out = {}; byRequester[p.requester] = out; if p.process then order[#order + 1] = p.requester end end
     out[#out + 1] = { requestId = p.requestId, round = r, value = rng.hex(rng.sha256(value .. "|" .. p.requestId)) }
     served = served + 1
     -- Charged for every active validator at request time; only those whose
@@ -371,7 +379,7 @@ H["Request-Random"] = function(base, msg, from, now)
   Timelock.balances[from] = bal - cost
   Timelock.seen[key] = r
   local list = Timelock.pending[tostring(r)] or {}
-  list[#list + 1] = { requester = from, requestId = requestId, charged = cost }
+  list[#list + 1] = { requester = from, requestId = requestId, charged = cost, process = FromProcess or nil }
   Timelock.pending[tostring(r)] = list
   return reply(base, { requestId = requestId, round = r, price = cost, balance = Timelock.balances[from] })
 end

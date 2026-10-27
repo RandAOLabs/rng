@@ -61,8 +61,8 @@ function runBeaconTests()
   eq("wallet forging from-process credits nothing", Beacon.balances[F.stranger], nil)
 
   -- Requests.
-  _, ob = send(wallet(F.stranger, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = "x1" }))
-  check("unfunded request answered with RNG-Error", ob["rng-error"] and ob["rng-error"].target == F.stranger)
+  r, ob = send(wallet(F.stranger, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = "x1" }))
+  check("unfunded wallet refused, no message to a wallet", r.error == "Insufficient-Balance" and next(ob) == nil)
   send(delivery(F.game, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = F.req1 }))
   send(delivery(F.game, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = F.req2 }))
   _, ob = send(delivery(F.game, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = F.req2 }))
