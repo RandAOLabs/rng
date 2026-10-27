@@ -273,3 +273,9 @@ pre code { font-size: inherit; }
   .scene figcaption { white-space: normal; }
   .hero-stage .scene-top { display: none; }
 }
+
+/* Round lists: the last 100 seen, three rows tall, scroll for more */
+.rounds-scroll { max-height: calc(3 * 49px + 42px); overflow-y: auto; margin: 16px 0; border-bottom: 1px solid var(--rule); }
+.rounds-scroll table { margin: 0; }
+.rounds-scroll thead th { position: sticky; top: 0; background: var(--paper); z-index: 1; }
+.rounds-scroll:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }

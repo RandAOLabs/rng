@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { EntropyPlate } from '../components/EntropyPlate';
 import { HeroScene } from '../components/HeroScene';
-import { recentRounds, short, useBeacon } from '../lib/beacon';
+import { recentRounds, short, useBeacon, useRoundHistory } from '../lib/beacon';
 import { roundValue, verifySignature } from '../lib/crypto';
 import { TimelockLive } from '../components/TimelockLive';
 
@@ -36,7 +36,8 @@ function RoundRow({ r, groupKey, self, members }: { r: { round: number; signatur
 
 export function BeaconPage() {
   const { info, state, error } = useBeacon();
-  const rounds = recentRounds(state);
+  const published = useMemo(() => recentRounds(state), [state]);
+  const rounds = useRoundHistory(published);
   const latest = rounds[0];
   const latestOk = useVerified(state?.groupKey, state?.self, latest?.round ?? 0, latest?.signature ?? '');
   const members = state?.committee ?? {};
@@ -60,10 +61,10 @@ export function BeaconPage() {
       </section>
 
       <dl className="facts facts-strip">
-        <div><dt>Quick round</dt><dd className="num">{latest ? latest.round : '–'}</dd></div>
+        <div><dt>Quick round</dt><dd className="num">{latest ? latest.round : 'â€“'}</dd></div>
         <div><dt>Signature</dt><dd>{latest ? <Check ok={latestOk} /> : 'No rounds yet'}</dd></div>
-        <div><dt>Waiting for the next round</dt><dd>{info ? `${info.pendingCount} ${info.pendingCount === 1 ? 'request' : 'requests'}` : '–'}</dd></div>
-        <div><dt>Price per request</dt><dd>{info ? `${info.price.beacon} RNG` : '–'}</dd></div>
+        <div><dt>Waiting for the next round</dt><dd>{info ? `${info.pendingCount} ${info.pendingCount === 1 ? 'request' : 'requests'}` : 'â€“'}</dd></div>
+        <div><dt>Price per request</dt><dd>{info ? `${info.price.beacon} RNG` : 'â€“'}</dd></div>
       </dl>
 
       {error && <p className="notice bad" role="status">Can't reach the beacon: {error} Retrying every few seconds.</p>}
@@ -78,12 +79,14 @@ export function BeaconPage() {
         {rounds.length === 0 ? (
           <p className="empty">No rounds yet. A round is signed only when someone is waiting for one. <Link to="/try">Request one</Link>.</p>
         ) : (
+          <div className="rounds-scroll" tabIndex={0} aria-label="Quick rounds, newest first">
           <table className="rounds">
             <thead><tr><th scope="col">Round</th><th scope="col">Signed by</th><th scope="col">Value</th><th scope="col">Check</th></tr></thead>
             <tbody>
-              {rounds.slice(0, 12).map((r) => <RoundRow key={r.round} r={r} groupKey={state?.groupKey} self={state?.self} members={members} />)}
+              {rounds.map((r) => <RoundRow key={r.round} r={r} groupKey={state?.groupKey} self={state?.self} members={members} />)}
             </tbody>
           </table>
+          </div>
         )}
       </section>
 

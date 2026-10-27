@@ -1,7 +1,7 @@
 // The time-lock tier, live: the open round's validators locking in and
 // revealing, and recent rounds with every answer re-checked in this page.
 import { useEffect, useMemo, useState } from 'react';
-import { readKey, short } from '../lib/beacon';
+import { readKey, short, useRoundHistory } from '../lib/beacon';
 import { TIMELOCK } from '../lib/config';
 import { roundValue, seedFor, verifyCrack, verifyReveal } from '../lib/timelock';
 
@@ -52,7 +52,8 @@ export function TimelockLive() {
     const t = setInterval(tick, 1000);
     return () => { live = false; clearInterval(t); };
   }, []);
-  const rounds = useMemo(() => Object.values(state?.rounds ?? {}).sort((a, b) => b.round - a.round), [state]);
+  const published = useMemo(() => Object.values(state?.rounds ?? {}), [state]);
+  const rounds = useRoundHistory(published);
   if (!TIMELOCK) return null;
 
   const o = info?.open;
@@ -81,10 +82,11 @@ export function TimelockLive() {
         </ul>
       </div>
       {rounds.length > 0 && (
+        <div className="rounds-scroll" tabIndex={0} aria-label="Time-lock rounds, newest first">
         <table className="rounds">
           <thead><tr><th scope="col">Round</th><th scope="col">Answers</th><th scope="col">Took</th><th scope="col">Value</th><th scope="col">Check</th></tr></thead>
           <tbody>
-            {rounds.slice(0, 6).map((r) => {
+            {rounds.map((r) => {
               const cracks = Object.values(r.outputs).filter((x) => x.via === 'crack').length;
               const ok = state ? checkRound(state, r) : null;
               return (
@@ -99,6 +101,7 @@ export function TimelockLive() {
             })}
           </tbody>
         </table>
+        </div>
       )}
     </section>
   );

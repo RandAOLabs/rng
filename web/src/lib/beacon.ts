@@ -56,3 +56,17 @@ export function recentRounds(state: BeaconState | null): Array<Round & { round: 
 }
 
 export const short = (s: string, n = 6) => (s.length > n * 2 + 1 ? `${s.slice(0, n)}…${s.slice(-n)}` : s);
+
+/** Rounds seen since the page opened, newest first, up to `keep`: the beacon only publishes its last few. */
+export function useRoundHistory<T extends { round: number }>(latest: T[], keep = 100): T[] {
+  const [all, setAll] = useState<T[]>([]);
+  useEffect(() => {
+    if (!latest.length) return;
+    setAll((prev) => {
+      const byRound = new Map(prev.map((r) => [r.round, r]));
+      for (const r of latest) byRound.set(r.round, r);
+      return [...byRound.values()].sort((a, b) => b.round - a.round).slice(0, keep);
+    });
+  }, [latest, keep]);
+  return all;
+}
