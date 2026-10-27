@@ -36,9 +36,11 @@ export function HeroScene({ fullscreen = false, fallback }: { fullscreen?: boole
       canvas.current!.dataset.backend = scene.backend;
 
       if (demo) {
-        let n = 4100;
-        scene.push(demoRound(n++, Number(params.get('crack') ?? 2)));
-        poll = setInterval(() => scene.push(demoRound(n++, Number(params.get('crack') ?? 2))), 1000);
+        // Stand-in rounds in order; with crack=3 every third has a silent validator.
+        const every = Number(params.get('crack') ?? 0);
+        let n = 4101;
+        scene.push(demoRound(n++, every));
+        poll = setInterval(() => { if (scene.idle) scene.push(demoRound(n++, every)); }, 200);
       } else {
         let order: string[] = [];
         const tick = async () => {
@@ -79,7 +81,7 @@ export function HeroScene({ fullscreen = false, fallback }: { fullscreen?: boole
       {status && status.bars.length > 0 && (
         <div className="scene-top" aria-hidden="true">
           <p className="scene-speed"><i className="scene-rec" />{status.speed}</p>
-          <pre className="scene-bars">{status.bars.map((b) => `${b.name.padEnd(14)}${bar(b.progress)}  ${duration(b.realMs)}`).join('\n')}</pre>
+          <pre className="scene-bars">{status.bars.map((b) => `${b.name.padEnd(14)}${bar(b.progress)}  ${duration(b.realMs)}${b.rare ? ', rare' : ''}`).join('\n')}</pre>
         </div>
       )}
       <figcaption aria-live="polite">

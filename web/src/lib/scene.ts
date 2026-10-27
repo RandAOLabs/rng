@@ -9,7 +9,7 @@ import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 
 /** A finalized round, with how long each phase really took on the network. */
 export type SceneRound = { round: number; value: string; cracked: number[]; ms: { commit: number; reveal: number; crack?: number } };
-export type Bar = { name: string; realMs: number | null; progress: number };
+export type Bar = { name: string; realMs: number | null; progress: number; rare?: boolean };
 /** What the overlay shows: the phase bars, the log line, and how much playback is slowed. */
 export type Status = { round: number; label: string; bars: Bar[]; speed: string };
 
@@ -194,6 +194,9 @@ export class RoundScene {
     this.camera.updateProjectionMatrix();
   }
 
+  /** True when nothing is queued behind the round now playing. */
+  get idle() { return this.next === null; }
+
   /** Queue a finalized round; it plays when the current one has been shown. */
   push(r: SceneRound) {
     if (this.current?.r.round === r.round || this.next?.round === r.round) return;
@@ -246,11 +249,11 @@ export class RoundScene {
     const cracked = r.cracked.length > 0;
     const spans: [string, number, number, number | null][] = [
       ['commit', 0, T.commitEnd + 0.3, r.ms.commit],
-      [cracked ? 'reveal window' : 'reveal', T.commitEnd + 0.3, T.revealEnd + 0.2, r.ms.reveal],
+      ['reveal', T.commitEnd + 0.3, T.revealEnd + 0.2, r.ms.reveal],
       ...(cracked ? [['crack', T.revealEnd + 0.2, T.crackEnd, r.ms.crack ?? null] as [string, number, number, number | null]] : []),
       ['combine', cracked ? T.crackEnd : T.revealEnd + 0.2, combine + 0.2, null],
     ];
-    const bars = spans.map(([name, a, b, realMs]) => ({ name, realMs, progress: clamp01((t - a) / (b - a)) }));
+    const bars = spans.map(([name, a, b, realMs]) => ({ name, realMs, progress: clamp01((t - a) / (b - a)), rare: name === 'crack' }));
     const active = spans.find(([, a, b]) => t >= a && t < b);
     let speed = 'replay finished';
     if (active) {
@@ -397,8 +400,10 @@ export function demoRound(n: number, crackEvery = 2): SceneRound {
     h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909);
     value += ((h >>> 0) & 255).toString(16).padStart(2, '0');
   }
-  const cracked = crackEvery > 0 && n % crackEvery === 0;
-  // Typical soak timings; a crack is the 10 s reveal window plus a native solve of ~2.5 min (SPEC.md §2.1).
-  const ms = { commit: 120 + (h >>> 0) % 180, reveal: cracked ? 10_000 : 560 + ((h >>> 8) >>> 0) % 160, crack: cracked ? 150_000 : undefined };
+  const cracked = crackEvery > 0 && n % crackEvery === crackEvery - 1;
+  // Around the soak's medians (commit 90 ms, reveal 580 ms). A crack, which the
+  // soak has not needed yet, is the 10 s reveal window plus a native solve of
+  // ~2.5 min (SPEC.md §2.1).
+  const ms = { commit: 70 + (h >>> 0) % 40, reveal: 540 + ((h >>> 8) >>> 0) % 80, crack: cracked ? 160_000 : undefined };
   return { round: n, value, cracked: cracked ? [2] : [], ms };
 }
