@@ -59,7 +59,7 @@ export function TryPage() {
 
   async function refreshTokens(addr = address) {
     if (!addr) return;
-    try { setTokens(Number(await readKey<string>(`balance-${addr}`, TOKEN)) / UNIT); }
+    try { setTokens(Number((await readKey<Record<string, string>>('balances', TOKEN))[addr] ?? 0) / UNIT); }
     catch { setTokens(0); }
   }
   useEffect(() => { refreshTokens(); }, [address]);

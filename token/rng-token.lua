@@ -555,17 +555,10 @@ function compute(base, req, opts)
       checkpointRevision = int(TokenCheckpointRevision, 0),
     })
   end
-  -- Every balance this message moved, on both devices. The 5.3a branch used to
-  -- publish only the signer, so a transfer's RECIPIENT kept a stale key forever.
-  for address in pairs(ChangedBalances) do
-    if isAoAddress(address) then result["balance-" .. address] = asString(balanceOf(address)) end
-  end
-  if not Lua53bPatchMode then
-    local who = actor(msg, base) or msg.Recipient or msg.Account
-    if isAoAddress(who) then
-      result["balance-" .. who] = asString(balanceOf(who))
-    end
-  end
+  -- No `balance-<address>` key per holder: on lua@5.3a the node's store time
+  -- grows with every slot once a process carries hundreds of published keys
+  -- (66 s per slot after ~2,000 slots with 250 holders, against 1 ms without
+  -- them). Clients read their balance from the `balances` map instead.
   -- Compact the heap before the node photographs it. See the long note at the
   -- end of `compute` in game.lua: HyperBEAM snapshots this process by
   -- term_to_binary-ing the WHOLE Luerl table store, Luerl never collects on its
