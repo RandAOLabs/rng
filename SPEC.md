@@ -34,6 +34,9 @@ request, plus 1 RNG to the protocol. `quick` is the existing beacon process;
 | `revealWindowMs` | time from commit close until reveals are due | 10000 |
 | `minCommits` | committed validators needed for a round to count | 2 |
 | `cadenceMs` | minimum time between rounds | 5000 |
+| `suspendAfter` | strikes within 100 rounds that suspend a validator | 3 |
+| `slash` | RNG taken from the bond on each suspension | 1000 |
+| `rejoinAfter` | rounds after a suspension before `Rejoin` is accepted | 10 |
 
 Security condition: a puzzle must take longer to solve than the commit
 window, even on an attacker's fastest hardware. With `T` = 2^27 and an
@@ -44,14 +47,23 @@ need ~2-3 min; this is only paid when a validator withholds.
 ### 2.2 Validators
 
 Validators are a set kept by the beacon: `Admin.Add-Validator`,
-`Admin.Remove-Validator` (owner only), effective from the next round. There
-is no staking. Each validator holds an Arweave wallet (signs its posts) and
-generates its own puzzles; there is no shared key and no key ceremony.
+`Admin.Remove-Validator` (owner only), effective from the next round. Each
+validator holds an Arweave wallet (signs its posts) and generates its own
+puzzles; there is no shared key and no key ceremony.
+
+Bond: each validator has a bond of RNG held by the beacon, funded by a token
+transfer to the beacon tagged `X-Bond` and `X-For = <validator>` (25,000 RNG
+on the test network). A validator is active only while its bond covers one
+`slash` (default 1,000 RNG); one added without that starts suspended.
+Removing a validator returns what is left of its bond.
 
 Strikes: a missed commit or a withheld reveal (cracked by someone else) adds a
 strike. A validator with `suspendAfter` strikes (default 3) within the last
-100 rounds is suspended until the admin reinstates it. A suspended validator
-neither commits nor earns.
+100 rounds is suspended, and `slash` RNG moves from its bond to the protocol.
+A suspended validator neither commits nor earns. `rejoinAfter` rounds
+(default 10) after its suspension it may send `Rejoin`, which reactivates it
+and clears its strikes as long as its bond still covers another slash; a
+25,000 RNG bond allows 25 suspensions. The admin can also `Admin.Reinstate`.
 
 ### 2.3 Puzzle
 
@@ -136,10 +148,15 @@ reveals, for validators).
 | `Commit` | validator | `{ round, modulus }` |
 | `Reveal` | validator | `{ round, y, p }` |
 | `Crack` | validator | `{ round, validator, y, proof }` |
+| `Rejoin` | suspended validator | — (see 2.2) |
 | `Claim` | validator | — |
 | `Admin.Add-Validator` / `Admin.Remove-Validator` / `Admin.Reinstate` | owner | `{ address }` |
 | `Configure` | owner | parameters from 2.1, token, unit |
 | `Withdraw`, `Balance`, `Get-Info` | anyone | as the `quick` beacon |
+
+A `Request-Id` is refused as `Duplicate-Request` for 200 rounds after it is
+used, on both beacons; after that the beacon forgets it, and reusing it is a
+new paid request. The library never reuses an id.
 
 ## 3. Device `timelock@1.0`
 
@@ -167,5 +184,5 @@ with its own wallet; no shared secret with other validators.
 
 ## 5. Out of scope for this version
 
-Staking and slashing (strikes and suspension instead), drand or any outside
+Open staking (bonds are set up by the admin), drand or any outside
 randomness, time-lock encryption for user data (planned on the same puzzles).

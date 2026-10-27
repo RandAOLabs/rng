@@ -36,7 +36,9 @@ const CHAOS = process.env.CHAOS || 'ssh';
 const ws = loadWallets(N_WALLETS + 1);
 const pauper = ws.pop(); // never funded: its requests must be refused
 const contracts = readJson('contracts.json', []);
-const lastRequest = new Map(); // wallet -> last request id (for duplicates)
+const lastRequest = new Map(); // wallet -> { id, at } of its last request (for duplicates)
+// The beacon remembers request ids for 200 rounds (SPEC.md); resend only well inside that.
+const DUPLICATE_WITHIN_MS = 5 * 60_000;
 let seq = Date.now();
 const rid = (who) => `soak-${who.slice(0, 6)}-${(seq++).toString(36)}`;
 
@@ -105,15 +107,16 @@ async function act() {
   }
   if (r < 0.68 || (r < 0.80 && !TIMELOCK)) {
     const id = rid(w.address);
-    lastRequest.set(w.address, id);
+    lastRequest.set(w.address, { id, at: Date.now() });
     return record('direct', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
   }
   if (r < 0.80) {
     const id = rid(w.address);
     return record('direct-timelock', { from: w.address, requestId: id }, () => send(w.jwk, TIMELOCK, 'Request-Random', { Tier: 'timelock', 'Request-Id': id }));
   }
-  if (r < 0.85 && lastRequest.has(w.address)) {
-    const id = lastRequest.get(w.address);
+  const last = lastRequest.get(w.address);
+  if (r < 0.85 && last && Date.now() - last.at < DUPLICATE_WITHIN_MS) {
+    const id = last.id;
     return record('duplicate', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
   }
   if (r < 0.90) {

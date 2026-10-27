@@ -10,6 +10,7 @@
 //   node deploy/deploy.mjs spawn-timelock             spawn the time-lock beacon (uses the token)
 //   node deploy/deploy.mjs configure-timelock <params.json>  token, unit and SPEC 2.1 parameters
 //   node deploy/deploy.mjs add-validator <address> | remove-validator <address>
+//   node deploy/deploy.mjs bond <address> [rng]        mint and bond a validator (default 25,000)
 //
 // Env: HB_NODE (default https://hb.randao.net), HB_WALLET (path to the
 // owner/deployer wallet JWK), DEPLOY_STATE (default deploy/testnet.json).
@@ -143,4 +144,13 @@ if (cmd === 'add-validator' || cmd === 'remove-validator') {
   console.log((await send(state.timelock, action, { data: JSON.stringify({ address: args[0] }) })).output);
   const r = await readState({ node: NODE, process: state.timelock, path: 'now/beaconinfo' });
   console.log('validators:', JSON.parse(r.value).validators.map((v) => v.address).join(', '));
+}
+
+if (cmd === 'bond') {
+  // Mint TEST-RNG to the owner and bond it for a time-lock validator.
+  const rng = Number(args[1] || 25000);
+  console.log('mint', (await send(state.token, 'Admin.Mint', { tags: { Recipient: me, Quantity: String(rng * 1000000) } })).output);
+  console.log('bond', (await send(state.token, 'Transfer', {
+    tags: { Recipient: state.timelock, Quantity: String(rng * 1000000), 'X-For': args[0], 'X-Bond': 'true' },
+  })).output);
 }

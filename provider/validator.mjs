@@ -94,7 +94,7 @@ log(`validator ${me} watching ${cfg.beacon}`);
 
 // What we last sent per round. The beacon's published state is the truth;
 // this only stops resending more often than every 3 s while it catches up.
-const sent = { commit: { round: 0, at: 0 }, reveal: { round: 0, at: 0 } };
+const sent = { commit: { round: 0, at: 0 }, reveal: { round: 0, at: 0 }, rejoin: { round: 0, at: 0 } };
 const due = (kind, round, now) => sent[kind].round !== round || now - sent[kind].at > 3000;
 const mark = (kind, round, now) => { sent[kind] = { round, at: now }; };
 for (;;) {
@@ -106,6 +106,14 @@ for (;;) {
     refill(i.params.modulusBits);
     const committed = o.committed ?? {};
     const now = Date.now();
+
+    // Suspended: rejoin on our own once the cooldown is over, while the bond
+    // still covers the next slash (SPEC.md §2.2).
+    if (mine?.suspended && mine.bond >= i.params.slash && i.round >= mine.suspendedAt + i.params.rejoinAfter && due('rejoin', i.round, now)) {
+      log(`suspended at round ${mine.suspendedAt}; rejoining with bond ${mine.bond}`);
+      await post('Rejoin', {});
+      mark('rejoin', i.round, now);
+    }
 
     // Commit as soon as the round has work and the cadence allows.
     if (mine && !mine.suspended && (o.phase === 'collecting' || o.phase === 'commit') && o.pending > 0

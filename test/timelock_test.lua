@@ -49,7 +49,16 @@ function runTimelockTests()
   send(wallet(F.owner, { Action = "Configure", Data = F.config }))
   r = send(wallet(F.stranger, { Action = "Admin.Add-Validator", Data = encode({ address = A }) }))
   eq("add validator owner-only", r.error, "Not authorised")
-  for _, v in ipairs(F.v) do send(wallet(F.owner, { Action = "Admin.Add-Validator", Data = encode({ address = v }) })) end
+  -- Validators bond 25,000 RNG; an unbonded one is added suspended.
+  for i, v in ipairs(F.v) do
+    send(delivery(F.token, { Action = "Credit-Notice", Sender = F.owner, Quantity = tostring(25000 * U), ["X-For"] = v, ["X-Bond"] = "true", Reference = "bond" .. i }))
+    send(wallet(F.owner, { Action = "Admin.Add-Validator", Data = encode({ address = v }) }))
+  end
+  eq("bond credited", Timelock.bonds[A], 25000)
+  check("bond is not a request balance", Timelock.balances[A] == nil)
+  send(wallet(F.owner, { Action = "Admin.Add-Validator", Data = encode({ address = F.stranger }) }))
+  check("unbonded validator starts suspended", Timelock.validators[F.stranger].suspended == true)
+  send(wallet(F.owner, { Action = "Admin.Remove-Validator", Data = encode({ address = F.stranger }) }))
   eq("price is 3 validators + 1", info().price, 4)
   send(delivery(F.token, { Action = "Credit-Notice", Sender = F.game, Quantity = tostring(40 * U), Reference = "t1" }))
 
@@ -113,13 +122,16 @@ function runTimelockTests()
   eq("missed commit struck", #Timelock.validators[C].strikes, 2)
   eq("unserved validator's share refunded", Timelock.balances[F.game], 32 - 4 + 1)
 
-  -- Round 4: another miss suspends c; price drops to 3.
+  -- Round 4: another miss suspends c and slashes 1,000 from its bond; price drops to 3.
+  local protocolBefore = Timelock.protocolAccrued
   request("req-4")
   commit(A, 4, "r4v0"); commit(B, 4, "r4v1")
   send(wallet(A, { Action = "Get-Info" }), 3000)
   reveal(A, 4, "r4v0"); reveal(B, 4, "r4v1")
   eq("round 4 finalized", info().round, 4)
   check("c suspended after 3 strikes", Timelock.validators[C].suspended == true)
+  eq("suspension slashes the bond", Timelock.bonds[C], 24000)
+  eq("slash goes to the protocol", Timelock.protocolAccrued - protocolBefore, 1000 + 1)
   eq("price without c", info().price, 3)
   r = send(wallet(C, { Action = "Commit", Data = encode({ round = 5, modulus = P.r5v0.N }) }))
   eq("suspended validator cannot commit", r.error, "Not an active validator")
@@ -133,9 +145,22 @@ function runTimelockTests()
   eq("void round keeps its number", info().open.round, 5)
   eq("request still pending", info().open.pending, 1)
 
-  send(wallet(F.owner, { Action = "Admin.Reinstate", Data = encode({ address = C }) }))
-  check("reinstated", Timelock.validators[C].suspended == false)
+  r = send(wallet(C, { Action = "Rejoin" }))
+  eq("rejoin waits rejoinAfter rounds", r.error, "Too-Soon")
+  send(wallet(F.owner, { Action = "Configure", Data = encode({ rejoinAfter = 0 }) }))
+  Timelock.bonds[C] = 999
+  r = send(wallet(C, { Action = "Rejoin" }))
+  eq("rejoin needs a bond covering the next slash", r.error, "Bond-Too-Low")
+  Timelock.bonds[C] = 24000
+  r = send(wallet(A, { Action = "Rejoin" }))
+  eq("only a suspended validator rejoins", r.error, "Not suspended")
+  send(wallet(C, { Action = "Rejoin" }))
+  check("c rejoined", Timelock.validators[C].suspended == false)
+  eq("rejoin clears strikes", #Timelock.validators[C].strikes, 0)
   eq("price back to 4", info().price, 4)
+  Timelock.validators[C].suspended = true
+  send(wallet(F.owner, { Action = "Admin.Reinstate", Data = encode({ address = C }) }))
+  check("admin can still reinstate", Timelock.validators[C].suspended == false)
 
   -- A VM that lost its globals comes back from the published state.
   Timelock = { rev = 0 }
@@ -149,6 +174,8 @@ function runTimelockTests()
   r, ob = send(wallet(A, { Action = "Claim" }))
   check("claim pays out through the token", ob["rng-claim"] and ob["rng-claim"].Quantity == string.format("%d", owed * U), owed)
   eq("accrued reset", Timelock.accrued[A], 0)
+  r, ob = send(wallet(F.owner, { Action = "Admin.Remove-Validator", Data = encode({ address = B }) }))
+  check("removal refunds the bond", ob["rng-bond-refund"] and ob["rng-bond-refund"].Recipient == B and ob["rng-bond-refund"].Quantity == string.format("%d", 25000 * U))
 
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
   return table.concat(lines, "\n")

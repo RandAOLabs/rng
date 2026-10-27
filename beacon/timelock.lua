@@ -22,8 +22,10 @@ local function freshState()
     params = {
       T = 134217728, modulusBits = 2048, commitWindowMs = 3000, revealWindowMs = 10000,
       minCommits = 2, cadenceMs = 5000, suspendAfter = 3,
+      slash = 1000, rejoinAfter = 10,
     },
-    validators = {},       -- address -> { strikes = { round, ... }, suspended = bool }
+    validators = {},       -- address -> { strikes = { round, ... }, suspended = bool, suspendedAt = round }
+    bonds = {},            -- address -> RNG bonded; each suspension takes `slash` of it
     round = 0,             -- last finalized round
     lastRoundAt = 0,
     open = nil,            -- the round being built (see openRound)
@@ -179,7 +181,13 @@ local function strike(addr, r)
   local recent = {}
   for _, s in ipairs(v.strikes) do if int(s, 0) > r - STRIKE_WINDOW then recent[#recent + 1] = s end end
   v.strikes = recent
-  if #recent >= int(Timelock.params.suspendAfter, 3) then v.suspended = true end
+  if #recent >= int(Timelock.params.suspendAfter, 3) and not v.suspended then
+    -- Suspension costs `slash` from the bond, paid to the protocol.
+    local cut = math.min(int(Timelock.params.slash, 1000), int(Timelock.bonds[addr], 0))
+    Timelock.bonds[addr] = int(Timelock.bonds[addr], 0) - cut
+    Timelock.protocolAccrued = int(Timelock.protocolAccrued, 0) + cut
+    v.suspended, v.suspendedAt = true, r
+  end
 end
 
 local function openRound(r)
@@ -286,6 +294,11 @@ H["Credit-Notice"] = function(base, msg, from)
   local who = msg["X-For"] or msg.Sender
   if amount <= 0 or not isAoAddress(who) then return fail(base, "Nothing to credit") end
   if msg.Reference then Timelock.credited[key] = Timelock.round end
+  if msg["X-Bond"] then
+    Timelock.bonds = Timelock.bonds or {}
+    add(Timelock.bonds, who, amount)
+    return reply(base, { bonded = amount, account = who, bond = Timelock.bonds[who] })
+  end
   add(Timelock.balances, who, amount)
   return reply(base, { credited = amount, account = who, balance = Timelock.balances[who] }, {
     ["rng-funded"] = { target = who, Action = "RNG-Funded", Data = encode({ amount = amount, balance = Timelock.balances[who] }) },
@@ -407,18 +420,40 @@ end
 
 local function ownerOnly(msg) return provenSigner(msg) == Owner end
 
+--- A validator is active only while its bond covers the next slash.
+local function bonded(a) return int(Timelock.bonds and Timelock.bonds[a], 0) >= int(Timelock.params.slash, 1000) end
+
 H["Admin.Add-Validator"] = function(base, msg)
   if not ownerOnly(msg) then return fail(base, "Not authorised") end
   local a = dataOf(msg).address or msg.Address
   if not isAoAddress(a) then return fail(base, "Bad address") end
-  Timelock.validators[a] = Timelock.validators[a] or { strikes = {}, suspended = false }
+  -- Unbonded validators start suspended and join with Rejoin once bonded.
+  Timelock.validators[a] = Timelock.validators[a] or { strikes = {}, suspended = not bonded(a), suspendedAt = 0 }
   return reply(base, { validators = activeValidators() })
 end
 
 H["Admin.Remove-Validator"] = function(base, msg)
   if not ownerOnly(msg) then return fail(base, "Not authorised") end
-  Timelock.validators[dataOf(msg).address or msg.Address or ""] = nil
-  return reply(base, { validators = activeValidators() })
+  local a = dataOf(msg).address or msg.Address or ""
+  Timelock.validators[a] = nil
+  local bond = int(Timelock.bonds and Timelock.bonds[a], 0)
+  if bond <= 0 then return reply(base, { validators = activeValidators() }) end
+  Timelock.bonds[a] = nil
+  return reply(base, { validators = activeValidators(), refunded = bond }, { ["rng-bond-refund"] = {
+    target = Timelock.token, Action = "Transfer", Recipient = a,
+    Quantity = string.format("%d", bond * int(Timelock.unit, 1)), ["X-Note"] = "RNG validator bond" } })
+end
+
+--- A suspended validator brings itself back, `rejoinAfter` rounds after its
+--- suspension, while its bond still covers another slash.
+H["Rejoin"] = function(base, msg, from)
+  local v = from and Timelock.validators[from]
+  if not v then return fail(base, "Not a validator") end
+  if not v.suspended then return fail(base, "Not suspended") end
+  if not bonded(from) then return fail(base, "Bond-Too-Low") end
+  if Timelock.round < int(v.suspendedAt, 0) + int(Timelock.params.rejoinAfter, 10) then return fail(base, "Too-Soon") end
+  v.suspended, v.strikes = false, {}
+  return reply(base, { validators = activeValidators(), bond = int(Timelock.bonds[from], 0) })
 end
 
 H["Admin.Reinstate"] = function(base, msg)
@@ -492,7 +527,8 @@ end
 local function info()
   local vs = {}
   for addr, v in pairs(Timelock.validators) do
-    vs[#vs + 1] = { address = addr, suspended = v.suspended == true, strikes = #(v.strikes or {}) }
+    vs[#vs + 1] = { address = addr, suspended = v.suspended == true, strikes = #(v.strikes or {}),
+                    bond = int(Timelock.bonds and Timelock.bonds[addr], 0), suspendedAt = int(v.suspendedAt, 0) }
   end
   table.sort(vs, function(a, b) return a.address < b.address end)
   local o = Timelock.open or {}
