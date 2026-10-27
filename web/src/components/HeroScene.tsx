@@ -4,16 +4,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { readKey } from '../lib/beacon';
 import { TIMELOCK } from '../lib/config';
-import { demoRound, RoundScene, type Phase } from '../lib/scene';
+import { demoRound, RoundScene, type Status } from '../lib/scene';
 
-type Info = { validators: { address: string }[] };
-type State = { rounds: Record<string, { value: string; outputs: Record<string, { via: string }> }> };
+type Info = { validators: { address: string }[]; params: { revealWindowMs?: number } };
+type State = { rounds: Record<string, { value: string; opened: number; commitClose: number; finalizedAt: number; outputs: Record<string, { via: string }> }> };
 
 const params = new URLSearchParams(window.location.hash.split('?')[1] ?? window.location.search);
 
+const CELLS = 20;
+const bar = (p: number) => '█'.repeat(Math.round(p * CELLS)).padEnd(CELLS, '░');
+const duration = (ms: number | null) => ms === null ? 'instant' : ms < 1000 ? `${ms} ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `~${(ms / 60_000).toFixed(1)} min`;
+
 export function HeroScene({ fullscreen = false, fallback }: { fullscreen?: boolean; fallback?: React.ReactNode }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [phase, setPhase] = useState<Phase | null>(null);
+  const [status, setStatus] = useState<Status | null>(null);
   const [failed, setFailed] = useState(false);
   const demo = params.has('demo') || !TIMELOCK;
 
@@ -24,7 +28,7 @@ export function HeroScene({ fullscreen = false, fallback }: { fullscreen?: boole
     const record = params.has('record');
     let live = true;
     let poll: ReturnType<typeof setInterval> | undefined;
-    scene.onPhase = (p) => live && setPhase(p);
+    scene.onFrame = (s) => live && setStatus(s);
 
     (async () => {
       try { await scene.init(); } catch { if (live) setFailed(true); return; }
@@ -45,7 +49,10 @@ export function HeroScene({ fullscreen = false, fallback }: { fullscreen?: boole
             if (latest === undefined) return;
             const r = s.rounds[String(latest)];
             const cracked = Object.entries(r.outputs).filter(([, o]) => o.via === 'crack').map(([a]) => order.indexOf(a)).filter((x) => x >= 0);
-            scene.push({ round: latest, value: r.value, cracked });
+            const commit = r.commitClose - r.opened, after = r.finalizedAt - r.commitClose;
+            const windowMs = i.params?.revealWindowMs ?? 10_000;
+            const ms = cracked.length ? { commit, reveal: windowMs, crack: after - windowMs } : { commit, reveal: after };
+            scene.push({ round: latest, value: r.value, cracked, ms });
           } catch { /* keep playing the last round */ }
         };
         await tick();
@@ -69,9 +76,15 @@ export function HeroScene({ fullscreen = false, fallback }: { fullscreen?: boole
   return (
     <figure className={fullscreen ? 'scene scene-full' : 'scene'}>
       <canvas ref={canvas} aria-hidden="true" />
+      {status && status.bars.length > 0 && (
+        <div className="scene-top" aria-hidden="true">
+          <p className="scene-speed"><i className="scene-rec" />{status.speed}</p>
+          <pre className="scene-bars">{status.bars.map((b) => `${b.name.padEnd(14)}${bar(b.progress)}  ${duration(b.realMs)}`).join('\n')}</pre>
+        </div>
+      )}
       <figcaption aria-live="polite">
-        <span className="scene-round">$ rng watch --tier timelock{phase?.round ? ` --round ${phase.round}` : ''}{demo && !fullscreen ? ' --demo' : ''}</span>
-        <span className="scene-phase">{'> '}{phase?.label ?? 'starting'}<i className="scene-cursor" aria-hidden="true" /></span>
+        <span className="scene-round">$ rng watch --tier timelock{status?.round ? ` --round ${status.round}` : ''}{demo && !fullscreen ? ' --demo' : ''}</span>
+        <span className="scene-phase">{'> '}{status?.label ?? 'starting'}<i className="scene-cursor" aria-hidden="true" /></span>
       </figcaption>
     </figure>
   );

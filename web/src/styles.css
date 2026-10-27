@@ -251,7 +251,15 @@ pre code { font-size: inherit; }
 .scene-cursor { display: inline-block; width: 0.6em; height: 1.05em; margin-left: 2px; vertical-align: text-bottom; background: #fff; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .scene-cursor { animation: none; } }
+.scene-top { position: absolute; top: 20px; right: 24px; font-family: var(--data); color: #fff; pointer-events: none; }
+.scene-speed { margin: 0 0 8px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.scene-rec { width: 9px; height: 9px; border-radius: 50%; background: #fff; animation: blink 1s steps(1) infinite; }
+.scene-bars { margin: 0; padding: 0; background: none; border: 0; overflow: visible; font: 12px/1.6 var(--data); color: #d0d0d0; }
+@media (prefers-reduced-motion: reduce) { .scene-rec { animation: none; } }
 .scene-full { position: fixed; inset: 0; background: #000; }
+.scene-full .scene-top { left: 6vw; right: auto; top: 7vh; }
+.scene-full .scene-speed { font-size: 2.4vh; }
+.scene-full .scene-bars { font-size: 2.1vh; }
 .scene-full figcaption { left: 6vw; right: auto; bottom: 7vh; text-align: left; }
 .scene-full .scene-round { font-size: 2vh; }
 .scene-full .scene-phase { font-size: 3.4vh; }
@@ -263,4 +271,5 @@ pre code { font-size: inherit; }
   .hero-stage .plate { position: static; width: auto; margin: 0 20px 20px; }
   .facts-strip { grid-template-columns: 1fr 1fr; }
   .scene figcaption { white-space: normal; }
+  .hero-stage .scene-top { display: none; }
 }

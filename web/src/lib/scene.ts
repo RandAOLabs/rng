@@ -7,8 +7,11 @@ import * as THREE from 'three/webgpu';
 import { pass } from 'three/tsl';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 
-export type SceneRound = { round: number; value: string; cracked: number[] };
-export type Phase = { round: number; label: string };
+/** A finalized round, with how long each phase really took on the network. */
+export type SceneRound = { round: number; value: string; cracked: number[]; ms: { commit: number; reveal: number; crack?: number } };
+export type Bar = { name: string; realMs: number | null; progress: number };
+/** What the overlay shows: the phase bars, the log line, and how much playback is slowed. */
+export type Status = { round: number; label: string; bars: Bar[]; speed: string };
 
 // Black and white: locked is dim, revealed is bright, cracked flickers.
 const LOCKED = new THREE.Color('#8a8a8a');
@@ -109,11 +112,10 @@ export class RoundScene {
   private current: { r: SceneRound; start: number; bytes: number[] } | null = null;
   private previousBytes: number[] = new Array(BYTES).fill(0);
   private next: SceneRound | null = null;
-  private lastLabel = '';
   private running = false;
   private ro?: ResizeObserver;
 
-  onPhase?: (p: Phase) => void;
+  onFrame?: (s: Status) => void;
   backend = '';
 
   constructor(private canvas: HTMLCanvasElement) {}
@@ -238,12 +240,30 @@ export class RoundScene {
     this.renderer?.dispose();
   }
 
-  private label(text: string) {
-    const r = this.current?.r.round ?? 0;
-    const key = `${r}|${text}`;
-    if (key === this.lastLabel) return;
-    this.lastLabel = key;
-    this.onPhase?.({ round: r, label: text });
+  /** Phase bars over the animation: each spans [from, to] scene seconds and carries its real duration. */
+  private status(t: number, r: SceneRound | undefined, combine: number): Status {
+    if (!r) return { round: 0, label: 'waiting for a round', bars: [], speed: '' };
+    const cracked = r.cracked.length > 0;
+    const spans: [string, number, number, number | null][] = [
+      ['commit', 0, T.commitEnd + 0.3, r.ms.commit],
+      [cracked ? 'reveal window' : 'reveal', T.commitEnd + 0.3, T.revealEnd + 0.2, r.ms.reveal],
+      ...(cracked ? [['crack', T.revealEnd + 0.2, T.crackEnd, r.ms.crack ?? null] as [string, number, number, number | null]] : []),
+      ['combine', cracked ? T.crackEnd : T.revealEnd + 0.2, combine + 0.2, null],
+    ];
+    const bars = spans.map(([name, a, b, realMs]) => ({ name, realMs, progress: clamp01((t - a) / (b - a)) }));
+    const active = spans.find(([, a, b]) => t >= a && t < b);
+    let speed = 'replay finished';
+    if (active) {
+      const [, a, b, realMs] = active;
+      const f = realMs ? ((b - a) * 1000) / realMs : null;
+      speed = f === null ? 'computed inside the last message' : f >= 1.15 ? `${f.toFixed(f < 10 ? 1 : 0)}× slower than real time` : f <= 0.87 ? `${(1 / f).toFixed(0)}× faster than real time` : 'real time';
+    }
+    let label = `value    ${r.value.slice(0, 24)}…`;
+    if (t < T.commitEnd + 0.3) label = 'commit   validators lock their puzzles';
+    else if (t < T.revealEnd + 0.2) label = cracked ? 'reveal   2 open, 1 silent' : 'reveal   every puzzle opened';
+    else if (cracked && t < T.crackEnd) label = 'crack    solving the silent puzzle by repeated squaring';
+    else if (t < combine + 0.2) label = 'combine  sha256(every answer)';
+    return { round: r.round, label, bars, speed };
   }
 
   private update() {
@@ -258,12 +278,7 @@ export class RoundScene {
     const cracked = new Set(cur?.r.cracked ?? []);
     const combine = cur ? (cracked.size ? T.crackEnd : T.revealEnd) + T.flow : 0;
 
-    if (!cur) this.label('waiting for a round');
-    else if (t < T.commitEnd + 0.3) this.label('commit   validators lock their puzzles');
-    else if (t < T.revealEnd + 0.2) this.label(cracked.size ? 'reveal   2 open, 1 silent' : 'reveal   every puzzle opened');
-    else if (cracked.size && t < T.crackEnd) this.label('crack    solving the silent puzzle by repeated squaring');
-    else if (t < combine + 0.2) this.label('combine  sha256(every answer)');
-    else this.label(`value    ${cur.r.value.slice(0, 24)}…`);
+    this.onFrame?.(this.status(t, cur?.r, combine));
 
     for (const val of this.validators) this.updateValidator(val, t, cracked.has(val.index), combine);
     this.updateCore(t, combine);
@@ -382,5 +397,8 @@ export function demoRound(n: number, crackEvery = 2): SceneRound {
     h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909);
     value += ((h >>> 0) & 255).toString(16).padStart(2, '0');
   }
-  return { round: n, value, cracked: crackEvery && n % crackEvery === 0 ? [2] : [] };
+  const cracked = crackEvery > 0 && n % crackEvery === 0;
+  // Typical soak timings; a crack is the 10 s reveal window plus a native solve of ~2.5 min (SPEC.md §2.1).
+  const ms = { commit: 120 + (h >>> 0) % 180, reveal: cracked ? 10_000 : 560 + ((h >>> 8) >>> 0) % 160, crack: cracked ? 150_000 : undefined };
+  return { round: n, value, cracked: cracked ? [2] : [], ms };
 }
