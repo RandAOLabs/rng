@@ -5,8 +5,11 @@ import { DocsPage } from './pages/Docs';
 import { CommitteePage } from './pages/Committee';
 import { TiersPage } from './pages/Tiers';
 import { REPO } from './lib/config';
+import { HeroScene } from './components/HeroScene';
 
 export function App() {
+  // Full-screen scene for recording the article video.
+  if (window.location.hash.startsWith('#/scene')) return <HeroScene fullscreen />;
   return (
     <HashRouter>
       <header className="top">

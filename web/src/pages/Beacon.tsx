@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { EntropyPlate } from '../components/EntropyPlate';
+import { HeroScene } from '../components/HeroScene';
 import { recentRounds, short, useBeacon } from '../lib/beacon';
 import { roundValue, verifySignature } from '../lib/crypto';
 import { TimelockLive } from '../components/TimelockLive';
@@ -42,7 +43,8 @@ export function BeaconPage() {
 
   return (
     <>
-      <section className="hero">
+      <section className="hero hero-stage">
+        <HeroScene fallback={<EntropyPlate signature={latest?.signature ?? null} round={latest?.round ?? null} />} />
         <div className="hero-text">
           <h1>Randomness your AO process can prove.</h1>
           <p className="lede">
@@ -55,16 +57,14 @@ export function BeaconPage() {
             <Link className="button quiet" to="/docs">Read the docs</Link>
           </p>
         </div>
-        <div className="hero-plate">
-          <EntropyPlate signature={latest?.signature ?? null} round={latest?.round ?? null} />
-          <dl className="facts">
-            <div><dt>Round</dt><dd className="num">{latest ? latest.round : 'â€“'}</dd></div>
-            <div><dt>Signature</dt><dd>{latest ? <Check ok={latestOk} /> : 'No rounds yet'}</dd></div>
-            <div><dt>Waiting for the next round</dt><dd>{info ? `${info.pendingCount} ${info.pendingCount === 1 ? 'request' : 'requests'}` : 'â€“'}</dd></div>
-            <div><dt>Price per request</dt><dd>{info ? `${info.price.beacon} RNG` : 'â€“'}</dd></div>
-          </dl>
-        </div>
       </section>
+
+      <dl className="facts facts-strip">
+        <div><dt>Quick round</dt><dd className="num">{latest ? latest.round : '–'}</dd></div>
+        <div><dt>Signature</dt><dd>{latest ? <Check ok={latestOk} /> : 'No rounds yet'}</dd></div>
+        <div><dt>Waiting for the next round</dt><dd>{info ? `${info.pendingCount} ${info.pendingCount === 1 ? 'request' : 'requests'}` : '–'}</dd></div>
+        <div><dt>Price per request</dt><dd>{info ? `${info.price.beacon} RNG` : '–'}</dd></div>
+      </dl>
 
       {error && <p className="notice bad" role="status">Can't reach the beacon: {error} Retrying every few seconds.</p>}
 
