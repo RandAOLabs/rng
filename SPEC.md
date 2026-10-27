@@ -104,8 +104,9 @@ minutes after the ones behind it). A round's first commit is accepted once
 `heartbeat` off, only while requests are waiting for it. With `heartbeat` on
 (the default) rounds run continuously, so a request waits for at most one
 cadence plus one round (~1-2 s) unless that round needs a crack. Requests
-bind to the open round only until its first commit; later requests bind to
-the next round. A value already published is never used for a later request.
+bind to the open round (the one taking commits). Nothing is revealed before a
+round's commits close, so its value is unknown to everyone, validators
+included, until after the last request it can take. A value already published is never used for a later request.
 
 1. **Commit.** Each active validator posts `Commit { round, modulus }` (hex
    `N`). The first commit sets `commitDeadline = t + commitWindowMs`. Commits

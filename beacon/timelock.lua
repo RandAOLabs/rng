@@ -374,8 +374,9 @@ H["Request-Random"] = function(base, msg, from, now)
   if bal < cost then return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost }) end
   advance(now)
   local o = current()
-  -- Bind to a round whose commits have not started.
-  local r = o.phase == "collecting" and o.round or o.round + 1
+  -- Bind to the round taking commits: no output is revealed before its
+  -- commits close, so nobody can know its value yet.
+  local r = o.round
   Timelock.balances[from] = bal - cost
   Timelock.seen[key] = r
   local list = Timelock.pending[tostring(r)] or {}
