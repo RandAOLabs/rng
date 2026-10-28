@@ -6,13 +6,14 @@
 //   node provider/daemon.mjs run  <config>   post partials and attest rounds through the beacon
 //
 // Config (JSON): { index, n, t, beacon, listen, dataDir, wallet, hbNode,
-//                  peers: [{ index, url, dkgPub }] }   (peers excludes self)
+//                  peers: [{ index, address, url, dkgPub }] }   (peers excludes self;
+//                  address and dkgPub as each peer's `init` printed them)
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import * as bls from './bls.mjs';
-import { makeAo } from './ao.mjs';
+import { makeAo, loadWallet } from './ao.mjs';
 import { jwkToAddress } from '../vendor/hbclient.mjs';
 
 const [cmd, configPath] = process.argv.slice(2);
@@ -46,6 +47,47 @@ function open(box, privateKey) {
   const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(box.iv, 'base64'));
   d.setAuthTag(Buffer.from(box.tag, 'base64'));
   return Buffer.concat([d.update(Buffer.from(box.ct, 'base64')), d.final()]).toString('utf8');
+}
+
+// --- deal signatures: each member signs what it publishes with its provider wallet
+
+// A DKG check that failed: abort the ceremony, never retry.
+class DkgError extends Error {}
+
+function signPayload(jwk, obj) {
+  const payload = JSON.stringify(obj);
+  const key = crypto.createPrivateKey({ key: jwk, format: 'jwk' });
+  const signature = crypto.sign('sha256', Buffer.from(payload), {
+    key, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: 32,
+  }).toString('base64');
+  return { payload, owner: jwk.n, signature };
+}
+
+/** The payload, if peer `p` (by its wallet address) signed it and it names p's index. */
+function openSigned(box, p) {
+  if (!p.address) throw new DkgError(`peer ${p.index} has no address in the config`);
+  if (typeof box?.owner !== 'string' || typeof box.payload !== 'string' || jwkToAddress({ n: box.owner }) !== p.address) {
+    throw new DkgError(`message for member ${p.index} is not from ${p.address}`);
+  }
+  const key = crypto.createPublicKey({ key: { kty: 'RSA', n: box.owner, e: 'AQAB' }, format: 'jwk' });
+  const ok = crypto.verify('sha256', Buffer.from(box.payload), {
+    key, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: 32,
+  }, Buffer.from(box.signature, 'base64'));
+  if (!ok) throw new DkgError(`bad signature on member ${p.index}'s message`);
+  const obj = JSON.parse(box.payload);
+  if (obj.index !== p.index) throw new DkgError(`member ${p.index} sent a message for index ${obj.index}`);
+  return obj;
+}
+
+/** A peer's deal, checked: signed by that peer, t commitments, our share matches. */
+function openDeal(box, p, priv) {
+  const d = openSigned(box, p);
+  if (!Array.isArray(d.commitments) || d.commitments.length !== cfg.t) {
+    throw new DkgError(`member ${p.index} committed to ${d.commitments?.length} coefficients, want ${cfg.t}`);
+  }
+  const share = open(d.shares[cfg.index], priv);
+  if (!bls.dkgVerifyShare(cfg.index, share, d.commitments)) throw new DkgError(`share from ${p.index} fails its commitments`);
+  return { share, commitments: d.commitments };
 }
 
 // --- HTTP helpers -------------------------------------------------------------
@@ -92,10 +134,16 @@ if (cmd === 'init') {
 
 if (cmd === 'dkg') {
   if (fs.existsSync(file('share.json'))) throw new Error('share.json already exists; move it aside to re-run the ceremony');
+  const jwk = loadWallet(cfg);
   const deal = bls.dkgDeal(cfg.n, cfg.t);
   const sealed = {};
   for (const p of cfg.peers) sealed[p.index] = seal(p.dkgPub, deal.shares[p.index]);
-  const server = serve({ '/dkg/deal': async () => ({ index: cfg.index, commitments: deal.commitments, shares: sealed }) });
+  const signedDeal = signPayload(jwk, { index: cfg.index, commitments: deal.commitments, shares: sealed });
+  let signedTranscript = null;
+  const server = serve({
+    '/dkg/deal': async () => signedDeal,
+    '/dkg/transcript': async () => signedTranscript,
+  });
   log(`dealt; serving on :${cfg.listen}, waiting for ${cfg.peers.length} peers`);
 
   const priv = loadTransportKey();
@@ -105,19 +153,34 @@ if (cmd === 'dkg') {
     for (const p of cfg.peers) {
       if (commitments[p.index]) continue;
       try {
-        const d = await getJson(`${p.url}/dkg/deal`);
-        const share = open(d.shares[cfg.index], priv);
-        if (!bls.dkgVerifyShare(cfg.index, share, d.commitments)) throw new Error(`share from ${p.index} fails its commitments`);
-        received[p.index] = share;
+        const d = openDeal(await getJson(`${p.url}/dkg/deal`), p, priv);
+        received[p.index] = d.share;
         commitments[p.index] = d.commitments;
         log(`verified deal from member ${p.index}`);
-      } catch (e) { if (/fails/.test(e.message)) throw e; }
+      } catch (e) { if (e instanceof DkgError) throw e; }
     }
     await sleep(1000);
   }
-  const result = bls.dkgFinish(cfg.index, cfg.n, received, commitments);
+  const result = bls.dkgFinish(cfg.index, cfg.n, received, commitments, cfg.t);
+  // Accept the group key only once every peer saw the same commitments: a
+  // dealer that showed members different polynomials stops the ceremony.
+  const transcript = bls.dkgTranscript(commitments);
+  signedTranscript = signPayload(jwk, { index: cfg.index, transcript });
+  log(`transcript ${transcript}; comparing with ${cfg.peers.length} peers`);
+  const agreed = new Set();
+  while (agreed.size < cfg.peers.length) {
+    for (const p of cfg.peers) {
+      if (agreed.has(p.index)) continue;
+      try {
+        const theirs = openSigned(await getJson(`${p.url}/dkg/transcript`), p).transcript;
+        if (theirs !== transcript) throw new DkgError(`member ${p.index} has transcript ${theirs}, ours is ${transcript}`);
+        agreed.add(p.index);
+      } catch (e) { if (e instanceof DkgError) throw e; }
+    }
+    if (agreed.size < cfg.peers.length) await sleep(1000);
+  }
   fs.writeFileSync(file('share.json'), JSON.stringify(result), { mode: 0o600 });
-  fs.writeFileSync(file('transcript.json'), JSON.stringify({ commitments, groupKey: result.groupKey, sharePublicKeys: result.sharePublicKeys }, null, 1));
+  fs.writeFileSync(file('transcript.json'), JSON.stringify({ commitments, transcript, groupKey: result.groupKey, sharePublicKeys: result.sharePublicKeys }, null, 1));
   log('ceremony done; groupKey', result.groupKey);
   // Keep serving briefly so slower peers can still fetch our deal.
   await sleep(30_000);
@@ -126,14 +189,16 @@ if (cmd === 'dkg') {
 
 // Offline ceremony, for nodes that cannot reach each other: each node deals to
 // a file, the operator copies every deal to every node (shares are sealed to
-// their recipients), then each node finishes from those files.
+// their recipients), then each node finishes from those files. Deals are
+// signed by their dealer's wallet; every node prints the transcript hash, and
+// the operator must see the same hash from all of them before using the key.
 if (cmd === 'dkg-deal') {
   if (fs.existsSync(file('share.json'))) throw new Error('share.json already exists');
   const deal = bls.dkgDeal(cfg.n, cfg.t);
   const sealed = {};
   for (const p of cfg.peers) sealed[p.index] = seal(p.dkgPub, deal.shares[p.index]);
   fs.writeFileSync(file('dkg-own.json'), JSON.stringify({ share: deal.shares[cfg.index], commitments: deal.commitments }), { mode: 0o600 });
-  fs.writeFileSync(file(`deal-${cfg.index}.json`), JSON.stringify({ index: cfg.index, commitments: deal.commitments, shares: sealed }));
+  fs.writeFileSync(file(`deal-${cfg.index}.json`), JSON.stringify(signPayload(loadWallet(cfg), { index: cfg.index, commitments: deal.commitments, shares: sealed })));
   console.log(`deal-${cfg.index}.json written`);
 }
 
@@ -144,15 +209,17 @@ if (cmd === 'dkg-finish') {
   const received = { [cfg.index]: own.share };
   const commitments = { [cfg.index]: own.commitments };
   for (const p of cfg.peers) {
-    const d = JSON.parse(fs.readFileSync(file(`deal-${p.index}.json`), 'utf8'));
-    received[p.index] = open(d.shares[cfg.index], priv);
+    const d = openDeal(JSON.parse(fs.readFileSync(file(`deal-${p.index}.json`), 'utf8')), p, priv);
+    received[p.index] = d.share;
     commitments[p.index] = d.commitments;
   }
-  const result = bls.dkgFinish(cfg.index, cfg.n, received, commitments);
+  const result = bls.dkgFinish(cfg.index, cfg.n, received, commitments, cfg.t);
+  const transcript = bls.dkgTranscript(commitments);
   fs.writeFileSync(file('share.json'), JSON.stringify(result), { mode: 0o600 });
-  fs.writeFileSync(file('transcript.json'), JSON.stringify({ commitments, groupKey: result.groupKey, sharePublicKeys: result.sharePublicKeys }, null, 1));
+  fs.writeFileSync(file('transcript.json'), JSON.stringify({ commitments, transcript, groupKey: result.groupKey, sharePublicKeys: result.sharePublicKeys }, null, 1));
   fs.rmSync(file('dkg-own.json'));
-  console.log(JSON.stringify({ index: cfg.index, groupKey: result.groupKey }));
+  console.log(JSON.stringify({ index: cfg.index, groupKey: result.groupKey, transcript }));
+
 }
 
 if (cmd === 'run') {

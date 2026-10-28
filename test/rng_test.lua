@@ -163,12 +163,17 @@ function runRngTests()
     rng.config({ beacons = { quick = "q-pid", timelock = "t-pid" }, send = function(m) sent[#sent + 1] = m end })
     rng.on("T", function() end)
     rng.request({ Id = "m-t" }, { tier = "timelock", on = "T" })
-    rng.request({ Id = "m-q" }, { tier = "quick", on = "T" })
+    local qid = rng.request({ Id = "m-q", Timestamp = 1700000000123 }, { tier = "quick", on = "T" })
     eq("timelock target", sent[1].Target, "t-pid")
     eq("timelock tag", sent[1].Tier, "timelock")
     eq("quick target", sent[2].Target, "q-pid")
+    eq("request time tag", sent[2]["Request-Time"], "1700000000123")
     local n = rng.handle({ From = "t-pid", Data = { results = {} } })
     eq("results accepted from the timelock beacon", n, 0)
+    local wrong = { results = { { requestId = qid, value = "ab", round = 1 } } }
+    eq("quick request not answerable by the timelock beacon", rng.handle({ From = "t-pid", Data = wrong }), 0)
+    eq("quick beacon answers it", rng.handle({ From = "q-pid", Data = wrong }), 1)
+
     rng.config({ beacons = false })
   end)
 

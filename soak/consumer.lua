@@ -61,6 +61,10 @@ local function actor(msg, base)
   return signed
 end
 
+local function isOwner(address)
+  return Owner ~= nil and Owner ~= "" and address ~= nil and address == Owner
+end
+
 local function resolveOwner(base)
   if Owner and Owner ~= "" then return Owner end
   local p = base.process
@@ -108,7 +112,7 @@ end)
 local H = {}
 
 H["Configure"] = function(base, msg)
-  if provenSigner(msg) ~= Owner then return { error = "Not authorised" } end
+  if not isOwner(provenSigner(msg)) then return { error = "Not authorised" } end
   local d = json.decode(field(msg, "Data") or "{}")
   Consumer.beacon = d.beacon or Consumer.beacon
   Consumer.timelock = d.timelock or Consumer.timelock
@@ -142,7 +146,11 @@ end
 H["RNG-Error"] = function(base, msg, from)
   if from ~= Consumer.beacon and from ~= Consumer.timelock then return { ignored = true } end
   local d = json.decode(field(msg, "Data") or "{}")
+  -- A redelivered copy of a request still waiting on its result: the first
+  -- copy was charged and will be answered, so keep waiting.
+  if d.error == "Duplicate-Request" and d.requestId and RngPending[d.requestId] then return { ignored = true } end
   Consumer.errors = Consumer.errors + 1
+
   Consumer.lastError = tostring(d.error)
   if d.requestId then
     Consumer.pending[d.requestId] = nil

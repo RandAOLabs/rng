@@ -45,3 +45,19 @@ test('DKG: a tampered share is caught', () => {
   assert.equal(bls.dkgVerifyShare(2, received[3], commitments[3]), false);
   assert.throws(() => bls.dkgFinish(2, 3, received, commitments), /bad share from dealer 3/);
 });
+
+test('DKG: a dealer committing to more than t coefficients is refused', () => {
+  const { deals, commitments } = runDkg(3, 2);
+  const long = { ...commitments, 3: [...commitments[3], commitments[3][0]] };
+  const received = Object.fromEntries(Object.entries(deals).map(([i, d]) => [i, d.shares[1]]));
+  assert.throws(() => bls.dkgFinish(1, 3, received, long, 2), /dealer 3 committed to 3 coefficients, want 2/);
+  assert.throws(() => bls.dkgFinish(1, 3, received, long), /dealer 3 committed to 3/);
+});
+
+test('DKG: transcript hash matches only for the same commitments', () => {
+  const { commitments } = runDkg(3, 2);
+  const shuffled = { 3: commitments[3], 1: commitments[1], 2: commitments[2] };
+  assert.equal(bls.dkgTranscript(shuffled), bls.dkgTranscript(commitments));
+  const other = { ...commitments, 2: runDkg(3, 2).commitments[2] };
+  assert.notEqual(bls.dkgTranscript(other), bls.dkgTranscript(commitments));
+});

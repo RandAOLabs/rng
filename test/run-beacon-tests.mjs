@@ -31,13 +31,18 @@ const sign = (msg, idx) => bls.combine(idx.map((i) => ({ index: shares[i].index,
 F.sig1 = sign(`${F.beacon}|1`, [0, 2]);
 F.sig2 = sign(`${F.beacon}|2`, [1, 2]);
 F.sig3 = sign(`${F.beacon}|3`, [0, 1]);
+F.sig4 = sign(`${F.beacon}|4`, [1, 2]);
+F.sig5 = sign(`${F.beacon}|5`, [0, 2]);
 F.groupKey = shares[0].groupKey;
 if (!bls.verify(shares[0].groupKey, `${F.beacon}|1`, F.sig1)) throw new Error('fixture signature does not verify');
 const forged = bls.dealerKeygen(3, 2);
 F.fake1 = bls.combine([0, 1].map((i) => ({ index: forged.shares[i].index, signature: bls.partialSign(forged.shares[i], `${F.beacon}|1`) })));
 F.value1 = sha(`round|${F.sig1}`);
-F.out1 = sha(`${F.value1}|${F.req1}`);
-F.out2 = sha(`${F.value1}|${F.req2}`);
+F.value2 = sha(`round|${F.sig2}`);
+// Requests bind to round + 2, so the first requests are served by round 2.
+F.out1 = sha(`${F.value2}|${F.game}|${F.req1}`);
+F.out2 = sha(`${F.value2}|${F.game}|${F.req2}`);
+
 F.config = JSON.stringify({ self: F.beacon, token: F.token, threshold: 2, cadenceMs: 5000, groupKey: shares[0].groupKey, committee: F.members, unit: F.unit });
 
 const luaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;

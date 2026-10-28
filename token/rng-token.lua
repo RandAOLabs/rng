@@ -157,7 +157,9 @@ local function actor(msg, base)
   end
   -- Commitments present, none a signature (hmac only): nobody is identified,
   -- and a self-declared `from-process` must not become the actor. The bare
-  -- tag is honoured only with no commitments at all -- the in-process harness.
+  -- tag is honoured only with no commitments at all, and only in an
+  -- in-process harness that sets the TestHarness global -- never on a node.
+  if TestHarness ~= true then return nil end
   local commitments = msg.commitments or msg.Commitments
   if type(commitments) == "table" and next(commitments) ~= nil then return nil end
   return fromProcess
@@ -450,9 +452,20 @@ local ENVELOPE = {
   epoch = true, accept = true, scheduler = true, subject = true,
   ["from-process"] = true, ["data-protocol"] = true, ["content-type"] = true,
   ["accept-bundle"] = true, ["random-seed"] = true, ["hashpath"] = true,
+  fromprocess = true, tags = true,
 }
 
-local function caseInsensitive(t)
+--- The message as handlers see it. Envelope fields (commitments,
+--- from-process) come only from the body the node verified; a `Tags` table
+--- adds tags but never replaces the body or an envelope field.
+local function caseInsensitive(raw)
+  local t = {}
+  for k, v in pairs(raw) do if k ~= "Tags" then t[k] = v end end
+  if type(raw.Tags) == "table" then
+    for k, v in pairs(raw.Tags) do
+      if t[k] == nil and not ENVELOPE[tostring(k):lower()] then t[k] = v end
+    end
+  end
   local lower = {}
   for k, v in pairs(t) do
     local key = tostring(k):lower()
@@ -505,7 +518,8 @@ function compute(base, req, opts)
   local beforeTransferSeq = int(TransferSeq, 0)
   local beforeFaucetCalls = int(FaucetCalls, 0)
   local raw = (req and req.body) or {}
-  local msg = caseInsensitive(raw.Tags or raw)
+  local msg = caseInsensitive(type(raw) == "table" and raw or {})
+
   local action = msg.Action or msg.action or "none"
   local handler = resolveHandler(action)
   local result

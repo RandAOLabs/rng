@@ -254,9 +254,13 @@ function rng.request(msg, opts)
   local target = (cfg.beacons and cfg.beacons[tier]) or (tier == "quick" and cfg.beacon) or nil
   assert(target, "rng: tier '" .. tier .. "' needs rng.config{ beacons = { " .. tier .. " = <process id> } }")
   RngPending[requestId] = { on = opts.on, ctx = opts.ctx, tier = tier }
+  -- This message's time: the beacon refuses a copy that arrives too long
+  -- after it, so it can forget the id without charging a late copy twice.
+  local at = field(msg, "Timestamp", "timestamp")
   if cfg.outbox then
     cfg.outbox["rng-request-" .. requestId] = {
       target = target, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
+      ["Request-Time"] = at ~= "" and at or nil,
     }
     return requestId
   end
@@ -267,6 +271,7 @@ function rng.request(msg, opts)
     Action = "Request-Random",
     Tier = tier,
     ["Request-Id"] = requestId,
+    ["Request-Time"] = at ~= "" and at or nil,
   })
   return requestId
 end
@@ -296,7 +301,10 @@ function rng.handle(msg, from)
   local ran = 0
   for _, res in ipairs(data.results or {}) do
     local p = RngPending[res.requestId]
-    if p then
+    -- Only the beacon serving this request's tier may answer it.
+    local want = p and ((cfg.beacons and cfg.beacons[p.tier]) or (p.tier == "quick" and cfg.beacon) or nil)
+    if p and from == want then
+
       RngPending[res.requestId] = nil
       run(p.on, rng.stream("beacon|" .. res.value), p.ctx, {
         tier = p.tier, requestId = res.requestId, round = res.round, value = res.value,

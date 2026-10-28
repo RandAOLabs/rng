@@ -7,6 +7,7 @@
 // Keys come from a joint-Feldman DKG (dkgDeal / dkgVerifyShare / dkgFinish):
 // every member deals a random polynomial, so no one ever holds the group key.
 // dealerKeygen remains for tests only.
+import { createHash } from 'node:crypto';
 import { bls12_381 as bls } from '@noble/curves/bls12-381.js';
 
 const { Fr } = bls.fields;
@@ -91,10 +92,18 @@ export function dkgVerifyShare(j, shareHex, commitments) {
 /**
  * Member `index` finishes once it holds a verified share from every qualified
  * dealer. received: { dealer: shareHex }; commitments: { dealer: [hex] }.
+ * Every dealer must commit to exactly t coefficients (t defaults to dealer
+ * 1's count, so a longer polynomial cannot raise the threshold).
  * Returns this member's secret share plus the public keys everyone agrees on.
  */
-export function dkgFinish(index, n, received, commitments) {
+export function dkgFinish(index, n, received, commitments, t) {
   const dealers = Object.keys(commitments).map(Number).sort((a, b) => a - b);
+  const want = t ?? commitments[dealers[0]]?.length;
+  for (const d of dealers) {
+    if (!Array.isArray(commitments[d]) || commitments[d].length !== want) {
+      throw new Error(`dealer ${d} committed to ${commitments[d]?.length} coefficients, want ${want}`);
+    }
+  }
   for (const d of dealers) {
     if (!dkgVerifyShare(index, received[d], commitments[d])) throw new Error(`bad share from dealer ${d}`);
   }
@@ -107,7 +116,18 @@ export function dkgFinish(index, n, received, commitments) {
   return { index, secret: scalarHex(secret), publicKey: sharePublicKeys[index], groupKey, sharePublicKeys };
 }
 
+/**
+ * Hash of every dealer's commitments, in dealer order. Members compare it
+ * before trusting the group key: equal hashes mean nobody was dealt a
+ * different polynomial than the rest.
+ */
+export function dkgTranscript(commitments) {
+  const dealers = Object.keys(commitments).map(Number).sort((a, b) => a - b);
+  return createHash('sha256').update(JSON.stringify(dealers.map((d) => [d, commitments[d]]))).digest('hex');
+}
+
 /** Verify a group signature. */
+
 export function verify(groupKey, message, signatureHex) {
   return sigs.verify(G2.fromHex(signatureHex), hashMsg(message), G1.fromHex(groupKey));
 }

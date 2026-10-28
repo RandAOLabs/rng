@@ -58,12 +58,23 @@ function runConsumerTests()
   eq("redelivery counted once", stats().received, 2)
 
   out = send(wallet(PLAYER, { Action = "Play", Count = "1", Tier = "beacon" }))
+  send(fromProcess(BEACON, { Action = "RNG-Error", Data = encode({ error = "Duplicate-Request", requestId = out.requested[1] }) }))
+  s = stats()
+  check("duplicate for a pending id keeps it pending", s.pendingCount == 1 and s.errors == 0 and RngPending[out.requested[1]] ~= nil)
   send(fromProcess(BEACON, { Action = "RNG-Error", Data = encode({ error = "Insufficient-Balance", requestId = out.requested[1] }) }))
   s = stats()
   eq("error recorded", s.errors, 1)
   eq("errored request no longer pending", s.pendingCount, 0)
 
+  -- Configure needs a real owner.
+  local savedOwner, savedProcess = Owner, base.process
+  Owner, base.process = nil, nil
+  out = send({ Action = "Configure", Data = encode({ beacon = PLAYER }) })
+  check("no owner: unsigned configure refused", out.error == "Not authorised" and Consumer.beacon == BEACON, out.error)
+  Owner, base.process = savedOwner, savedProcess
+
   -- A VM that lost its globals comes back from the published state.
+
   Consumer, RngPending = { rev = 0 }, {}
   send(wallet(PLAYER, { Action = "Get-Stats" }))
   eq("stats restored", stats().received, 2)
