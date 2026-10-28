@@ -5,23 +5,23 @@ round is one call instead of a fleet of verifier processes:
 
 | Key | Inputs | Returns |
 |---|---|---|
-| `verify-reveal` | `modulus`, `seed`, `t`, `y`, `p` | `valid`, `x`: a time-lock answer opened with its factor (SPEC 2.4) |
-| `verify-crack` | `modulus`, `seed`, `t`, `y`, `proof` | `valid`, `x`: a cracked answer with its Wesolowski proof (SPEC 2.5) |
-| `derive-x` | `modulus`, `seed` | `x`: the round's puzzle input |
+| `verify-reveal` | `c`, `alpha`, `h` | `valid`, `y`: checks `g^alpha = c` and returns the canonical output `h^alpha` (SPEC 2.4) |
+| `verify-crack` | `x`, `t`, `y`, `proof` | `valid`, `y`: a cracked output with its Wesolowski proof, canonical (SPEC 2.5) |
+| `generator` | none | `g`, `n`: the built-in RSA-2048 modulus and generator (SPEC 2.3) |
 | `verify-bls` | `public-key`, `message`, `signature` | `valid`, `value`: the quick tier's committee signature |
 | `derive` | `seed`, `counter`, `bytes` | `value`: SHA-256 counter-mode bytes |
 
-Hex must be lowercase without leading zeros. Measured at 2048 bits and
-t = 2^27: verify-reveal 1.4 ms, verify-crack 0.7 ms. BLS uses
+Hex must be lowercase without leading zeros. Every puzzle lives mod the
+RSA-2048 challenge number, whose factors nobody knows, so neither a validator
+nor a cracker can forge an output. BLS uses
 [blst](https://github.com/supranational/blst) v0.3.16 in a dirty-scheduler NIF.
 Full reference: `timelock-at-1-0.md`.
 
 From a Lua process:
 
 ```lua
-local status, res = ao.resolve({ path = "/~timelock@1.0/verify-reveal",
-  modulus = N, seed = beaconId .. "|" .. round .. "|" .. validator, t = "134217728", y = y, p = p })
--- res.valid == true
+local status, res = ao.resolve({ path = "/~timelock@1.0/verify-reveal", c = c, alpha = alpha, h = h })
+-- res.valid == true, res.y is the canonical output
 ```
 
 ## Where the code lives
@@ -29,8 +29,9 @@ local status, res = ao.resolve({ path = "/~timelock@1.0/verify-reveal",
 The device compiles into the node, so it is built in our HyperBEAM fork. This
 folder is the canonical copy:
 
-- `timelock-device.patch`: the whole change (two commits: BLS device, then the time-lock
-  keys and the rename), made against `paralith/v0.11` @ `58b3d2b32`.
+- The device ships in `paralith/v0.11` (BLS device and first time-lock keys).
+  `timelock-device.patch` is our change on top of it, made against
+  `paralith/v0.11` @ `f5a683ecd`: one unknown-order modulus and sound cracks.
 - `dev_timelock.erl`, `blst_nif.erl`, `blst_nif.c`: the sources, for reading.
 - Test vectors come from `test/gen-vrf-vectors.mjs` (BLS) and `test/gen-timelock-vectors.mjs` (time-lock).
 
@@ -38,7 +39,7 @@ Apply to a HyperBEAM checkout, then test in Docker:
 
 ```bash
 git am /path/to/rng/device/timelock-device.patch
-git submodule update --init native/lib/blst
+git submodule update --init native/lib/blst native/lib/secp256k1
 scripts/timelock-test.sh   # builds in erlang:27 and runs dev_timelock + dev_lua tests
 ```
 
