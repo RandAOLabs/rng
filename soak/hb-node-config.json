@@ -7,15 +7,28 @@
   "scheduler-lookahead": false,
   "process-snapshot-target": false,
   "match-index": false,
-  "scheduling-mode": "aggressive",
+  "process-delta-cache": true,
+  "process-state-blobs": true,
+  "store-retention": true,
   "store": [
-    { "store-module": "hb_store_lmdb", "name": "cache-mainnet/lmdb", "sync": false },
-    { "store-module": "hb_store_fs", "name": "cache-mainnet/fs" },
+    {
+      "store-module": "hb_store_lmdb",
+      "name": "cache-mainnet/lmdb",
+      "sync": false
+    },
+    {
+      "store-module": "hb_store_fs",
+      "name": "cache-mainnet/fs"
+    },
     {
       "store-module": "hb_store_arweave",
       "name": "cache-mainnet/arweave",
       "index-store": [
-        { "store-module": "hb_store_lmdb", "name": "cache-mainnet/lmdb", "sync": false },
+        {
+          "store-module": "hb_store_lmdb",
+          "name": "cache-mainnet/lmdb",
+          "sync": false
+        },
         {
           "store-module": "hb_store_arlmdb",
           "name": "published-offset-index",
@@ -25,12 +38,26 @@
           "from-value": "~bits@1.0/from=_:77,start:49+integer,length:34+integer"
         }
       ],
-      "local-store": [{ "store-module": "hb_store_lmdb", "name": "cache-mainnet/lmdb", "sync": false }],
+      "local-store": [
+        {
+          "store-module": "hb_store_lmdb",
+          "name": "cache-mainnet/lmdb",
+          "sync": false
+        }
+      ],
       "remote-index": true
     }
   ],
-  "irreplaceable-store": { "store-module": "hb_store_lmdb", "name": "cache-mainnet/irreplaceable", "sync": true },
+  "irreplaceable-store": {
+    "store-module": "hb_store_lmdb",
+    "name": "cache-mainnet/irreplaceable",
+    "sync": true
+  },
   "rate-limit-requests": 1000000,
   "rate-limit-max": 1000000,
-  "rate-limit-exempt": ["127.0.0.1", "172.17.0.1", "__SOAK_IPS__"]
+  "rate-limit-exempt": [
+    "127.0.0.1",
+    "172.17.0.1",
+    "__SOAK_IPS__"
+  ]
 }
