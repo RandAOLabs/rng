@@ -107,21 +107,22 @@ async function act() {
   }
   if (r < 0.68 || (r < 0.80 && !TIMELOCK)) {
     const id = rid(w.address);
-    lastRequest.set(w.address, { id, at: Date.now() });
-    return record('direct', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
+    const at = Date.now();
+    lastRequest.set(w.address, { id, at });
+    return record('direct', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id, 'Request-Time': String(at) }));
   }
   if (r < 0.80) {
     const id = rid(w.address);
-    return record('direct-timelock', { from: w.address, requestId: id }, () => send(w.jwk, TIMELOCK, 'Request-Random', { Tier: 'timelock', 'Request-Id': id }));
+    return record('direct-timelock', { from: w.address, requestId: id }, () => send(w.jwk, TIMELOCK, 'Request-Random', { Tier: 'timelock', 'Request-Id': id, 'Request-Time': String(Date.now()) }));
   }
   const last = lastRequest.get(w.address);
   if (r < 0.85 && last && Date.now() - last.at < DUPLICATE_WITHIN_MS) {
-    const id = last.id;
-    return record('duplicate', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
+    const id = last.id; // a copy: same id and Request-Time
+    return record('duplicate', { from: w.address, requestId: id }, () => send(w.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id, 'Request-Time': String(last.at) }));
   }
   if (r < 0.90) {
     const id = rid(pauper.address);
-    return record('unfunded', { from: pauper.address, requestId: id }, () => send(pauper.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id }));
+    return record('unfunded', { from: pauper.address, requestId: id }, () => send(pauper.jwk, BEACON, 'Request-Random', { Tier: 'quick', 'Request-Id': id, 'Request-Time': String(Date.now()) }));
   }
   if (r < 0.95) return record('withdraw', { from: w.address }, () => send(w.jwk, BEACON, 'Withdraw', { Quantity: '1' }));
   return topUp();

@@ -74,7 +74,7 @@ export function DocsPage() {
           <tr><td><code>Get-Info</code></td><td></td><td>Replies with round, committee and prices.</td></tr>
         </tbody>
       </table>
-      <p>Your process receives <code>RNG-Result</code>: <code>{'{ round, signature, results = { { requestId, value } } }'}</code>. A request's value is <code>SHA-256(SHA-256("round|" .. signature) .. "|" .. requestId)</code>; the signature verifies against the group key for the message <code>&lt;beacon id&gt;|&lt;round&gt;</code>.</p>
+      <p>Your process receives <code>RNG-Result</code>: <code>{'{ round, signature, results = { { requestId, value } } }'}</code>. A request's value is <code>SHA-256(SHA-256("round|" .. signature) .. "|" .. requester .. "|" .. requestId)</code>; the signature verifies against the group key for the message <code>&lt;beacon id&gt;|&lt;round&gt;</code>.</p>
 
       <h2 id="reads">Free reads</h2>
       <p>No signing needed: <code>GET {NODE}/{'<beacon>'}~process@1.0/now/beaconinfo</code> (round, committee, prices) and <code>…/now/beaconstate</code> (balances and recent rounds with their signatures).</p>

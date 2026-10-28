@@ -2,26 +2,16 @@ import { useEffect, useState } from 'react';
 import { readKey, useBeacon } from '../lib/beacon';
 import { BEACON, TIMELOCK, TOKEN, UNIT } from '../lib/config';
 import { dieFor, requestValue, verifySignature } from '../lib/crypto';
-import { roundValue, seedFor, verifyCrack, verifyReveal } from '../lib/timelock';
+import { type Output, verifyRound } from '../lib/timelock';
 import { connect, hasWallet, send } from '../lib/wallet';
 
 type Tier = 'timelock' | 'quick';
-type Draw = { tier: Tier; requestId: string; round: number; value?: string; die?: number; verified?: boolean };
-type TlOutput = { y: string; via: 'reveal' | 'crack'; p?: string; proof?: string };
-type TlRound = { commits: Record<string, string>; outputs: Record<string, TlOutput>; value: string };
-type TlState = { self: string; params: { T: number }; balances: Record<string, number>; rounds: Record<string, TlRound> };
+type Draw = { tier: Tier; requester: string; requestId: string; round: number; value?: string; die?: number; verified?: boolean };
+type TlRound = { T?: number; h?: string; commits: Record<string, string>; outputs: Record<string, Output>; value: string };
+type TlState = { self: string; params: { T: number; h?: string }; balances: Record<string, number>; rounds: Record<string, TlRound> };
 
 /** Every reveal and crack of a time-lock round, re-checked here. */
-function verifyTimelockRound(st: TlState, round: number, r: TlRound): boolean {
-  const ys: Record<string, string> = {};
-  for (const [a, o] of Object.entries(r.outputs)) {
-    const seed = seedFor(st.self, round, a);
-    const ok = o.via === 'crack' ? verifyCrack(r.commits[a], seed, st.params.T, o.y, o.proof!) : verifyReveal(r.commits[a], seed, st.params.T, o.y, o.p!);
-    if (!ok) return false;
-    ys[a] = o.y;
-  }
-  return roundValue(st.self, round, ys) === r.value;
-}
+const verifyTimelockRound = (st: TlState, round: number, r: TlRound) => verifyRound(st.self, st.params, { ...r, round });
 
 function useTimelock(everyMs = 1500) {
   const [price, setPrice] = useState<number | null>(null);
@@ -86,7 +76,7 @@ export function TryPage() {
     const requestId = `try-${Date.now()}`;
     const { reply } = await send(beacon, { Action: 'Request-Random', Tier: tier, 'Request-Id': requestId });
     if (reply?.error) throw new Error(reply.error === 'Insufficient-Balance' ? `Your balance on this tier is too low. Fund it with at least ${price} RNG.` : reply.error);
-    setDraw({ tier, requestId, round: reply.round });
+    setDraw({ tier, requester: address!, requestId, round: reply.round });
   });
 
   // Resolve the draw once its round is in the published state.
@@ -95,13 +85,13 @@ export function TryPage() {
     if (draw.tier === 'quick' && quick.state) {
       const r = quick.state.rounds?.[String(draw.round)];
       if (!r) return;
-      const value = requestValue(r.value, draw.requestId);
+      const value = requestValue(r.value, draw.requester, draw.requestId);
       setDraw({ ...draw, value, die: dieFor(value), verified: verifySignature(quick.state.groupKey, `${quick.state.self}|${draw.round}`, r.signature) });
     }
     if (draw.tier === 'timelock' && tl.state) {
       const r = tl.state.rounds?.[String(draw.round)];
       if (!r) return;
-      const value = requestValue(r.value, draw.requestId);
+      const value = requestValue(r.value, draw.requester, draw.requestId);
       setDraw({ ...draw, value, die: dieFor(value), verified: verifyTimelockRound(tl.state, draw.round, r) });
     }
   }, [quick.state, tl.state, draw]);

@@ -71,28 +71,43 @@ function archiveTimelock(st) {
     problem('timelock-archive-gap', { from: missing[0], to: missing[missing.length - 1] });
     s.tl.complete = false;
   }
+  // h for each T seen, checked against its proof (x = g), since a round only records its T.
+  const { T: pT, h: pH, hProof } = st.params ?? {};
+  s.tl.h ||= {};
+  if (pT && pH && s.tl.h[pT] !== pH && s.tl.badH !== pH) {
+    if (hProof && !tl.verifyCrack(tl.G_HEX, pT, pH, hProof).valid) { problem('timelock-bad-h', { T: pT }); s.tl.badH = pH; }
+    else s.tl.h[pT] = pH;
+  }
+  // What each waiting request was charged (a record only keeps the count).
+  s.tl.charged ||= {};
+  for (const [k, list] of Object.entries(st.pending ?? {})) s.tl.charged[k] = list.map((p) => Number(p.charged));
   for (const n of live) {
     if (tlRounds.has(n)) continue;
     maxTl = Math.max(maxTl, n);
     const r = st.rounds[String(n)];
-    const T = st.params.T;
+    const T = r.T ?? pT;
+    const h = r.h ?? s.tl.h[T];
     let verified = true, cracks = 0;
     const ys = {};
     for (const [addr, out] of Object.entries(r.outputs ?? {})) {
-      const seed = tl.seedFor(st.self, n, addr);
-      const N = r.commits[addr];
-      ys[addr] = out.y;
-      const ok = out.via === 'crack' ? tl.verifyCrack(N, seed, T, out.y, out.proof) : tl.verifyReveal(N, seed, T, out.y, out.p);
+      // Reveals: g^alpha = c and y = h^alpha; cracks: Wesolowski with x = c. Hashed as y*.
+      ys[addr] = tl.checkOutput(r.commits[addr], out, T, h);
       if (out.via === 'crack') cracks++;
-      if (!ok) verified = false;
+      if (ys[addr] === null) verified = false;
     }
     const valueOk = tl.roundValue(st.self, n, ys) === r.value;
     const outputs = Object.keys(r.outputs ?? {}).length;
     const rec = { round: n, opened: r.opened, finalizedAt: r.finalizedAt, requests: r.requests, outputs, cracks, value: r.value, verified, valueOk };
     tlRounds.set(n, rec);
     appendLine('timelock-rounds.jsonl', rec);
-    s.tl.expectedAccrued += r.requests * outputs;
-    s.tl.protocol += r.requests;
+    // Per request: 1 to each of k = min(contributors, charged - 1) validators, 1 to the
+    // protocol, the rest back. Charges not seen while waiting are taken as the full price.
+    const charged = s.tl.charged[n]?.length === r.requests ? s.tl.charged[n] : Array(r.requests).fill(outputs + 1);
+    for (const c of charged) {
+      s.tl.expectedAccrued += Math.max(0, Math.min(outputs, c - 1));
+      s.tl.protocol += Math.min(1, c);
+    }
+    delete s.tl.charged[n]; // rounds finish out of order, so only this one
     s.tl.cracks += cracks;
     if (!verified || !valueOk) problem('bad-timelock-round', { round: n, verified, valueOk });
   }
@@ -164,8 +179,10 @@ async function checkActions(state) {
   for (const [key, e] of Object.entries(s.expectRefusal)) {
     if (Date.now() - e.t < 60_000) continue;
     const reply = await slotReply(e.slot);
-    const want = e.kind === 'duplicate' ? 'Duplicate-Request' : 'Insufficient-Balance';
-    if (reply.error !== want) problem(`${e.kind}-accepted`, { slot: e.slot, reply });
+    // A duplicate is answered without an error (and without a charge).
+    const refused = e.kind === 'duplicate' ? reply.duplicate === true || reply.error === 'Duplicate-Request'
+      : reply.error === 'Insufficient-Balance';
+    if (!refused) problem(`${e.kind}-accepted`, { slot: e.slot, reply });
     delete s.expectRefusal[key];
   }
 }
@@ -180,7 +197,7 @@ async function checkContracts() {
       const timelock = r.tier === 'timelock';
       const round = (timelock ? tlRounds : rounds).get(Number(r.round));
       if (!round) continue; // round not archived yet; next cycle
-      const want = sha256hex(`${round.value}|${r.requestId}`);
+      const want = sha256hex(`${round.value}|${pid}|${r.requestId}`);
       const die = stream(`beacon|${want}`).int(1, 6);
       if (r.value !== want || r.die !== die) problem('wrong-result', { pid, requestId: r.requestId, round: r.round });
       s.faces[die - 1]++;
@@ -234,7 +251,7 @@ function report(state) {
     timelock: { rounds: tlRounds.size, cracks: s.tl.cracks, latencyMs: { p50: pct(tms, 50), p95: pct(tms, 95), p99: pct(tms, 99), n: tms.length } },
     dice: { faces: s.faces, chiSquare: +chi.toFixed(2) }, problems: counts,
     pass: {
-      noBadRounds: !counts['bad-round'] && !counts['bad-timelock-round'],
+      noBadRounds: !counts['bad-round'] && !counts['bad-timelock-round'] && !counts['timelock-bad-h'],
       timelockFeesBalance: !counts['timelock-fee-mismatch'], timelockNoStalls: !counts['timelock-stall'] && !counts['timelock-direct-lost'], noWrongResults: !counts['wrong-result'],
       noLostRequests: !counts['direct-lost'] && !counts['contract-lost'],
       refusalsHeld: !counts['duplicate-accepted'] && !counts['unfunded-accepted'],
@@ -273,13 +290,15 @@ async function archiveFor(ms) {
 
 for (;;) {
   try {
-    const [state, info] = await Promise.all([read(BEACON, 'beaconstate'), read(BEACON, 'beaconinfo')]);
+    const [state, info, guards] = await Promise.all([read(BEACON, 'beaconstate'), read(BEACON, 'beaconinfo'), read(BEACON, 'beaconguards')]);
+    state.seen = guards.seen; // published apart from the state
     archive(state);
     await checkActions(state);
     await checkContracts();
     checkInvariants(state, info);
     if (TIMELOCK) {
-      const [tst, tinfo] = await Promise.all([read(TIMELOCK, 'timelockstate'), read(TIMELOCK, 'beaconinfo')]);
+      const [tst, tinfo, tguards] = await Promise.all([read(TIMELOCK, 'timelockstate'), read(TIMELOCK, 'beaconinfo'), read(TIMELOCK, 'timelockguards')]);
+      tst.seen = tguards.seen; // published apart from the state
       archiveTimelock(tst);
       checkTimelock(tst, tinfo);
     }

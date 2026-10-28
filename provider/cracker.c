@@ -7,8 +7,8 @@
  * is computed by the caller (provider/timelock.mjs), so the hashing rules live
  * in one place.
  */
+#include <stdio.h> /* before gmp.h, so it declares mpz_out_str */
 #include <gmp.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

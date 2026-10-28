@@ -46,15 +46,17 @@ still calls `math.random` can run unchanged with `rng.install(msg)` (tier 0).
 ## How the beacon works
 
 1. A process funds a balance by sending TEST-RNG to the beacon.
-2. `Request-Random` debits the price and binds the request to the next round,
-   which nobody has signed yet.
+2. `Request-Random` debits the price and binds the request to the round
+   after the open one; partials are taken only for the open round, so nothing
+   about the bound round exists while requests can still bind to it.
 3. Each committee node signs that round with its key share and posts the
    partial to the beacon. Nodes read each other's partials from the beacon,
    so they never connect to each other directly.
 4. Any 2 partials combine into the same 96-byte BLS signature. A round
    finalizes when 2 nodes post the same verified signature.
 5. The beacon answers each requester process with one `RNG-Result` holding
-   `SHA-256(SHA-256("round|" .. sig) .. "|" .. requestId)` per request.
+   `SHA-256(SHA-256("round|" .. sig) .. "|" .. requester .. "|" .. requestId)`
+   per request.
 
 Keys come from a distributed key generation: no machine ever holds the
 group key. The `vrf@1.0` HyperBEAM device (in progress) will let the beacon

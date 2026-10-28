@@ -20,7 +20,7 @@ export function verifySignature(groupKey: string, message: string, signature: st
 
 /** The beacon's round value and one request's value, as beacon.lua derives them. */
 export const roundValue = (signature: string) => sha256hex(`round|${signature}`);
-export const requestValue = (roundValueHex: string, requestId: string) => sha256hex(`${roundValueHex}|${requestId}`);
+export const requestValue = (roundValueHex: string, requester: string, requestId: string) => sha256hex(`${roundValueHex}|${requester}|${requestId}`);
 
 /** lib/rng.lua's stream: block k = SHA-256(SHA-256("rng/v1|" .. material) .. k). */
 export function stream(material: string) {

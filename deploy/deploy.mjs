@@ -8,7 +8,9 @@
 //   node deploy/deploy.mjs request [id]               ask for one beacon value
 //   node deploy/deploy.mjs info                       print the beacon's published info
 //   node deploy/deploy.mjs spawn-timelock             spawn the time-lock beacon (uses the token)
-//   node deploy/deploy.mjs configure-timelock <params.json>  token, unit and SPEC 2.1 parameters
+//   node deploy/deploy.mjs configure-timelock <params.json>  token, unit and SPEC 2.1 parameters; T (default
+//                                                    2^27) goes with h and hProof, computed once per T (minutes;
+//                                                    RNG_CRACKER for native) and cached in deploy/timelock-h.json
 //   node deploy/deploy.mjs add-validator <address> | remove-validator <address>
 //   node deploy/deploy.mjs bond <address> [rng]        mint and bond a validator (default 25,000)
 //
@@ -19,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readState, jwkToAddress, awaitComputedSlot, pendingPushes } from '../vendor/hbclient.mjs';
 import { spawnLua, message } from '../provider/hb.mjs';
+import * as tl from '../provider/timelock.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const V2 = path.resolve(HERE, '..');
@@ -112,7 +115,7 @@ if (cmd === 'fund') {
 
 if (cmd === 'request') {
   const id = args[0] || `req-${Date.now()}`;
-  console.log('request', (await send(state.beacon, 'Request-Random', { tags: { Tier: 'beacon', 'Request-Id': id } })).output);
+  console.log('request', (await send(state.beacon, 'Request-Random', { tags: { Tier: 'beacon', 'Request-Id': id, 'Request-Time': String(Date.now()) } })).output);
   const target = (await beaconInfo()).nextRound;
   for (let i = 0; i < 60; i++) {
     const info = await beaconInfo();
@@ -134,9 +137,39 @@ if (cmd === 'spawn-timelock') {
   save();
 }
 
+/** h = g^(2^T) and its Wesolowski proof (SPEC 2.1, 2.3): T squarings, so cached per T. */
+async function hFor(T) {
+  const file = path.join(HERE, 'timelock-h.json');
+  const cache = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  const hit = cache[T];
+  if (hit && tl.verifyCrack(tl.G_HEX, T, hit.h, hit.hProof).valid) return hit;
+  const bin = process.env.RNG_CRACKER;
+  console.log(`computing h for T=${T} (${bin ? 'native' : 'js'}); this takes minutes`);
+  const t0 = Date.now();
+  const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(0)} s`;
+  let out;
+  if (bin) {
+    const tick = setInterval(() => console.log(`  ${elapsed()}`), 15_000);
+    try { out = await tl.crackNative(bin, tl.G_HEX, T); } finally { clearInterval(tick); }
+  } else {
+    let last = 0;
+    out = tl.crack(tl.G_HEX, T, (done, total) => {
+      if (Date.now() - last > 15_000) { last = Date.now(); console.log(`  ${(100 * done / total).toFixed(1)}% after ${elapsed()}`); }
+    });
+  }
+  const r = { h: out.y, hProof: out.proof };
+  if (!tl.verifyCrack(tl.G_HEX, T, r.h, r.hProof).valid) throw new Error('h does not verify');
+  console.log(`h for T=${T} done in ${elapsed()}`);
+  cache[T] = r;
+  fs.writeFileSync(file, JSON.stringify(cache, null, 2) + '\n');
+  return r;
+}
+
 if (cmd === 'configure-timelock') {
   const params = args[0] ? JSON.parse(fs.readFileSync(args[0], 'utf8')) : {};
-  console.log((await send(state.timelock, 'Configure', { data: JSON.stringify({ self: state.timelock, token: state.token, unit: 1000000, ...params }) })).output);
+  const T = Number(params.T ?? 2 ** 27);
+  const { h, hProof } = await hFor(T);
+  console.log((await send(state.timelock, 'Configure', { data: JSON.stringify({ self: state.timelock, token: state.token, unit: 1000000, ...params, T, h, hProof }) })).output);
 }
 
 if (cmd === 'add-validator' || cmd === 'remove-validator') {

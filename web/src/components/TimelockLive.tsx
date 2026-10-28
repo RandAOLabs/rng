@@ -5,31 +5,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { readKey, short, useRoundHistory } from '../lib/beacon';
 import { TIMELOCK } from '../lib/config';
-import { roundValue, seedFor, verifyCrack, verifyReveal } from '../lib/timelock';
+import { type Output, verifyRound } from '../lib/timelock';
 
-type Output = { y: string; via: 'reveal' | 'crack'; p?: string; proof?: string; cracker?: string };
-type Round = { round: number; commits: Record<string, string>; outputs: Record<string, Output>; value: string; requests: number; opened: number; finalizedAt: number };
+type Round = { round: number; T?: number; h?: string; commits: Record<string, string>; outputs: Record<string, Output>; value: string; requests: number; opened: number; finalizedAt: number };
 type InFlight = { round: number; phase: string; pending: number; revealDeadline?: number };
 type Info = {
   round: number; price: number; params: { T: number; commitWindowMs: number; heartbeat?: number };
   validators: { address: string; suspended: boolean; idle?: boolean; strikes: number; bond?: number }[];
   open: InFlight; revealing?: InFlight[];
 };
-type State = { self: string; params: { T: number }; rounds: Record<string, Round> };
+type State = { self: string; params: { T: number; h?: string }; rounds: Record<string, Round> };
 
 const checked = new Map<string, boolean>();
 function checkRound(st: State, r: Round): boolean {
   const key = `${r.round}|${r.value}`;
-  if (!checked.has(key)) {
-    const ys: Record<string, string> = {};
-    let ok = true;
-    for (const [a, o] of Object.entries(r.outputs)) {
-      ys[a] = o.y;
-      const seed = seedFor(st.self, r.round, a);
-      ok = ok && (o.via === 'crack' ? verifyCrack(r.commits[a], seed, st.params.T, o.y, o.proof!) : verifyReveal(r.commits[a], seed, st.params.T, o.y, o.p!));
-    }
-    checked.set(key, ok && roundValue(st.self, r.round, ys) === r.value);
-  }
+  if (!checked.has(key)) checked.set(key, verifyRound(st.self, st.params, r));
   return checked.get(key)!;
 }
 
