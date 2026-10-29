@@ -154,9 +154,11 @@ async function checkActions(state) {
   for (const a of actions.slice(s.actionsRead)) {
     if (a.kind === 'direct' && a.slot !== undefined) s.direct[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
     if (a.kind === 'direct-timelock' && a.slot !== undefined) s.directTl[`${a.from}|${a.requestId}`] = { t: a.t };
-    if ((a.kind === 'duplicate' || a.kind === 'unfunded') && a.slot !== undefined) s.expectRefusal[`${a.kind}|${a.slot}`] = { t: a.t, slot: a.slot, kind: a.kind };
+    if (a.kind === 'direct' && a.slot !== undefined) (s.recentDirect ??= {})[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
+    if ((a.kind === 'duplicate' || a.kind === 'unfunded') && a.slot !== undefined) s.expectRefusal[`${a.kind}|${a.slot}`] = { t: a.t, slot: a.slot, kind: a.kind, key: `${a.from}|${a.requestId}` };
   }
   s.actionsRead = actions.length;
+  for (const [key, d] of Object.entries(s.recentDirect ?? {})) if (Date.now() - d.t > 15 * 60_000) delete s.recentDirect[key];
 
   for (const [key, d] of Object.entries(s.direct)) {
     const bound = state.seen?.[key];
@@ -182,7 +184,11 @@ async function checkActions(state) {
     // A duplicate is answered without an error (and without a charge).
     const refused = e.kind === 'duplicate' ? reply.duplicate === true || reply.error === 'Duplicate-Request'
       : reply.error === 'Insufficient-Balance';
-    if (!refused) problem(`${e.kind}-accepted`, { slot: e.slot, reply });
+    // The copy can be scheduled before the original (they are sent concurrently):
+    // then the copy is charged and the original, at the later slot, is the duplicate.
+    const orig = e.kind === 'duplicate' ? s.recentDirect?.[e.key] : undefined;
+    const swapped = !refused && orig && orig.slot > e.slot && (await slotReply(orig.slot)).duplicate === true;
+    if (!refused && !swapped) problem(`${e.kind}-accepted`, { slot: e.slot, reply });
     delete s.expectRefusal[key];
   }
 }
