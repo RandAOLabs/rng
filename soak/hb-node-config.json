@@ -19,6 +19,33 @@
     {
       "store-module": "hb_store_fs",
       "name": "cache-mainnet/fs"
+    },
+    {
+      "store-module": "hb_store_arweave",
+      "name": "cache-mainnet/arweave",
+      "index-store": [
+        {
+          "store-module": "hb_store_lmdb",
+          "name": "cache-mainnet/lmdb",
+          "sync": false
+        },
+        {
+          "store-module": "hb_store_arlmdb",
+          "name": "published-offset-index",
+          "root": "7vg2832WFsisEcBr1oBQ8ldc4EGOkjQdwW46hDvJsOs",
+          "prefix": "~arweave@2.9/offset=",
+          "to-key": "~base64url@1.0/decode/~bits@1.0/take=77",
+          "from-value": "~bits@1.0/from=_:77,start:49+integer,length:34+integer"
+        }
+      ],
+      "local-store": [
+        {
+          "store-module": "hb_store_lmdb",
+          "name": "cache-mainnet/lmdb",
+          "sync": false
+        }
+      ],
+      "remote-index": true
     }
   ],
   "irreplaceable-store": {
