@@ -166,6 +166,12 @@ async function checkActions(state) {
     if (a.kind === 'direct' && a.slot !== undefined) s.direct[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
     if (a.kind === 'direct-timelock' && a.slot !== undefined) s.directTl[`${a.from}|${a.requestId}`] = { t: a.t };
     if (a.kind === 'direct' && a.slot !== undefined) (s.recentDirect ??= {})[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
+    // An original whose send failed never landed: its first copy is the original.
+    if (a.kind === 'direct' && a.slot === undefined) (s.recentDirect ??= {})[`${a.from}|${a.requestId}`] = { t: a.t, failed: true };
+    if (a.kind === 'duplicate' && a.slot !== undefined && s.recentDirect?.[`${a.from}|${a.requestId}`]?.failed) {
+      s.recentDirect[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
+      continue;
+    }
     if ((a.kind === 'duplicate' || a.kind === 'unfunded') && a.slot !== undefined) s.expectRefusal[`${a.kind}|${a.slot}`] = { t: a.t, slot: a.slot, kind: a.kind, key: `${a.from}|${a.requestId}` };
   }
   s.actionsRead = actions.length;
