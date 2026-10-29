@@ -67,6 +67,7 @@ function runTimelockTests()
   eq("minCommits at least 2", configure({ minCommits = 1 }).error, "Bad-Parameter")
   eq("commit window at least 500", configure({ commitWindowMs = 400 }).error, "Bad-Parameter")
   eq("commit window at most 10000", configure({ commitWindowMs = 10001 }).error, "Bad-Parameter")
+  eq("T above 2^32 refused", configure({ T = 4294967297 }).error, "Bad-Parameter")
   eq("new T needs its h", configure({ T = F.T2 }).error, "Bad-H")
   eq("bad h proof refused", configure({ T = F.T2, h = F.h2, hProof = F.badHProof }).error, "Bad-H")
   eq("h of another T refused", configure({ T = F.T, h = F.h2, hProof = F.hProof2 }).error, "Bad-H")
@@ -102,7 +103,7 @@ function runTimelockTests()
   eq("request binds to round 1", r.round, 1)
   r = send(wallet(F.stranger, { Action = "Commit", Data = encode({ round = 1, c = P.r1a.c }) }))
   eq("non-validator cannot commit", r.error, "Not an active validator")
-  for i, bad in ipairs({ "0" .. P.r1a.c:sub(2), P.r1a.c:upper(), F.N, "f" .. F.N:sub(2) }) do
+  for i, bad in ipairs({ "0" .. P.r1a.c:sub(2), P.r1a.c:upper(), F.N, "f" .. F.N:sub(2), "1", F.N:sub(1, -2) .. "4" }) do
     r = send(wallet(A, { Action = "Commit", Data = encode({ round = 1, c = bad }) }))
     eq("bad commitment refused " .. i, r.error, "Bad-Commitment")
   end

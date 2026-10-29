@@ -248,6 +248,8 @@ end
 
 --- 0 < s < N, as lowercase hex without leading zeros (same length compares as strings).
 local function belowN(s) return isHex(s, #N) and (#s < #N or s < N) end
+--- c = 1 or N - 1 makes y = +-1, an output anyone knows without the puzzle.
+local TRIVIAL = { ["1"] = true, [N:sub(1, -2) .. "4"] = true } -- N ends in 5
 
 --- Ask timelock@1.0: its result table when it answers valid, else nil (any
 --- failure to reach it is a no). Tests set the global RngDeviceResolve in
@@ -566,7 +568,7 @@ H["Commit"] = function(base, msg, from, now)
   for _, a in ipairs(o.active) do if a == addr then inSet = true end end
   if not inSet then return fail(base, "Joined-After-Round-Opened") end
   if o.commits[addr] then return fail(base, "Already-Committed") end
-  if not belowN(d.c) then return fail(base, "Bad-Commitment") end
+  if not belowN(d.c) or TRIVIAL[d.c] then return fail(base, "Bad-Commitment") end
   if o.used[d.c] then return fail(base, "Reused-Commitment") end
   -- The round keeps the puzzle it opened with.
   if o.phase == "collecting" then
@@ -695,7 +697,8 @@ H["Configure"] = function(base, msg)
   for k in pairs(p) do
     if k ~= "h" and d[k] ~= nil then p[k] = int(d[k], p[k]) end
   end
-  if p.T < minT() or p.minCommits < 2 or p.commitWindowMs < 500 or p.commitWindowMs > 10000 then
+  -- T at most 2^32 bounds the device's work on a crack proof.
+  if p.T < minT() or p.T > 4294967296 or p.minCommits < 2 or p.commitWindowMs < 500 or p.commitWindowMs > 10000 then
     return fail(base, "Bad-Parameter")
   end
   if p.T ~= Timelock.params.T or d.h ~= nil or d.hProof ~= nil then

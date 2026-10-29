@@ -57,7 +57,7 @@ forge a group signature.
 
 | Name | Meaning | Default |
 |---|---|---|
-| `T` | sequential squarings per puzzle (floor 2^20) | 2^27 |
+| `T` | sequential squarings per puzzle (2^20 to 2^32) | 2^27 |
 | `h` | `g^(2^T) mod N` (2.3), set together with `T` and checked by the beacon | — |
 | `commitWindowMs` | time from a round's first commit until commits close (500-10000) | 3000 |
 | `revealWindowMs` | time from commit close until reveals are due | 10000 |
@@ -168,7 +168,7 @@ included, until after the last request it can take. A value already
 published is never used for a later request.
 
 1. **Commit.** Each active validator posts `Commit { round, c }` (`c` as
-   lowercase hex, `0 < c < N`). The first commit sets
+   lowercase hex, `1 < c < N - 1`: 1 and N - 1 give a known y). The first commit sets
    `commitDeadline = t + commitWindowMs`. Commits after the deadline are
    refused, and so is a `c` already committed in an earlier (void) attempt
    at the same round. The commit set closes at the deadline or when every
