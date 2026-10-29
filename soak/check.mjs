@@ -30,6 +30,11 @@ const s = readJson('check-state.json', {
   latencies: [], problems: [], stalls: 0, lastRound: 0, lastRoundSeenAt: 0, firstCheck: Date.now(),
   directTl: {}, tl: { complete: true, expectedAccrued: 0, protocol: 0, cracks: 0, lastRound: 0, lastRoundSeenAt: Date.now() },
 });
+// A round's line can be written and the checker stopped before the state is saved:
+// count the fees of lines the saved state has not.
+const fed = [...tlRounds.values()].filter((r) => r.fee);
+for (const r of fed.slice(s.tl.feeLines ?? 0)) { s.tl.expectedAccrued += r.fee[0]; s.tl.protocol += r.fee[1]; }
+s.tl.feeLines = fed.length;
 const problem = (kind, detail) => {
   const p = { t: Date.now(), kind, ...detail };
   s.problems.push(p);
@@ -39,6 +44,8 @@ const problem = (kind, detail) => {
 
 async function slotReply(slot) {
   const r = await readState({ node: NODE, process: BEACON, path: `compute&slot=${slot}/results/output/data` });
+  // The node sometimes answers 400 for a slot it has computed; read it again later.
+  if (r.status !== 200) return { unread: r.status };
   try { return JSON.parse(r.value); } catch { return { raw: r.value }; }
 }
 
@@ -97,16 +104,20 @@ function archiveTimelock(st) {
     }
     const valueOk = tl.roundValue(st.self, n, ys) === r.value;
     const outputs = Object.keys(r.outputs ?? {}).length;
-    const rec = { round: n, opened: r.opened, finalizedAt: r.finalizedAt, requests: r.requests, outputs, cracks, value: r.value, verified, valueOk };
-    tlRounds.set(n, rec);
-    appendLine('timelock-rounds.jsonl', rec);
     // Per request: 1 to each of k = min(contributors, charged - 1) validators, 1 to the
     // protocol, the rest back. Charges not seen while waiting are taken as the full price.
     const charged = s.tl.charged[n]?.length === r.requests ? s.tl.charged[n] : Array(r.requests).fill(outputs + 1);
+    const fee = [0, 0];
     for (const c of charged) {
-      s.tl.expectedAccrued += Math.max(0, Math.min(outputs, c - 1));
-      s.tl.protocol += Math.min(1, c);
+      fee[0] += Math.max(0, Math.min(outputs, c - 1));
+      fee[1] += Math.min(1, c);
     }
+    s.tl.expectedAccrued += fee[0];
+    s.tl.protocol += fee[1];
+    s.tl.feeLines = (s.tl.feeLines ?? 0) + 1;
+    const rec = { round: n, opened: r.opened, finalizedAt: r.finalizedAt, requests: r.requests, outputs, cracks, value: r.value, verified, valueOk, fee };
+    tlRounds.set(n, rec);
+    appendLine('timelock-rounds.jsonl', rec);
     delete s.tl.charged[n]; // rounds finish out of order, so only this one
     s.tl.cracks += cracks;
     if (!verified || !valueOk) problem('bad-timelock-round', { round: n, verified, valueOk });
@@ -169,6 +180,10 @@ async function checkActions(state) {
     } else if (bound === undefined && Date.now() - d.t > 120_000 && !d.classified) {
       // Not bound to a round: the beacon must have refused it. Find out why.
       const reply = await slotReply(d.slot);
+      if (reply.unread) {
+        if (Date.now() - d.t > 360_000) { problem('reply-unreadable', { slot: d.slot, status: reply.unread }); delete s.direct[key]; }
+        continue;
+      }
       d.classified = reply.error ?? 'no reply';
       if (reply.error !== 'Insufficient-Balance') problem('direct-refused', { key, reply: d.classified });
       delete s.direct[key];
@@ -181,13 +196,19 @@ async function checkActions(state) {
   for (const [key, e] of Object.entries(s.expectRefusal)) {
     if (Date.now() - e.t < 60_000) continue;
     const reply = await slotReply(e.slot);
+    if (reply.unread) {
+      if (Date.now() - e.t > 240_000) { problem('reply-unreadable', { slot: e.slot, status: reply.unread }); delete s.expectRefusal[key]; }
+      continue;
+    }
     // A duplicate is answered without an error (and without a charge).
     const refused = e.kind === 'duplicate' ? reply.duplicate === true || reply.error === 'Duplicate-Request'
       : reply.error === 'Insufficient-Balance';
     // The copy can be scheduled before the original (they are sent concurrently):
     // then the copy is charged and the original, at the later slot, is the duplicate.
     const orig = e.kind === 'duplicate' ? s.recentDirect?.[e.key] : undefined;
-    const swapped = !refused && orig && orig.slot > e.slot && (await slotReply(orig.slot)).duplicate === true;
+    const origReply = !refused && orig && orig.slot > e.slot ? await slotReply(orig.slot) : {};
+    if (origReply.unread && Date.now() - e.t < 240_000) continue;
+    const swapped = origReply.duplicate === true;
     if (!refused && !swapped) problem(`${e.kind}-accepted`, { slot: e.slot, reply });
     delete s.expectRefusal[key];
   }
@@ -261,6 +282,7 @@ function report(state) {
       timelockFeesBalance: !counts['timelock-fee-mismatch'], timelockNoStalls: !counts['timelock-stall'] && !counts['timelock-direct-lost'], noWrongResults: !counts['wrong-result'],
       noLostRequests: !counts['direct-lost'] && !counts['contract-lost'],
       refusalsHeld: !counts['duplicate-accepted'] && !counts['unfunded-accepted'],
+      resultsReadable: !counts['reply-unreadable'],
       noStalls: !counts.stall, latencyOk: p95 === null || p95 <= state.cadenceMs + 2000,
       diceUniform: total < 600 || chi < 20.52, // p < 0.001 at 5 degrees of freedom
       fullDuration: hours >= HOURS,
