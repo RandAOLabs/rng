@@ -10,6 +10,7 @@
   "process-delta-cache": true,
   "process-state-blobs": true,
   "store-retention": true,
+  "store-retention-checkpoints": 60,
   "store": [
     {
       "store-module": "hb_store_lmdb",
