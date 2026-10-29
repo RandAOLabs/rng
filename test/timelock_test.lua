@@ -290,7 +290,7 @@ function runTimelockTests()
 
   -- Heartbeat on (the default), rounds run with nobody waiting; off, a round needs a request.
   Timelock.pending = {}
-  local open = info().open.round
+  local open = math.tointeger(info().open.round)
   configure({ heartbeat = 0 })
   r = commit(A, open, "r9a")
   eq("heartbeat off: no round without a request", r.error, "Nothing-Pending")

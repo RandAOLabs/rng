@@ -75,8 +75,24 @@ Beacon.partials = Beacon.partials or { round = 0, by = {} }
 local GUARDS = { seen = true, seenUntil = true, credited = true, creditFloor = true }
 local GuardsChanged = false
 
+-- Digit strings are parsed exactly: on a node's Luerl, tonumber() returns a
+-- float, which rounds integers above 2^53.
+local function digits(v)
+  if type(v) ~= "string" or #v > 19 or not v:match("^%-?%d+$") then return nil end
+  local neg = v:sub(1, 1) == "-"
+  local n = 0
+  for k = neg and 2 or 1, #v do
+    local d = v:byte(k) - 48
+    if n > (math.maxinteger - d) // 10 then return nil end
+    n = n * 10 + d
+  end
+  return neg and -n or n
+end
+
 local function int(v, default)
   if v == nil then return default end
+  local e = digits(v)
+  if e then return e end
   local n = tonumber(v)
   if not n then return default end
   return math.tointeger(n) or default

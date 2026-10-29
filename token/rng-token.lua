@@ -55,8 +55,24 @@ TokenCheckpointRevision = TokenCheckpointRevision or 0
 
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
+-- Digit strings are parsed exactly: on a node's Luerl, tonumber() returns a
+-- float, which rounds integers above 2^53.
+local function digits(v)
+  if type(v) ~= "string" or #v > 19 or not v:match("^%-?%d+$") then return nil end
+  local neg = v:sub(1, 1) == "-"
+  local n = 0
+  for k = neg and 2 or 1, #v do
+    local d = v:byte(k) - 48
+    if n > (math.maxinteger - d) // 10 then return nil end
+    n = n * 10 + d
+  end
+  return neg and -n or n
+end
+
 local function int(v, default)
   if v == nil then return default end
+  local e = digits(v)
+  if e then return e end
   local n = tonumber(v)
   if not n then return default end
   return math.tointeger(n) or default
@@ -64,10 +80,9 @@ end
 
 local function quantity(v)
   if v == nil or v == "" then return nil, "Quantity is required" end
-  local n = tonumber(v)
-  if not n or n ~= math.floor(n) then return nil, "Quantity must be a whole atomic amount" end
-  n = math.tointeger(n)
-  if not n or n <= 0 then return nil, "Quantity must be positive" end
+  local n = digits(tostring(v))
+  if not n then return nil, "Quantity must be a whole atomic amount" end
+  if n <= 0 then return nil, "Quantity must be positive" end
   return n
 end
 

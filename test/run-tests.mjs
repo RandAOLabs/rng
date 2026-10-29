@@ -15,6 +15,7 @@ const AOS_WASM = process.env.AOS_WASM || path.join(PARALITH, 'backend/native/mod
 
 const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
 const bundle = [
+  read('vendor/json.lua'), // a node has no json module of its own
   'rng = (function()', read('lib/rng.lua'), 'end)()',
   read('test/rng_test.lua'),
 ].join('\n');
