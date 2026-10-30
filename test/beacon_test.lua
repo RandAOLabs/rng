@@ -135,6 +135,13 @@ function runBeaconTests()
   send(wallet(F.stranger, { Action = "Get-Info" }))
   eq("state publishes no seen map", json.decode(base.beaconstate).seen, nil)
   eq("free message leaves the guards alone", base.beaconguards, guards)
+  -- Request ids are published in shards by bound round, not in the guards.
+  eq("guards carry no seen map", json.decode(base.beaconguards).seen, nil)
+  local shards = 0
+  for k, v in pairs(base) do
+    if type(k) == "string" and k:match("^beaconseen%-") and json.decode(v)[F.game .. "|" .. F.req1] then shards = shards + 1 end
+  end
+  eq("request id published in one shard", shards, 1)
 
   -- A VM that lost its globals comes back from the published state.
   Beacon = nil
@@ -143,6 +150,8 @@ function runBeaconTests()
   eq("state restored after losing globals", info().round, 2)
   eq("balances restored", Beacon.balances[F.game], 4)
   check("guards restored", Beacon.seen[F.game .. "|" .. F.req1] ~= nil and Beacon.credited["1"] == true)
+  r = send(delivery(F.game, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = F.req1 }))
+  check("duplicate still refused after restore", r.duplicate == true)
 
   -- Withdraw takes whole amounts only.
   r = send(delivery(F.game, { Action = "Withdraw", Quantity = "1.5" }))

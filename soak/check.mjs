@@ -42,11 +42,21 @@ const problem = (kind, detail) => {
   log('PROBLEM', kind, JSON.stringify(detail));
 };
 
-async function slotReply(slot) {
-  const r = await readState({ node: NODE, process: BEACON, path: `compute&slot=${slot}/results/output/data` });
+async function slotReply(slot, pid = BEACON) {
+  const r = await readState({ node: NODE, process: pid, path: `compute&slot=${slot}/results/output/data` });
   // The node sometimes answers 400 for a slot it has computed; read it again later.
   if (r.status !== 200) return { unread: r.status };
   try { return JSON.parse(r.value); } catch { return { raw: r.value }; }
+}
+
+// The round a direct request was bound to, from its own reply (the beacons publish
+// request ids in shards, so the checker no longer reads them whole).
+async function boundOf(d, pid) {
+  if (d.bound === undefined && d.slot !== undefined && Date.now() - d.t > 5_000) {
+    const reply = await slotReply(d.slot, pid);
+    if (!reply.unread) d.bound = reply.round ?? null;
+  }
+  return d.bound ?? undefined;
 }
 
 function archive(state) {
@@ -124,7 +134,7 @@ function archiveTimelock(st) {
   }
 }
 
-function checkTimelock(st, info) {
+async function checkTimelock(st, info) {
   const accrued = Object.values(st.accrued ?? {}).reduce((a, b) => a + Number(b), 0);
   // Rounds that finished before the checker first looked are taken as given:
   // fees are counted from that snapshot on, and slashes from the bonds then.
@@ -148,7 +158,7 @@ function checkTimelock(st, info) {
     s.tl.lastRoundSeenAt = Date.now();
   }
   for (const [key, d] of Object.entries(s.directTl)) {
-    const bound = st.seen?.[key];
+    const bound = await boundOf(d, TIMELOCK);
     const round = bound !== undefined ? tlRounds.get(Number(bound)) : undefined;
     if (round) {
       s.latencies.push({ t: d.t, ms: round.finalizedAt - d.t, via: 'timelock' });
@@ -164,7 +174,7 @@ async function checkActions(state) {
   const actions = readLines('actions.jsonl');
   for (const a of actions.slice(s.actionsRead)) {
     if (a.kind === 'direct' && a.slot !== undefined) s.direct[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
-    if (a.kind === 'direct-timelock' && a.slot !== undefined) s.directTl[`${a.from}|${a.requestId}`] = { t: a.t };
+    if (a.kind === 'direct-timelock' && a.slot !== undefined) s.directTl[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
     if (a.kind === 'direct' && a.slot !== undefined) (s.recentDirect ??= {})[`${a.from}|${a.requestId}`] = { t: a.t, slot: a.slot };
     // An original whose send failed never landed: its first copy is the original.
     if (a.kind === 'direct' && a.slot === undefined) (s.recentDirect ??= {})[`${a.from}|${a.requestId}`] = { t: a.t, failed: true };
@@ -178,7 +188,7 @@ async function checkActions(state) {
   for (const [key, d] of Object.entries(s.recentDirect ?? {})) if (Date.now() - d.t > 15 * 60_000) delete s.recentDirect[key];
 
   for (const [key, d] of Object.entries(s.direct)) {
-    const bound = state.seen?.[key];
+    const bound = await boundOf(d, BEACON);
     const round = bound !== undefined ? rounds.get(Number(bound)) : undefined;
     if (round) {
       s.latencies.push({ t: d.t, ms: round.at - d.t, via: 'direct' });
@@ -324,17 +334,15 @@ async function archiveFor(ms) {
 
 for (;;) {
   try {
-    const [state, info, guards] = await Promise.all([read(BEACON, 'beaconstate'), read(BEACON, 'beaconinfo'), read(BEACON, 'beaconguards')]);
-    state.seen = guards.seen; // published apart from the state
+    const [state, info] = await Promise.all([read(BEACON, 'beaconstate'), read(BEACON, 'beaconinfo')]);
     archive(state);
     await checkActions(state);
     await checkContracts();
     checkInvariants(state, info);
     if (TIMELOCK) {
-      const [tst, tinfo, tguards] = await Promise.all([read(TIMELOCK, 'timelockstate'), read(TIMELOCK, 'beaconinfo'), read(TIMELOCK, 'timelockguards')]);
-      tst.seen = tguards.seen; // published apart from the state
+      const [tst, tinfo] = await Promise.all([read(TIMELOCK, 'timelockstate'), read(TIMELOCK, 'beaconinfo')]);
       archiveTimelock(tst);
-      checkTimelock(tst, tinfo);
+      await checkTimelock(tst, tinfo);
     }
     if (s.latencies.length > 200_000) s.latencies = s.latencies.slice(-100_000);
     writeJson('check-state.json', s);

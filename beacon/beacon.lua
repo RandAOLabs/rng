@@ -59,7 +59,7 @@ local function freshState()
     protocolAccrued = 0,
     pending = {},         -- "r" -> list of { requester, requestId, tier }
     pendingCount = 0,
-    seen = {},            -- requester|requestId -> round it was bound to; published in `beaconguards`
+    seen = {},            -- requester|requestId -> round it was bound to; published in `beaconseen-<shard>`
     seenUntil = {},       -- "bound round // 50" -> when that batch of `seen` may be forgotten (ms)
     credited = {},        -- token reference seq -> true (notices may arrive twice); in `beaconguards`
     creditFloor = 0,      -- every reference seq at or below this counts as credited
@@ -99,6 +99,28 @@ local function int(v, default)
 end
 
 -- json.decode floats every number; turn integral floats back into integers.
+-- `seen` is published in shards of SEEN_SHARD bound rounds, `beaconseen-<shard>`,
+-- and a message rewrites only the shards it touched: re-encoding the whole map
+-- (10 minutes of request ids) on every request made each request cost more
+-- the busier the beacon was.
+local SEEN_SHARD = 5
+local SEEN_PREFIX = "beaconseen-"
+local SeenDirty = {}
+local function shardOf(bound) return tostring(int(bound, 0) // SEEN_SHARD) end
+-- shard -> { id -> bound }, rebuilt from `seen` after a restore.
+local SeenIdx = nil
+local function seenIndex()
+  if not SeenIdx then
+    SeenIdx = {}
+    for id, bound in pairs(Beacon.seen) do
+      local sh = shardOf(bound)
+      SeenIdx[sh] = SeenIdx[sh] or {}
+      SeenIdx[sh][id] = bound
+    end
+  end
+  return SeenIdx
+end
+
 local function deflate(v)
   if type(v) == "number" then return math.tointeger(v) or v end
   if type(v) ~= "table" then return v end
@@ -112,10 +134,19 @@ local function restore(base)
   local ok, saved = pcall(json.decode, base.beaconstate or "")
   if ok and type(saved) == "table" then
     Beacon = freshState()
+    SeenIdx = nil
     for k, v in pairs(deflate(saved)) do Beacon[k] = v end
     local gok, guards = pcall(json.decode, base.beaconguards or "")
     if gok and type(guards) == "table" then
       for k in pairs(GUARDS) do if guards[k] ~= nil then Beacon[k] = deflate(guards[k]) end end
+    end
+    for k, v in pairs(base) do
+      if type(k) == "string" and k:sub(1, #SEEN_PREFIX) == SEEN_PREFIX and type(v) == "string" then
+        local sok, part = pcall(json.decode, v)
+        if sok and type(part) == "table" then
+          for id, bound in pairs(part) do Beacon.seen[id] = int(bound, 0) end
+        end
+      end
     end
   end
 end
@@ -354,6 +385,10 @@ H["Request-Random"] = function(base, msg, from, now)
   -- nothing about the bound round exists while requests can still bind to it.
   local r = tostring(int(Beacon.round, 0) + 2)
   Beacon.seen[key] = int(r, 0)
+  local ix, sh = seenIndex(), shardOf(r)
+  ix[sh] = ix[sh] or {}
+  ix[sh][key] = int(r, 0)
+  SeenDirty[sh] = true
   local batch = tostring(int(r, 0) // 50)
   Beacon.seenUntil[batch] = math.max(int(Beacon.seenUntil[batch], 0), math.max(at or now, now) + GUARD_MS)
   GuardsChanged = true
@@ -408,7 +443,12 @@ local function finalize(base, r, sig, signers, now)
     end
     if next(expired) then
       for k, bound in pairs(Beacon.seen) do
-        if expired[int(bound, 0) // 50] then Beacon.seen[k] = nil end
+        if expired[int(bound, 0) // 50] then
+          Beacon.seen[k] = nil
+          local ix, sh = seenIndex(), shardOf(bound)
+          if ix[sh] then ix[sh][k] = nil end
+          SeenDirty[sh] = true
+        end
       end
       GuardsChanged = true
     end
@@ -601,6 +641,7 @@ end
 function compute(base, req, opts)
   base = type(base) == "table" and base or {}
   GuardsChanged = false
+  SeenDirty = {}
   restore(base)
   resolveOwner(base)
   local raw
@@ -620,8 +661,20 @@ function compute(base, req, opts)
   local saved = {}
   for k, v in pairs(Beacon) do if type(v) ~= "function" and not GUARDS[k] then saved[k] = v end end
   result.beaconstate = encode(saved)
+  if result.beaconguards == nil then
+    for sh in pairs(seenIndex()) do SeenDirty[sh] = true end
+  end
+  for sh in pairs(SeenDirty) do
+    local part = seenIndex()[sh]
+    if part and next(part) then
+      result[SEEN_PREFIX .. sh] = encode(jsonObject(part))
+    else
+      result[SEEN_PREFIX .. sh] = nil
+      seenIndex()[sh] = nil
+    end
+  end
   if GuardsChanged or result.beaconguards == nil then
-    result.beaconguards = encode({ seen = jsonObject(Beacon.seen), seenUntil = jsonObject(Beacon.seenUntil),
+    result.beaconguards = encode({ seenUntil = jsonObject(Beacon.seenUntil),
                                    credited = jsonObject(Beacon.credited), creditFloor = int(Beacon.creditFloor, 0) })
 
   end

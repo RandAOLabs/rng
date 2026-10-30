@@ -64,7 +64,7 @@ local function freshState()
     pending = {},          -- "r" -> list of { requester, requestId, charged }
     rounds = {},           -- "r" -> finalized record
     balances = {}, accrued = {}, protocolAccrued = 0,
-    seen = {},             -- requester|requestId -> round it was bound to; published in `timelockguards`
+    seen = {},             -- requester|requestId -> round it was bound to; published in `timelockseen-<shard>`
     seenUntil = {},        -- "bound round // 50" -> when that batch of `seen` may be forgotten (ms)
     credited = {},         -- token reference seq -> true (notices may arrive twice); in `timelockguards`
     creditFloor = 0,       -- every reference seq at or below this counts as credited
@@ -97,6 +97,28 @@ local function int(v, d)
   return n and math.tointeger(n) or d
 end
 
+-- `seen` is published in shards of SEEN_SHARD bound rounds, `timelockseen-<shard>`,
+-- and a message rewrites only the shards it touched: re-encoding the whole map
+-- (10 minutes of request ids) on every request made each request cost more
+-- the busier the beacon was.
+local SEEN_SHARD = 5
+local SEEN_PREFIX = "timelockseen-"
+local SeenDirty = {}
+local function shardOf(bound) return tostring(int(bound, 0) // SEEN_SHARD) end
+-- shard -> { id -> bound }, rebuilt from `seen` after a restore.
+local SeenIdx = nil
+local function seenIndex()
+  if not SeenIdx then
+    SeenIdx = {}
+    for id, bound in pairs(Timelock.seen) do
+      local sh = shardOf(bound)
+      SeenIdx[sh] = SeenIdx[sh] or {}
+      SeenIdx[sh][id] = bound
+    end
+  end
+  return SeenIdx
+end
+
 local function deflate(v)
   if type(v) == "number" then return math.tointeger(v) or v end
   if type(v) ~= "table" then return v end
@@ -109,10 +131,19 @@ local function restore(base)
   local ok, saved = pcall(json.decode, base.timelockstate or "")
   if ok and type(saved) == "table" then
     Timelock = freshState()
+    SeenIdx = nil
     for k, v in pairs(deflate(saved)) do Timelock[k] = v end
     local gok, guards = pcall(json.decode, base.timelockguards or "")
     if gok and type(guards) == "table" then
       for k in pairs(GUARDS) do if guards[k] ~= nil then Timelock[k] = deflate(guards[k]) end end
+    end
+    for k, v in pairs(base) do
+      if type(k) == "string" and k:sub(1, #SEEN_PREFIX) == SEEN_PREFIX and type(v) == "string" then
+        local sok, part = pcall(json.decode, v)
+        if sok and type(part) == "table" then
+          for id, bound in pairs(part) do Timelock.seen[id] = int(bound, 0) end
+        end
+      end
     end
   end
 end
@@ -426,7 +457,12 @@ local function finalize(base, o, now)
     end
     if next(expired) then
       for k, bound in pairs(Timelock.seen) do
-        if expired[int(bound, 0) // 50] then Timelock.seen[k] = nil end
+        if expired[int(bound, 0) // 50] then
+          Timelock.seen[k] = nil
+          local ix, sh = seenIndex(), shardOf(bound)
+          if ix[sh] then ix[sh][k] = nil end
+          SeenDirty[sh] = true
+        end
       end
       GuardsChanged = true
     end
@@ -533,6 +569,10 @@ H["Request-Random"] = function(base, msg, from, now)
   local r = current().round
   Timelock.balances[from] = bal - cost
   Timelock.seen[key] = r
+  local ix, sh = seenIndex(), shardOf(r)
+  ix[sh] = ix[sh] or {}
+  ix[sh][key] = r
+  SeenDirty[sh] = true
   local batch = tostring(r // 50)
   Timelock.seenUntil[batch] = math.max(int(Timelock.seenUntil[batch], 0), math.max(at or now, now) + GUARD_MS)
   GuardsChanged = true
@@ -805,7 +845,7 @@ function compute(base, req)
   local msg = caseInsensitive(type(raw) == "table" and raw or {})
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
-  Notices, GuardsChanged = {}, false
+  Notices, GuardsChanged, SeenDirty = {}, false, {}
   local handler = resolveHandler(msg.Action or "none")
   local result
   if not handler then
@@ -822,8 +862,20 @@ function compute(base, req)
   local saved = {}
   for k, v in pairs(Timelock) do if not GUARDS[k] then saved[k] = v end end
   result.timelockstate = encode(saved)
+  if result.timelockguards == nil then
+    for sh in pairs(seenIndex()) do SeenDirty[sh] = true end
+  end
+  for sh in pairs(SeenDirty) do
+    local part = seenIndex()[sh]
+    if part and next(part) then
+      result[SEEN_PREFIX .. sh] = encode(jsonObject(part))
+    else
+      result[SEEN_PREFIX .. sh] = nil
+      seenIndex()[sh] = nil
+    end
+  end
   if GuardsChanged or result.timelockguards == nil then
-    result.timelockguards = encode({ seen = jsonObject(Timelock.seen), seenUntil = jsonObject(Timelock.seenUntil),
+    result.timelockguards = encode({ seenUntil = jsonObject(Timelock.seenUntil),
                                      credited = jsonObject(Timelock.credited), creditFloor = int(Timelock.creditFloor, 0) })
   end
   result.timelockrev = string.format("%d", Timelock.rev)

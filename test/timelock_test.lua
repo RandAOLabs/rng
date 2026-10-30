@@ -252,7 +252,11 @@ function runTimelockTests()
   reveal(A, 8, "r8a2"); reveal(B, 8, "r8b"); reveal(C, 8, "r8c")
   eq("round 8 finalized with its own h", info().round, 8)
 
-  check("guards published apart from the state", state().seen == nil and json.decode(base.timelockguards).seen[F.game .. "|req-1"] == 1)
+  local inShard = false
+  for k, v in pairs(base) do
+    if type(k) == "string" and k:match("^timelockseen%-") and json.decode(v)[F.game .. "|req-1"] == 1 then inShard = true end
+  end
+  check("guards published apart from the state", state().seen == nil and json.decode(base.timelockguards).seen == nil and inShard)
   -- A VM that lost its globals comes back from the published state.
   Timelock = { rev = 0 }
   tick()
