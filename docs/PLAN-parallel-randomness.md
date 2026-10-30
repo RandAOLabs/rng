@@ -32,16 +32,37 @@ To scale without limit, take requests off the beacon:
 
 ## Measured (run 10 step-load, one node, 4 vCPU)
 
-| Request rate | Randoms delivered/s | Latency p50 / p95 | Node messages/s | HyperBEAM CPU |
-|---|---|---|---|---|
-| 1/s | 1.1 | 1.4 s / 1.7 s | 14 | 165% |
-| 6/s | 5.7 | 1.5 s / 2.2 s | 24 | 315–350% |
-| 12/s and up | in progress | | | |
+| Run | Request rate | Randoms delivered/s | Latency p50 / p95 | Node messages/s | HyperBEAM CPU | Result |
+|---|---|---|---|---|---|---|
+| 10a (before fix) | 6/s | 6.0 | 1.5 s / 2.3 s | 24 | 300–350% | clean |
+| 10a (before fix) | 12/s | 1–3 | 21 s / 44 s | 10–13 | 180% | flooded in 4 min |
+| 10b (sharded guards) | 6/s | 6.3 | 1.4 s / 2.0 s | 25 | 250–340% | clean |
+| 10b (sharded guards) | 12/s | 10–12.8 | 1.5→7.8 s / 2.2→22 s | 33 | 350% | delivers, latency creeping up |
+| 10b (sharded guards) | 24/s | 5–7 | 38 s / 105 s | 18–25 | 200% | flooded in 3 min |
 
-**First bottleneck: node CPU.** At 6 requests/s, HyperBEAM uses about 3.5 of 4 cores,
-while the Lua compute itself takes only about 1.1 core. Most of the cost is per-message
-overhead (signature checks, codec, store writes, pushes), not randomness. The final
-ceiling and the reason flooding starts are added below when the step test ends.
+**Why it floods: a beacon process is single-threaded, and its cost per message grew
+with load.** Flooding starts when one beacon process needs more than one core's worth of
+Lua time. Once it falls behind, its queue grows, pushes back up (p95 above 40 s), and HyperBEAM
+CPU drops: work waits on the one busy process instead of using the free cores.
+
+- **Before the fix (run 10a):** every Request-Random re-encoded the whole duplicate guard
+  (`seen`, 10 minutes of request ids, 452 KB). Lua time per request rose from about 10 ms to
+  364 ms, and the quick beacon saturated between 6 and 12 requests/s.
+- **After the fix (run 10b, commit 92ca82e):** request ids are published in small shards,
+  and each request rewrites only its shard. Quick beacon Request-Random fell to 54 ms
+  and throughput doubled to about 12 randoms/s.
+- **First bottleneck now: the time-lock beacon.** At 12 requests/s it used 77% of one core
+  (Request-Random 106 ms, Reveal 154 ms, Commit 77 ms per message). The quick beacon used
+  60% of one core. Both still JSON-encode their whole state and run a full garbage
+  collection on every message, so the cost per message still grows with state size.
+- **Node CPU** is the second limit: about 3.5 of 4 cores at 12 requests/s.
+
+**Next fixes, by expected gain:**
+
+1. Publish state incrementally: only changed fields or per-key results, never the whole
+   state per message. Drop the full `collectgarbage("collect")` per message.
+2. Design 1 below: requests leave the beacon entirely, which removes this ceiling.
+3. Shards (Design 2) and more nodes (Design 3) for whatever per-process limit remains.
 
 ## Design 1: one beacon, unlimited consumers (largest win)
 
