@@ -11,7 +11,7 @@
   "process-state-blobs": true,
   "store-retention": true,
   "store-retention-checkpoints": 60,
-  "store-retention-recent-slots": 30000,
+  "store-retention-recent-slots": 100000,
   "store": [
     {
       "store-module": "hb_store_lmdb",
