@@ -69,5 +69,6 @@
     "miniflare": {
       "sharp": "0.35.5"
     }
-  }
+  },
+  "license": "UNLICENSED"
 }

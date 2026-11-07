@@ -65,7 +65,7 @@ build from the repo root: `docker build -f validator/Dockerfile.anyhonest .`,
 Copyright © 2026 **CipherPlay Inc.** and contributors. RNG Labs is a CipherPlay
 Inc. product and the protocol steward.
 
-All rights are reserved unless an explicit license says otherwise. This
-repository does not currently grant an open-source or commercial license to
-the protocol implementation, provider software, beacon service, or SDK.
-Contact CipherPlay Inc. for licensing.
+- `lib/` and `validator/` are MIT licensed (see their LICENSE files), so anyone can
+  build on the library or run a validator.
+- Everything else is all rights reserved. See [LICENSE](LICENSE). Contact
+  CipherPlay Inc. for licensing.

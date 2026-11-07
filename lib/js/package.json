@@ -4,12 +4,14 @@
   "description": "RandAO RNG browser/Node client: fair play, pay-and-request, history lookups, derivation. No dependencies.",
   "type": "module",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "exports": {
     ".": "./index.ts",
     "./fair-client": "./fair-client.ts",
     "./history": "./history.ts",
     "./derive": "./derive.ts"
   },
-  "files": ["*.ts"]
+  "files": [
+    "*.ts"
+  ]
 }

@@ -1,0 +1,11 @@
+Copyright (c) 2026 CipherPlay Inc. and contributors. All rights reserved.
+
+RNG Labs is a CipherPlay Inc. product and the protocol steward.
+
+Exceptions, each under the MIT License in its own LICENSE file:
+  lib/        consumer libraries (lib/LICENSE)
+  validator/  validator, cracker and provider software (validator/LICENSE)
+
+Everything else in this repository (protocol/, site/, deploy/, docs/ and the
+repository root) is proprietary. No license is granted to use, copy, modify or
+distribute it without written permission from CipherPlay Inc.
