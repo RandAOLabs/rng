@@ -143,6 +143,19 @@ test('reveals only once the beacon clock is past commitDeadline, whatever phase 
   assert.deepEqual(kinds(plan(info, ctx(dir, { beaconNow: 105000 }))), ['Reveal']);
 });
 
+test('reveals before commitDeadline once the whole active set has committed', () => {
+  const dir = tmp(), s = secretStore(dir), a = tl.newAlpha(), c = tl.commit(a);
+  s.save(3, c, a);
+  const r3 = { round: 3, phase: 'reveal', commitDeadline: 105000, active: [ME, 'v2', 'v3'],
+    committed: { [ME]: c.slice(0, 16), v2: 'y', v3: 'z' }, revealed: [] };
+  const info = baseInfo({ revealing: [r3], open: { round: 4, phase: 'commit', committed: { [ME]: 'x' }, active: [ME] } });
+  assert.deepEqual(kinds(plan(info, ctx(dir, { beaconNow: 100000 }))), ['Reveal']);
+  // One of the set has not committed: wait for the deadline.
+  delete r3.committed.v3;
+  assert.deepEqual(plan(info, ctx(dir, { beaconNow: 104999 })).actions, []);
+  assert.deepEqual(kinds(plan(info, ctx(dir, { beaconNow: 105000 }))), ['Reveal']);
+});
+
 test('Act batches the commit and every reveal into one message', () => {
   const dir = tmp(), s = secretStore(dir);
   const secrets = [5, 6].map((r) => { const a = tl.newAlpha(), c = tl.commit(a); s.save(r, c, a); return { r, a, c }; });

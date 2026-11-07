@@ -210,8 +210,14 @@ export function plan(info, ctx) {
   for (const x of rounds) {
     const shown = obj(x.committed)[me], r = num(x.round);
     if (x.phase !== 'reveal' || typeof shown !== 'string' || list(x.revealed).includes(me) || !D('Reveal', r, 3000)) continue;
-    // The phase is the node's word; the beacon clock must agree commits closed.
-    if (beaconNow < num(x.commitDeadline)) continue;
+    // Reveal once commits are closed: the round's whole active set has
+    // committed, or the beacon clock is past commitDeadline. The beacon closes
+    // the commit phase the moment the set is complete (closeIfDue), after which
+    // nobody can commit, so revealing then cannot be front-run; waiting for the
+    // deadline as well held every round to the full commit window.
+    const set = list(x.active), done = obj(x.committed);
+    const complete = set.length > 0 && set.every((v) => done[v] !== undefined);
+    if (!complete && beaconNow < num(x.commitDeadline)) continue;
     const alpha = secrets.secretFor(r, shown);
     if (alpha) actions.push({ kind: 'Reveal', round: r, data: { round: r, alpha } });
     else ctx.log?.(`round ${r}: no secret on disk for our commit; cannot reveal`);
