@@ -5,10 +5,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import * as tl from '../provider/anyhonest.mjs';
+import * as tl from '../anyhonest.mjs';
 import {
   plan, batch, Clock, Health, backoff, secretStore, createValidator, bondCommand, checkSuccessor, bondTags,
-} from '../provider/anyhonest-validator.mjs';
+} from '../anyhonest-validator.mjs';
 
 const ME = 'me'.padEnd(43, '0');
 const OTHER = 'ot'.padEnd(43, '0');

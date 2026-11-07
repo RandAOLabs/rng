@@ -1,9 +1,9 @@
-// History lookups (provider/history.mjs) against a mocked slot store: state
+// History lookups (validator/history.mjs) against a mocked slot store: state
 // is cumulative, so a key read at slot n holds the value last written at or
 // before n, as compute&slot=n/<key> does on HyperBEAM.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findRound, firstSlot, indexLookup } from '../provider/history.mjs';
+import { findRound, firstSlot, indexLookup } from '../history.mjs';
 
 function slotStore() {
   const writes = new Map(); // key -> [[slot, value], ...] ascending

@@ -3,7 +3,7 @@
 The public console is recreated through `compose.yaml`, not an ad hoc
 `docker run`. `native-testnet.env` pins the token, threshold beacon,
 Any-Honest beacon, and advisory DAO processes from
-`v2/deploy/native-testnet.json`.
+`deploy/native-testnet.json`.
 
 Build and validate a candidate image, then promote it under the stable tag:
 

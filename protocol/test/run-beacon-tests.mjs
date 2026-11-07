@@ -7,13 +7,13 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
-import * as bls from '../provider/bls.mjs';
+import * as bls from '../../validator/bls.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const V2 = path.resolve(HERE, '..');
+const ROOT = path.resolve(HERE, '../..');
 const AOS_WASM = process.env.AOS_WASM
   || path.join(process.env.PARALITH_ROOT || 'C:/REPO/paralith-mono', 'backend/native/module/AOS.wasm');
-const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const sha = (s) => createHash('sha256').update(s, 'latin1').digest('hex');
 const addr = (s) => s.padEnd(43, '_');
 
@@ -55,15 +55,15 @@ const luaValue = (v) => Array.isArray(v) ? `{ ${v.map(luaValue).join(', ')} }`
 const fixtures = `F = { ${Object.entries(F).map(([k, v]) => `${k} = ${luaValue(v)}`).join(',\n  ')} }`;
 
 const bundle = [
-  read('vendor/json.lua'),
-  'local jsonx = (function()', read('vendor/jsonenc.lua'), 'end)()',
+  read('protocol/vendor/json.lua'),
+  'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
   'json = require(".json")',
   'Owner = nil -- AOS presets Owner; on a node the contract resolves it from the spawn signer',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
-  read('beacon/beacon.lua'),
+  read('protocol/beacon/beacon.lua'),
   fixtures,
-  read('test/beacon_test.lua'),
+  read('protocol/test/beacon_test.lua'),
 ].join('\n');
 
 function verdict(text) {

@@ -1,9 +1,9 @@
 // HyperBEAM RNG provider daemon by RNG Labs, a CipherPlay Inc. product.
 //
-//   node provider/daemon.mjs init <config>   create this node's provider wallet and DKG transport key;
+//   node validator/daemon.mjs init <config>   create this node's provider wallet and DKG transport key;
 //                                            print the wallet address and transport public key
-//   node provider/daemon.mjs dkg-unsafe-http <config>  development-only ceremony over unauthenticated HTTP
-//   node provider/daemon.mjs run  <config>   post partials and attest fast-tier rounds that have requests
+//   node validator/daemon.mjs dkg-unsafe-http <config>  development-only ceremony over unauthenticated HTTP
+//   node validator/daemon.mjs run  <config>   post partials and attest fast-tier rounds that have requests
 //
 // Config (JSON): { index, n, t, beacon, listen, dataDir, wallet, hbNode,
 //                  peers: [{ index, url, dkgPub }] }   (peers excludes self)
@@ -13,7 +13,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import * as bls from './bls.mjs';
 import { makeAo } from './ao.mjs';
-import { jwkToAddress } from '../vendor/hbclient.mjs';
+import { jwkToAddress } from './vendor/hbclient.mjs';
 
 const [cmd, configPath] = process.argv.slice(2);
 const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));

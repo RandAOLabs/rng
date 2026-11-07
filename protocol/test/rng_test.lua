@@ -1,4 +1,4 @@
--- rng_test.lua: tests for v2/lib/rng.lua. Concatenated after rng.lua (which
+-- rng_test.lua: tests for lib/rng.lua. Concatenated after rng.lua (which
 -- must be loaded into a global `rng`) by run-tests.mjs, and also POSTed as-is
 -- to a HyperBEAM node's ~lua@5.3a device to run under Luerl.
 -- Golden values come from test/reference.mjs (node:crypto).

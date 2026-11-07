@@ -17,7 +17,7 @@ server {
 
     # Temporary native-device staging route. Remove after the production
     # HyperBEAM node includes rng@1.0. Only the calls lib/wallet.ts makes (and
-    # the ops health check in v2/deploy/README.md) reach the staging node;
+    # the ops health check in deploy/README.md) reach the staging node;
     # every other path or query string under /hb-stage/ is a 404 (wrong
     # method: 403).
     location /hb-stage/ {

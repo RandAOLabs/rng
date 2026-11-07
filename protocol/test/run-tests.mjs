@@ -1,4 +1,4 @@
-// Runs v2 Lua tests.
+// Runs the lib/rng.lua Lua tests.
 //   node test/run-tests.mjs            local, AOS wasm via @permaweb/ao-loader
 //   node test/run-tests.mjs --live URL  a HyperBEAM node's ~lua@5.3a (Luerl, the RC7 runtime)
 // AO_LOADER / AOS_WASM override where the loader and module come from; they
@@ -8,15 +8,15 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const V2 = path.resolve(HERE, '..');
+const ROOT = path.resolve(HERE, '../..');
 const PARALITH = process.env.PARALITH_ROOT || 'C:/REPO/paralith-mono';
 const AO_LOADER = process.env.AO_LOADER || path.join(PARALITH, 'node_modules/@permaweb/ao-loader/dist/index.cjs');
 const AOS_WASM = process.env.AOS_WASM || path.join(PARALITH, 'backend/native/module/AOS.wasm');
 
-const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const bundle = [
   'rng = (function()', read('lib/rng.lua'), 'end)()',
-  read('test/rng_test.lua'),
+  read('protocol/test/rng_test.lua'),
 ].join('\n');
 
 function verdict(text) {

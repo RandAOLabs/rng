@@ -30,8 +30,8 @@ Branch `permissionless`, based on v2 at `ff06740` (beacon `MZMoXv-2`).
 | Tier | Process | Safe unless | Speed | Cost |
 |---|---|---|---|---|
 | **Local** | `~rng@1.0/derive` in your own process | always predictable to the sender | immediate | free |
-| **Fast** | `v2/beacon/beacon.lua` (on-demand threshold BLS) | 2 of the 3 committee operators collude | about one message phase | 3 RNG per request |
-| **Any-honest** | `v2/beacon/anyhonest.lua` (time-lock commit/reveal) | every validator colludes (one honest validator is enough) | slower: commit, reveal (and crack) windows | 4 RNG per request |
+| **Fast** | `protocol/beacon/beacon.lua` (on-demand threshold BLS) | 2 of the 3 committee operators collude | about one message phase | 3 RNG per request |
+| **Any-honest** | `protocol/beacon/anyhonest.lua` (time-lock commit/reveal) | every validator colludes (one honest validator is enough) | slower: commit, reveal (and crack) windows | 4 RNG per request |
 
 Fast sits between bad local randomness and the best any-honest randomness.
 It is not a beacon: nothing runs on a clock. A round opens only when a paid
@@ -102,12 +102,12 @@ output (`fair.view`, enough to recompute `final`).
 | D10 | `Admin.Reinstate`, `Admin.Add-Validator` and `Claim-Protocol` are deleted. `Admin.Remove-Validator` becomes DAO-only `Gov.Remove-Validator`, which always refunds the full bond to the validator. | The DAO cannot take a bond |
 | D11 | The deployer wallet is owner until `Gov.Handover`, a one-way switch to the DAO. There is no guardian (owner decision, 2026-11-07). After handover every action, the brake (`Gov.Pause`) included, is a DAO proposal. Every timelock (10 d) is longer than the 7-day vote, so the DAO can always pass a `Gov.Cancel` before a queued action lands. | No privileged wallet after handover. The cost: a pause takes a 7-day vote. Validators can still `Pause`/`Exit` at once, and bonds and balances are never reachable by governance. |
 | D17 | The fast tier (`beacon.lua`) is governed the same way: deployer until `Gov.Handover`, then only the DAO's attested `from-process`. Governance sets `Signer-Fee`/`Protocol-Fee` (at once) and the committee (`Committee`, `Share-Public-Keys`, `Group-Key`, `Threshold`, `Verification`: queued 10 d, needs a new DKG ceremony), pauses new requests, and spends the protocol's fee share (`Gov.Claim-Protocol`, queued 10 d). No owner `Claim-Protocol`, no `Configure` outside governance, no mint. | Same trust model as the any-honest beacon; a committee swap is what decides fast-tier safety, so it waits out the timelock. |
-| D12 | Fair play is a separate process, `v2/fair/fair.lua`, built on an embeddable `v2/lib/fair.lua`. Each game chooses one of the two. | It must not slow the beacon. Embedding saves a ~160 ms hop. |
+| D12 | Fair play is a separate process, `protocol/fair/fair.lua`, built on an embeddable `lib/fair.lua`. Each game chooses one of the two. | It must not slow the beacon. Embedding saves a ~160 ms hop. |
 | D13 | Players sign fair-play messages with an ephemeral browser key by default; the wallet is optional | Avoids two wallet popups per game. Fairness needs knowledge of the secret, not identity. |
 | D14 | Heartbeat `roundPrice` drops from 3 to 1 RNG. The reserve is 200 M, about 3.2 years at 2 rounds/s. | 3 RNG/round spends 19 % of supply a year |
 | D16 | Distribution from RNG Labs, by transfers in the runbook: **250 M under DAO control = 200 M heartbeat reserve (`X-Foundation`) + 50 M treasury (`X-Treasury`), both inside the beacon**; 100 000 RNG to each launch validator, bonded whole (4·stake; `bond-for` does both in one transfer); a later, optional allocation funds Paralith contracts (not at launch). | "250 M to the DAO" cannot mean RNG in the DAO process: stake-dao/1 can never send an action to the token it stakes (dao.lua:193), so it would be stuck. The DAO controls the reserve and treasury through `Gov.*`. 200/50: the reserve pays heartbeat rounds at 2 rounds/s x 1 RNG = 172 800 RNG/day, so 200 M lasts about 1 157 days (3.2 yr); the treasury is DAO-spendable but capped at 10 % per 30 days (5 M at launch) and can top up the reserve (`Gov.Fund-Reserve`), so a captured DAO reaches little at once and the runway can still be extended. |
 | D17 | Fair play is open to every game, and each game pays for its own draws from a prepaid balance in the fair process (no allowlist). | An allowlist made the deployer a gatekeeper; a shared beacon balance let any game spend it. |
-| D15 | `v2/governance/dao.lua` (advisory) and its tests are deleted. Proposal templates move to `v2/governance/proposals/*.json` in Exec-Tags form. | Replaced by YapDAO |
+| D15 | `governance/dao.lua` (advisory) and its tests are deleted. Proposal templates move to `deploy/proposals/*.json` in Exec-Tags form. | Replaced by YapDAO |
 
 ## Feasibility verdicts
 
@@ -130,7 +130,7 @@ output (`fair.view`, enough to recompute `final`).
 
 ## Component specs
 
-### Beacon `v2/beacon/anyhonest.lua`
+### Beacon `protocol/beacon/anyhonest.lua`
 
 **Identity**
 - `provenSigner`: return nil when two RSA commitments name different committers.
@@ -225,7 +225,7 @@ On a new beacon, `Successor-Ack` comes from its `Configure`/genesis outbox:
 **Token payouts:** `transferAtoms` adds `X-Transfer-Sequence = <Timelock.transferSeq + 1>`.
 The counter only increases and never resets, as in dao.lua's payouts.
 
-### Token `v2/token/rng-token.lua`
+### Token `protocol/token/rng-token.lua`
 
 - Name `RNG`, ticker `RNG` (`TEST-RNG` on testnet), Denomination 6.
 - Genesis: `GenesisAllocations = { [addr] = atoms, ... }` is injected by the deploy prelude, minted on the first slot
@@ -240,10 +240,10 @@ The counter only increases and never resets, as in dao.lua's payouts.
 - `deploy-dao.mjs` in the yap repo with `RUNE_TOKEN=<RNG pid>` (it is generic over `Dao-Token`, dao.lua:458-465). Rules:
   `Dao-Name = RNG DAO`, threshold 25 000 RNG, deposit 5 000, voting period 7 d,
   quorum 1 000 bps, pass 5 000, veto 3 334, unstake delay 14 d, 20 open proposals.
-- Proposal templates (`v2/governance/proposals/*.json`) hold `{ title, body, execProcess, execTags }`,
+- Proposal templates (`deploy/proposals/*.json`) hold `{ title, body, execProcess, execTags }`,
   e.g. `{ "Action": "Gov.Configure", "Reveal-Window-Ms": "30000" }`.
 
-### Fair play `v2/lib/fair.lua` + `v2/fair/fair.lua`
+### Fair play `lib/fair.lua` + `protocol/fair/fair.lua`
 
 | Step | Message | Signed by | State |
 |---|---|---|---|
@@ -280,7 +280,7 @@ The counter only increases and never resets, as in dao.lua's payouts.
   throwaway games that never open again do not hold the registry.
 - Embedded mode: a game process calls `fair.commit/onResult/reveal/expire` on its own state and
   handles Fair.* in its own handler table. This saves the hop. Unmetered: the game pays its own beacon balance.
-- Browser: `v2/console/lib/fair-client.ts` creates an RSA-PSS key with WebCrypto once (kept in IndexedDB),
+- Browser: `lib/js/fair-client.ts` creates an RSA-PSS key with WebCrypto once (kept in IndexedDB),
   draws s with `crypto.getRandomValues(32)`, signs ANS-104 with the vendored client, and stores s
   until it reveals (it re-reveals after a reload).
 
@@ -288,7 +288,7 @@ The counter only increases and never resets, as in dao.lua's payouts.
 
 | Option | Run | Needs |
 |---|---|---|
-| A (simplest) | `node v2/provider/anyhonest-validator.mjs init && … run` (after WP4) | Node 22, a wallet created by `init`, the beacon pid, the scheduler URL, ≥ `stake` RNG; secrets dir on durable disk; RTT < `commitWindowMs/2` |
+| A (simplest) | `node validator/anyhonest-validator.mjs init && … run` (after WP4) | Node 22, a wallet created by `init`, the beacon pid, the scheduler URL, ≥ `stake` RNG; secrets dir on durable disk; RTT < `commitWindowMs/2` |
 | B | HyperBEAM fork node with `rng-validator@1.0` (`on.start` hook) + `rng@1.0` (blst NIF) | the same, plus building the fork |
 | optional | `anyhonest-cracker` | CPU; earns `crackBounty` per crack |
 
@@ -299,7 +299,7 @@ Steps: init the wallet → buy RNG → `Transfer { Recipient = beacon, Quantity 
 `beaconinfo` (local clock both ends). Estimate `offset = min over samples of (localReadAt − info.at)`,
 and compare `nextRoundAt` and `rejoinAt` against `localNow − offset`.
 
-### Console `v2/console`
+### Console `site`
 
 - `/validators`: plain title and body copy (no kicker or hero typography). Sections: requirements,
   four steps with copyable commands, live table (`beaconvalidators`), earnings estimate from live params
@@ -365,14 +365,14 @@ message formats. WP1, WP2, WP3 and WP4 run in parallel; WP5-WP8 follow.
 
 | WP | Scope | Files (only these) | Tests to add |
 |---|---|---|---|
-| WP1 | Beacon v3: identity fixes, Gov.* + timelock (no guardian), permissionless bond/Ready, active-set ranking, bounds, reserve fallback, stuck-request refund, health/at, pay-and-request, round `requests`, `X-Transfer-Sequence`, registry key | `v2/beacon/anyhonest.lua`, `v2/test/anyhonest_test.lua`, `v2/test/run-anyhonest-tests.mjs` | DAO-attested Configure accepted; wallet/forged `from-process`/mixed-signer refused; deployer locked out after Handover; each bound rejected; timelock not before `at`; Move-Reserve needs ack; treasury 10 % cap; no guardian; bond < stake refunded; registry full; Ready needs full stake; ranking + maxActive; reserve empty → request-driven; stuck collecting refund; pay-and-request one slot; `requests` in round record; sequence strictly increasing; Reinstate/Add/Claim gone |
-| WP2 | Token: genesis + seal, no faucet/mint, sequenced-v1 | `v2/token/rng-token.lua`, `v2/test/token_test.lua`, `v2/test/run-token-tests.mjs` | genesis sum ≠ supply refuses everything; mint once only; Faucet/Mint unknown; process transfer without sequence refused; replay within/after window; `tokeninfo` publishes protocol; restore never lowers counters |
-| WP3 | Fair play lib + process | `v2/lib/fair.lua`, `v2/fair/fair.lua`, `v2/test/fair_test.lua`, `v2/test/run-fair-tests.mjs` | commit before request; one outstanding request; batch carry-over; RNG-Result only from the beacon; reveal hash mismatch; expire before/after `revealBy`; forfeit value; domain separation; bounded `fairsessions`; unfunded game; forged/replayed Credit-Notice; drain attempts; pro-rata rounding; withdraw replay; refund on expiry; eviction keeps balance; rollback takes no sequence |
-| WP4 | JS validator parity + skew fix | `v2/provider/anyhonest-validator.mjs`, `v2/provider/anyhonest.mjs`, `v2/test/validator.test.mjs` (new) | Act batching; Pause/Exit; successor follow (needs ack); bond command sends X-Bond; Ready gated by local-RTT health; skewed clock (±60 s) neither false-healthy nor stuck; defaults read from `beaconinfo.params` |
+| WP1 | Beacon v3: identity fixes, Gov.* + timelock (no guardian), permissionless bond/Ready, active-set ranking, bounds, reserve fallback, stuck-request refund, health/at, pay-and-request, round `requests`, `X-Transfer-Sequence`, registry key | `protocol/beacon/anyhonest.lua`, `protocol/test/anyhonest_test.lua`, `protocol/test/run-anyhonest-tests.mjs` | DAO-attested Configure accepted; wallet/forged `from-process`/mixed-signer refused; deployer locked out after Handover; each bound rejected; timelock not before `at`; Move-Reserve needs ack; treasury 10 % cap; no guardian; bond < stake refunded; registry full; Ready needs full stake; ranking + maxActive; reserve empty → request-driven; stuck collecting refund; pay-and-request one slot; `requests` in round record; sequence strictly increasing; Reinstate/Add/Claim gone |
+| WP2 | Token: genesis + seal, no faucet/mint, sequenced-v1 | `protocol/token/rng-token.lua`, `protocol/test/token_test.lua`, `protocol/test/run-token-tests.mjs` | genesis sum ≠ supply refuses everything; mint once only; Faucet/Mint unknown; process transfer without sequence refused; replay within/after window; `tokeninfo` publishes protocol; restore never lowers counters |
+| WP3 | Fair play lib + process | `lib/fair.lua`, `protocol/fair/fair.lua`, `protocol/test/fair_test.lua`, `protocol/test/run-fair-tests.mjs` | commit before request; one outstanding request; batch carry-over; RNG-Result only from the beacon; reveal hash mismatch; expire before/after `revealBy`; forfeit value; domain separation; bounded `fairsessions`; unfunded game; forged/replayed Credit-Notice; drain attempts; pro-rata rounding; withdraw replay; refund on expiry; eviction keeps balance; rollback takes no sequence |
+| WP4 | JS validator parity + skew fix | `validator/anyhonest-validator.mjs`, `validator/anyhonest.mjs`, `validator/test/validator.test.mjs` (new) | Act batching; Pause/Exit; successor follow (needs ack); bond command sends X-Bond; Ready gated by local-RTT health; skewed clock (±60 s) neither false-healthy nor stuck; defaults read from `beaconinfo.params` |
 | WP5 | Erlang device parity (repo `hyperbeam-rng-validator`) | `src/preloaded/node/dev_rng_validator.erl`, its eunit file, `docs/devices/rng-validator-at-1-0.md` | skew-free health; full-stake Ready; `health` read; successor ack check |
-| WP6 | Console: validator page + health banner | `v2/console/app/validators/page.tsx`, `v2/console/components/validator-guide.tsx`, `v2/console/components/health-banner.tsx`, `v2/console/components/site-header.tsx`, `v2/console/app/layout.tsx` | render with mocked `beaconinfo` (ok/halted); earnings math unit test |
-| WP7 | Console: try/dao/fair client | `v2/console/components/try-console.tsx`, `v2/console/components/dao-console.tsx`, `v2/console/lib/rng.ts`, `v2/console/lib/fair-client.ts`, `v2/console/app/api/dao/**`, `v2/console/examples/fair-demo/**` | no faucet path; pay-and-request message shape; fair client commit/reveal hashes match `fair.lua` vectors; IndexedDB loss → forfeit shown |
-| WP8 | Deploy + governance + docs | `v2/deploy/deploy.mjs`, `v2/deploy/README.md`, `v2/test/deployment-config.test.mjs`, `v2/governance/**` (delete `dao.lua`), `v2/test/dao_test.lua` + `run-dao-tests.mjs` (delete), `v2/ANY_HONEST.md`, `v2/SPEC.md`, `v2/PRODUCT.md` | genesis prelude sums; same-scheduler check for token/beacon/DAO; proposal templates valid against DAO caps + reserved names |
+| WP6 | Console: validator page + health banner | `site/app/validators/page.tsx`, `site/components/validator-guide.tsx`, `site/components/health-banner.tsx`, `site/components/site-header.tsx`, `site/app/layout.tsx` | render with mocked `beaconinfo` (ok/halted); earnings math unit test |
+| WP7 | Console: try/dao/fair client | `site/components/try-console.tsx`, `site/components/dao-console.tsx`, `site/lib/rng.ts`, `lib/js/fair-client.ts`, `site/app/api/dao/**`, `site/examples/fair-demo/**` | no faucet path; pay-and-request message shape; fair client commit/reveal hashes match `fair.lua` vectors; IndexedDB loss → forfeit shown |
+| WP8 | Deploy + governance + docs | `deploy/deploy.mjs`, `deploy/README.md`, `deploy/test/deployment-config.test.mjs`, `deploy/proposals/**` (delete `dao.lua`), `protocol/test/dao_test.lua` + `run-dao-tests.mjs` (delete), `docs/ANY_HONEST.md`, `docs/SPEC.md`, `docs/PRODUCT.md` | genesis prelude sums; same-scheduler check for token/beacon/DAO; proposal templates valid against DAO caps + reserved names |
 | WP9 | Paralith listing (paralith-mono, separate session, later) | `deploy-sharded-venue.mjs` asset list + pair config | RNG deposit/withdraw e2e on a fresh vault |
 
 ## Launch plan (testnet)

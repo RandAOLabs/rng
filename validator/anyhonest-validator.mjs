@@ -5,11 +5,11 @@
 // successor beacon, and leaves with Exit / Finalize-Exit. Cracking is its own
 // service (anyhonest-cracker.mjs), never run here.
 //
-//   node v2/provider/anyhonest-validator.mjs init --beacon <pid> --node <url> [--dir <dir>]
-//   node v2/provider/anyhonest-validator.mjs bond [RNG]   [--dir <dir>]
-//   node v2/provider/anyhonest-validator.mjs run          [--dir <dir>]
-//   node v2/provider/anyhonest-validator.mjs status       [--dir <dir>]
-//   node v2/provider/anyhonest-validator.mjs pause | resume | exit | claim [--dir <dir>]
+//   node validator/anyhonest-validator.mjs init --beacon <pid> --node <url> [--dir <dir>]
+//   node validator/anyhonest-validator.mjs bond [RNG]   [--dir <dir>]
+//   node validator/anyhonest-validator.mjs run          [--dir <dir>]
+//   node validator/anyhonest-validator.mjs status       [--dir <dir>]
+//   node validator/anyhonest-validator.mjs pause | resume | exit | claim [--dir <dir>]
 //
 // <dir> defaults to ./rng-validator and holds config.json, the wallet and the
 // secrets. A config file path may be given instead of --dir (older deploys):
@@ -419,7 +419,7 @@ function loadConfig(flags, pos) {
 }
 
 async function nodeIo(cfg, jwk) {
-  const { readState } = await import('../vendor/hbclient.mjs');
+  const { readState } = await import('./vendor/hbclient.mjs');
   const { message } = await import('./hb.mjs');
   const node = cfg.hbNode;
   const readKey = async (pid, key) => {
@@ -457,7 +457,7 @@ to act on another beacon (e.g. the one this validator moved from).`;
 export async function main(argv = process.argv.slice(2)) {
   const { cmd, flags, pos } = parseArgs(argv);
   const out = (o) => console.log(typeof o === 'string' ? o : JSON.stringify(o, null, 2));
-  const { jwkToAddress } = await import('../vendor/hbclient.mjs');
+  const { jwkToAddress } = await import('./vendor/hbclient.mjs');
 
   if (cmd === 'init') {
     const legacy = pos.find((a) => a.endsWith('.json'));

@@ -4,7 +4,7 @@
 --- protocol are paid in it. The whole supply (10^15 atoms = 1,000,000,000 RNG at
 --- 6 decimals) is minted ONCE, on the first slot, to `GenesisAllocations`, and
 --- the token is then sealed: there is no faucet, no mint and no admin power over
---- balances. See v2/docs/PERMISSIONLESS.md (D5, D6, "Token").
+--- balances. See docs/PERMISSIONLESS.md (D5, D6, "Token").
 ---
 --- Deploy prelude (prepended to this source):
 ---   GenesisAllocations = { ["<43-char address>"] = <atoms>, ... }  -- sums to 10^15

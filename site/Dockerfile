@@ -1,15 +1,18 @@
+# Build from the repo root: docker build -f site/Dockerfile .
+# The site imports the shared JS client from lib/js.
 FROM node:22-bookworm-slim
 
-WORKDIR /app
+WORKDIR /app/site
 # Run as the image's unprivileged node user; it owns /app so the build output
 # and wrangler's .wrangler/state persistence stay writable.
-RUN chown node:node /app
+RUN chown node:node /app /app/site
 USER node
 
-COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node site/package.json site/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-COPY --chown=node:node . .
+COPY --chown=node:node lib/js /app/lib/js
+COPY --chown=node:node site/ .
 RUN npm run build \
   && sed -i 's/\r$//' docker-entrypoint.sh \
   && chmod +x docker-entrypoint.sh

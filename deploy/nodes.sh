@@ -111,7 +111,7 @@ case "${1:-}" in
   anyhonest-install)
     for n in "${NODES[@]}"; do read -r i name ip <<<"$n"
       scp -i "$KEY" -o BatchMode=yes -o IdentitiesOnly=yes "$2" "root@$ip:/tmp/rng-anyhonest.tgz"
-      ssh_ "$ip" "mkdir -p /opt/rng-anyhonest/data && chmod 700 /opt/rng-anyhonest/data && rm -rf /opt/rng-anyhonest/src && mkdir -p /opt/rng-anyhonest/src && tar -C /opt/rng-anyhonest/src -xzf /tmp/rng-anyhonest.tgz && cd /opt/rng-anyhonest/src && docker build -q -t rng-anyhonest -f provider/Dockerfile.anyhonest . >/dev/null && echo $name built" &
+      ssh_ "$ip" "mkdir -p /opt/rng-anyhonest/data && chmod 700 /opt/rng-anyhonest/data && rm -rf /opt/rng-anyhonest/src && mkdir -p /opt/rng-anyhonest/src && tar -C /opt/rng-anyhonest/src -xzf /tmp/rng-anyhonest.tgz && cd /opt/rng-anyhonest/src && docker build -q -t rng-anyhonest -f validator/Dockerfile.anyhonest . >/dev/null && echo $name built" &
     done
     wait ;;
   anyhonest-init)

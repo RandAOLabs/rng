@@ -44,8 +44,8 @@ curl -fsS "$NODE/<pid>~process@1.0/compute&slot=1234/results/output/data"       
   `beaconinfo.round >= R`; the round's record is there (`beaconround`,
   `beaconround-<R%8>`, or `beaconabandoned`). An Any-Honest round cracked late
   finalizes a few slots after later rounds: scan forward from that slot.
-- Helpers: `provider/history.mjs` (`httpReader`, `findRound`, `indexLookup`)
-  and `console/lib/history.ts`; the console's `getNetworkStatus(round)`,
+- Helpers: `validator/history.mjs` (`httpReader`, `findRound`, `indexLookup`)
+  and `lib/js/history.ts`; the console's `getNetworkStatus(round)`,
   `findAnyHonestRound(round)` and `FairClient.history(...)` use them.
 
 To audit, replay slots `1..N` and recompute each round from its own record
@@ -64,7 +64,7 @@ Its own container, separate from HyperBEAM, pinned to one core the node does not
 It works on a late round until the beacon's published `abandonAt`: a round every validator committed to waits for its crack (up to 7 days) while the Treasury can pay the bounty.
 
 ```bash
-docker build -t rng-cracker -f provider/Dockerfile.cracker .
+docker build -t rng-cracker -f validator/Dockerfile.cracker .   # from the repo root
 mkdir -p /opt/rng-cracker && echo '{"beacon":"<anyHonest>","hbNode":"https://hyperbeam.tylerw.ai","dataDir":"/data","listen":7479}' > /opt/rng-cracker/config.json
 docker run --rm -v /opt/rng-cracker:/data rng-cracker init /data/config.json   # prints its address
 docker run -d --name rng-cracker --restart unless-stopped --cpuset-cpus=0 --network host   -v /opt/rng-cracker:/data rng-cracker run /data/config.json
@@ -85,7 +85,7 @@ The command list is the header of `deploy.mjs`. Config templates:
 | `v3-params.json` | genesis `Gov.Configure` parameters and `predecessor`; checked against the beacon's hard bounds before sending |
 | `anyhonest-h.json` | `h`, `hProof` for `T` |
 | `anyhonest-validators.json` | validator wallets for `bond-for` |
-| `../governance/proposals/*.json` | DAO proposal templates (`dao-propose`, placeholders `$BEACON`, `$SUCCESSOR`, ...) |
+| `proposals/*.json` | DAO proposal templates (`dao-propose`, placeholders `$BEACON`, `$SUCCESSOR`, ...) |
 
 `--dry-run` prints every spawn and message as JSON and sends nothing.
 `node deploy/deploy.mjs plan --dry-run` prints the whole sequence below.
@@ -106,7 +106,7 @@ beacon believes the DAO and the token only through its own scheduler's
 ## Launch runbook (testnet cutover)
 
 ```bash
-cd v2
+# from the repo root
 export HB_NODE=https://hyperbeam.tylerw.ai HB_WALLET=<deployer.json> \
   RNG_STATE=deploy/v3-testnet.json PARALITH_MONO=/c/REPO/paralith-mono
 node deploy/deploy.mjs plan --dry-run      # review every message first
@@ -148,7 +148,7 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    go by seniority whatever the bond). A launch validator outside that file
    gets `grant <address> 100000` and bonds at least 25,000 itself (100,000 to
    match the operators). Third parties run
-   `node provider/anyhonest-validator.mjs init`, get RNG, then `bond` and
+   `node validator/anyhonest-validator.mjs init`, get RNG, then `bond` and
    `run`. The in-node devices need the v3-aware `rng-validator@1.0` (WP5)
    build first. Soak 72 h on deployer ownership: `status`, `test-subscription`.
    A later allocation for Paralith contracts' RNG is a plain `grant`, not
@@ -174,8 +174,8 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    TEST-RNG; old TEST-RNG balances keep no role in v3 and are not converted.
 8. **Console and crackers.** Record the v3 token, DAO, beacon and fair in
    `native-testnet.json` (MZMoXv-2 and the advisory DAO to `retired`) and the
-   console env (`console/deploy/native-testnet.env`) together, so
-   `test/deployment-config.test.mjs` stays green. Point each cracker's
+   console env (`site/deploy/native-testnet.env`) together, so
+   `deploy/test/deployment-config.test.mjs` stays green. Point each cracker's
    `config.json` `beacon` at v3 and restart it.
 9. **Handover to the DAO.** `handover --confirm` (`Gov.Handover`, one way)
    and `handover-fast --confirm` for the fast tier. There is no guardian:
@@ -185,7 +185,7 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    `govQueue` is empty (`gov Gov.Cancel Gov-Id=<id>` first) and the DAO
    publishes a `stake-dao/1` `daoinfo` on our token, no admin, voting period
    under the beacon's 10-day delays. Prove it:
-   `dao-stake 30000`, `dao-propose governance/proposals/001-handover-proof.json`,
+   `dao-stake 30000`, `dao-propose deploy/proposals/001-handover-proof.json`,
    `dao-vote <id> Yes`. After the 7-day vote the DAO executes it; check the
    proposal is `executed` and `Reveal-Window-Ms` is still 30000 with no
    `Not authorised` refusal. Then `verify` (includes "governed by the DAO").
@@ -197,12 +197,12 @@ the existing committee; no heartbeat, rounds open only for paid requests.
 node deploy/deploy.mjs spawn-fast
 node deploy/deploy.mjs genesis-configure-fast deploy/committee.json   # v3 token, same DKG keys
 node deploy/deploy.mjs fund-fast 30                                   # a test balance; then request
-SSH_KEY=<committee key> deploy/nodes.sh install <app.tgz>           # daemon without the cadence gate
+SSH_KEY=<committee key> deploy/nodes.sh install <app.tgz>           # daemon without the cadence gate (app/provider/ = validator/)
 SSH_KEY=<committee key> deploy/nodes.sh beacon <fast pid>            # repoint the 3 rng-provider daemons
 SSH_KEY=<committee key> deploy/nodes.sh start && deploy/nodes.sh status
 ```
 
-Then set `RNG_BEACON_ID` in `console/deploy/native-testnet.env` and `beacon`
+Then set `RNG_BEACON_ID` in `site/deploy/native-testnet.env` and `beacon`
 in `native-testnet.json` to the fast pid together. Retire the old threshold
 process `iRWVCsShDNboHKSgXHe0_ZVZ89RhBdoRA0hU1wt468c`: it is unused and runs on
 the dead token `qFXxcv...`, so move it to `retired` in `native-testnet.json`
@@ -223,6 +223,6 @@ bound, one scheduler). Validators: `anyhonest-validator.mjs status`.
   MZMoXv-2, which keeps running until retired. Do not retire it before the
   soak ends.
 - After step 9: the DAO pauses by proposal (`dao-propose
-  governance/proposals/009-pause.json`, 7-day vote; the fast tier takes the
+  deploy/proposals/009-pause.json`, 7-day vote; the fast tier takes the
   same proposal with `execProcess` `$FAST`). The fix is a new beacon voted in with `003-set-successor.json` (10 days).
   Validators can `Pause`/`Exit` at any time; governance can never take a bond.

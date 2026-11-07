@@ -1,0 +1,5 @@
+*
+!validator
+!node_modules/@noble
+validator/test
+validator/Dockerfile.*

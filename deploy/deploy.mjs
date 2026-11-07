@@ -52,8 +52,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const V2 = path.resolve(HERE, '..');
-const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
+const ROOT = path.resolve(HERE, '..');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 export const UNIT = 1_000_000;
@@ -360,12 +360,12 @@ export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fasti
 // ---------------------------------------------------------------------------
 
 const json = () => [
-  read('vendor/json.lua'),
-  'local jsonx = (function()', read('vendor/jsonenc.lua'), 'end)()',
+  read('protocol/vendor/json.lua'),
+  'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'local encode, jsonObject = jsonx.encode, jsonx.object',
 ];
-export const tokenSource = (prelude) => [prelude, ...json(), read('token/rng-token.lua')].join('\n');
-const anyHonestSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('beacon/anyhonest.lua')].join('\n');
+export const tokenSource = (prelude) => [prelude, ...json(), read('protocol/token/rng-token.lua')].join('\n');
+const anyHonestSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('protocol/beacon/anyhonest.lua')].join('\n');
 // lua-patch@1.0 (paralith-mono's lua53b.lua adapter): only changed keys are
 // published and the VM keeps state between messages. The adapter's compute
 // calls the beacon's, so the beacon's final full collect moves out to it; the
@@ -383,21 +383,21 @@ const anyHonestPatchSource = (owner, scheduler) => {
     'Lua53bKeepaliveKey = "timelockrev"',
     'Lua53bGcStep = 5000',
     'Lua53bPatchMode = true',
-    read('vendor/lua53b.lua'),
+    read('protocol/vendor/lua53b.lua'),
   ].join('\n');
 };
 const fairSource = () => [
-  read('vendor/json.lua'),
-  'local jsonx = (function()', read('vendor/jsonenc.lua'), 'end)()',
+  read('protocol/vendor/json.lua'),
+  'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
   'json = require(".json")',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
   'fair = (function()', read('lib/fair.lua'), 'end)()',
-  read('fair/fair.lua'),
+  read('protocol/fair/fair.lua'),
 ].join('\n');
 // The fast tier: on-demand threshold BLS (lua@5.3a, whole state per message).
-const fastSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('beacon/beacon.lua')].join('\n');
-const subscriptionConsumerSource = (beacon, id) => [...json(), read('test/subscription-consumer.lua')]
+const fastSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('protocol/beacon/beacon.lua')].join('\n');
+const subscriptionConsumerSource = (beacon, id) => [...json(), read('protocol/test/subscription-consumer.lua')]
   .join('\n').replaceAll('__BEACON__', beacon).replaceAll('__SUBSCRIPTION_ID__', id);
 
 // ---------------------------------------------------------------------------
@@ -411,14 +411,14 @@ async function main(argv) {
   const flag = (name) => rest.includes(name);
   const pos = rest.filter((a) => !a.startsWith('--'));
   const legacy = cmd?.startsWith('legacy-');
-  const hb = DRY ? null : await import('../vendor/hbclient.mjs');
+  const hb = DRY ? null : await import('../validator/vendor/hbclient.mjs');
 
   const NODE = process.env.HB_NODE;
   if (!NODE && !DRY) throw new Error('HB_NODE is required');
   let jwk = null;
   if (process.env.HB_WALLET) jwk = JSON.parse(fs.readFileSync(process.env.HB_WALLET, 'utf8'));
   else if (!DRY) throw new Error('HB_WALLET is required');
-  const me = jwk ? (hb || await import('../vendor/hbclient.mjs')).jwkToAddress(jwk) : process.env.RNG_DEPLOYER;
+  const me = jwk ? (hb || await import('../validator/vendor/hbclient.mjs')).jwkToAddress(jwk) : process.env.RNG_DEPLOYER;
   if (!isPid(me)) throw new Error('set HB_WALLET (or RNG_DEPLOYER in --dry-run)');
 
   const STATE = legacy
@@ -524,7 +524,7 @@ async function main(argv) {
         return pid;
       }
       // deploy-dao.mjs semantics, our rules: the module comes from paralith-mono.
-      const PM = path.resolve(process.env.PARALITH_MONO || path.join(V2, '..', '..', 'paralith-mono'));
+      const PM = path.resolve(process.env.PARALITH_MONO || path.join(ROOT, '..', 'paralith-mono'));
       const imp = (p) => import(pathToFileURL(path.join(PM, p)).href);
       const { daoModuleSources, dao53bModuleSources } = await imp('backend/native/contracts-53b-bundle.mjs');
       const { spawnVanity, throwawayKey } = await imp('packages/rune-ao/src/spawn/node.mjs');
@@ -749,7 +749,7 @@ async function main(argv) {
       // The old beacon's Admin.Set-Successor (legacy-set-successor) goes here, live.
       await v3.handover();
       await v3['handover-fast']();
-      await v3['dao-propose'](path.join(V2, 'governance', 'proposals', '001-handover-proof.json'));
+      await v3['dao-propose'](path.join(HERE, 'proposals', '001-handover-proof.json'));
       log({ op: 'check', sameScheduler: sameScheduler(state, ['token', 'dao', 'beacon', 'fair', 'fast']), scheduler: state.scheduler });
     },
   };
@@ -796,7 +796,7 @@ async function main(argv) {
       console.log(r.output);
     },
     'legacy-verify': async (roundArg) => {
-      const bls = await import('../provider/bls.mjs');
+      const bls = await import('../validator/bls.mjs');
       const round = Number(roundArg || (await key(state.beacon, 'beaconinfo'))?.round);
       const record = (await key(state.beacon, 'beaconstate'))?.rounds?.[String(round)];
       if (!record) throw new Error(`finalized round ${round} is missing from beacon state`);

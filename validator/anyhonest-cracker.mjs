@@ -5,14 +5,14 @@
 // bounty plus the withholder's share of that round; `claim` withdraws it.
 // Anyone may run one: the beacon checks every crack, so it needs no trust.
 //
-//   node provider/anyhonest-cracker.mjs init  <config>   make the wallet, print its address
-//   node provider/anyhonest-cracker.mjs run   <config>
-//   node provider/anyhonest-cracker.mjs claim <config>   withdraw accrued rewards
+//   node validator/anyhonest-cracker.mjs init  <config>   make the wallet, print its address
+//   node validator/anyhonest-cracker.mjs run   <config>
+//   node validator/anyhonest-cracker.mjs claim <config>   withdraw accrued rewards
 //
 // Config: { beacon, hbNode, dataDir, listen?, jitterMs? }. Before each crack it
 // waits a random 0..jitterMs (default 60 s), so when several crackers race for
 // the same puzzle the fastest machine does not win every time. RNG_CRACKER is the native GMP
-// cracker (provider/cracker.c); without it the JavaScript one is ~10x slower.
+// cracker (validator/cracker.c); without it the JavaScript one is ~10x slower.
 //
 // One crack at a time, always: a crack is minutes of one busy core, and
 // running them in parallel took 13 of 16 cores of a HyperBEAM host
@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { readState, jwkToAddress } from '../vendor/hbclient.mjs';
+import { readState, jwkToAddress } from './vendor/hbclient.mjs';
 import { message } from './hb.mjs';
 import * as tl from './anyhonest.mjs';
 

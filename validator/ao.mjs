@@ -3,7 +3,7 @@
 // Uses the vendored paralith-mono HyperBEAM client (HTTP signatures, push).
 import fs from 'node:fs';
 import path from 'node:path';
-import { readState, sendMessage, jwkToAddress } from '../vendor/hbclient.mjs';
+import { readState, sendMessage, jwkToAddress } from './vendor/hbclient.mjs';
 
 export function loadWallet(cfg) {
   return JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'provider-wallet.json'), 'utf8'));

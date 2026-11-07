@@ -1,8 +1,8 @@
 // Writes to HyperBEAM as ANS-104 data items: the path browsers use, accepted
 // by both the old fork and v0.11-RC7 (RC7 rejects the old httpsig keyids).
 // Reads and pushes still go through the vendored client.
-import { signDataItem } from '../vendor/ans104.mjs';
-import { nodeAddress, queuePush } from '../vendor/hbclient.mjs';
+import { signDataItem } from './vendor/ans104.mjs';
+import { nodeAddress, queuePush } from './vendor/hbclient.mjs';
 
 const tagList = (o) => Object.entries(o).filter(([, v]) => v !== undefined && v !== null)
   .map(([name, value]) => ({ name, value: String(value) }));

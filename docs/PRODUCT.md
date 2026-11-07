@@ -26,7 +26,7 @@ The randomness tiers, weakest to strongest:
 | Fast | 2 of 3 committee operators collude | about one message phase |
 | Any-Honest | every validator colludes (one honest one is enough) | slower (commit and reveal windows) |
 
-The fast-tier implementation (`beacon/beacon.lua`) and `SPEC.md` use `beacon`
+The fast-tier implementation (`protocol/beacon/beacon.lua`) and `SPEC.md` use `beacon`
 as a legacy technical id for it. Product-facing interfaces call that surface
 **Fast**; it is not a beacon. **Beacon** is the continuously advancing
 Any-Honest public feed.
@@ -41,6 +41,6 @@ Any-Honest v3 is permissionless and DAO-governed:
   faucet and no mint. Users get RNG from allocations or the market.
 
 Do not describe v3 as live until the cutover in
-[`deploy/README.md`](./deploy/README.md) has passed `deploy.mjs verify` and the
+[`deploy/README.md`](../deploy/README.md) has passed `deploy.mjs verify` and the
 DAO handover proof. The protocol is [`ANY_HONEST.md`](./ANY_HONEST.md); the
 threshold protocol remains in [`SPEC.md`](./SPEC.md).

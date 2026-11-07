@@ -134,7 +134,7 @@ export function crack(xHex, T, onProgress) {
   return { y: yHex, proof: hex(proof) };
 }
 
-/** The same with the native GMP cracker (provider/cracker.c) at `bin`. */
+/** The same with the native GMP cracker (validator/cracker.c) at `bin`. */
 export async function crackNative(bin, xHex, T) {
   const opts = { maxBuffer: 1 << 20 };
   const y = (await run(bin, ['y', N_HEX, xHex, String(T)], opts)).stdout.trim();

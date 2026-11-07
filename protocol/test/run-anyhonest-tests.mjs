@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const V2 = path.resolve(HERE, '..');
+const ROOT = path.resolve(HERE, '../..');
 const AOS_WASM = process.env.AOS_WASM
   || path.join(process.env.PARALITH_ROOT || 'C:/REPO/paralith-mono', 'backend/native/module/AOS.wasm');
-const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const shaBuf = (s) => createHash('sha256').update(s, 'latin1').digest();
 const sha = (s) => shaBuf(s).toString('hex');
 const addr = (s) => s.padEnd(43, '_');
@@ -111,7 +111,7 @@ Object.assign(F, { h: H1.y, hProof: H1.proof, h2: H2.y, hProof2: H2.proof, badHP
 answer('verify-crack', { x: hex(G), t: String(T2), y: F.h2, proof: F.badHProof });
 answer('verify-crack', { x: hex(G), t: String(T), y: F.h2, proof: F.hProof2 }); // h for another T
 answer('generator', {});
-if (!read('beacon/anyhonest.lua').replace(/"\s*\.\.\s*"/g, '').includes(hex(G))) throw new Error('anyhonest.lua g differs from the reference');
+if (!read('protocol/beacon/anyhonest.lua').replace(/"\s*\.\.\s*"/g, '').includes(hex(G))) throw new Error('anyhonest.lua g differs from the reference');
 
 // P[name] = { c, alpha, y* }, every reveal of it answered; names are round + validator.
 const P = {};
@@ -154,16 +154,16 @@ const lua = (v) => Array.isArray(v) ? `{ ${v.map(lua).join(', ')} }`
 const fixtures = `F = ${lua(F)}\nP = ${lua(P)}\nDEVICE_FIELDS = ${lua(FIELDS)}`;
 
 const bundle = [
-  read('vendor/json.lua'),
-  'local jsonx = (function()', read('vendor/jsonenc.lua'), 'end)()',
+  read('protocol/vendor/json.lua'),
+  'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
   'json = require(".json")',
   'Owner = nil',
   'TestHarness = true',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
-  read('beacon/anyhonest.lua'),
+  read('protocol/beacon/anyhonest.lua'),
   fixtures,
-  read('test/anyhonest_test.lua'),
+  read('protocol/test/anyhonest_test.lua'),
 ].join('\n');
 
 function verdict(text) {

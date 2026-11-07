@@ -127,7 +127,7 @@ export function ValidatorGuide() {
         <div className="grid gap-3 md:grid-cols-2">
           <div className="border border-[var(--line)] p-4">
             <p className="m-0 font-bold text-[var(--white)]">JS validator (recommended)</p>
-            <p className="m-0 mt-2">One Node script, <code>v2/provider/anyhonest-validator.mjs</code>. Commits are computed locally; reveals are verified by the beacon&apos;s node, so you do not need HyperBEAM.</p>
+            <p className="m-0 mt-2">One Node script, <code>validator/anyhonest-validator.mjs</code>. Commits are computed locally; reveals are verified by the beacon&apos;s node, so you do not need HyperBEAM.</p>
           </div>
           <div className="border border-[var(--line)] p-4">
             <p className="m-0 font-bold text-[var(--white)]">HyperBEAM node</p>
@@ -139,13 +139,13 @@ export function ValidatorGuide() {
       <Section title="Steps">
         <p className="m-0">The config file is JSON: <code>{"{ beacon, hbNode, dataDir }"}</code>. Exact flags may change; see the repo README.</p>
         <ol className="m-0 list-decimal space-y-4 pl-5">
-          <li><p className="m-0 mb-2">Create the validator wallet. It prints your address.</p><Command text="node v2/provider/anyhonest-validator.mjs init validator.json" /></li>
+          <li><p className="m-0 mb-2">Create the validator wallet. It prints your address.</p><Command text="node validator/anyhonest-validator.mjs init validator.json" /></li>
           <li><p className="m-0">Buy at least {fmt(p.stake)} RNG and send it to that address. RNG will trade on the Paralith orderbook (RNG/GOLD), <span className="text-[var(--white)]">coming soon</span>. RNG has a fixed supply and no faucet.</p></li>
           <li><p className="m-0 mb-2">Bond: transfer the stake to the beacon with the <code>X-Bond</code> tag. A first bond below {fmt(p.stake)} RNG is refunded. The validator&apos;s bond command sends this for you (see repo README for flags).</p><Command text={`Transfer { Recipient = <beacon>, Quantity = ${stakeUnits}, X-Bond = "true" }`} /></li>
-          <li><p className="m-0 mb-2">Run it. The validator sends <code>Ready</code> once its connection is healthy and then works every round it is in the active set.</p><Command text="node v2/provider/anyhonest-validator.mjs run validator.json" /></li>
+          <li><p className="m-0 mb-2">Run it. The validator sends <code>Ready</code> once its connection is healthy and then works every round it is in the active set.</p><Command text="node validator/anyhonest-validator.mjs run validator.json" /></li>
         </ol>
         <p className="m-0 mb-2">To leave, exit and then finalize once the exit round has passed. Finalizing refunds your bond.</p>
-        <Command text={"node v2/provider/anyhonest-validator.mjs exit validator.json\nnode v2/provider/anyhonest-validator.mjs finalize-exit validator.json"} />
+        <Command text={"node validator/anyhonest-validator.mjs exit validator.json\nnode validator/anyhonest-validator.mjs finalize-exit validator.json"} />
       </Section>
 
       <Section title="Slashing, cooldown and rejoining">

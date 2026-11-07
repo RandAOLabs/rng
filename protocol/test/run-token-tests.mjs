@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const V2 = path.resolve(HERE, '..');
+const ROOT = path.resolve(HERE, '../..');
 const AOS_WASM = process.env.AOS_WASM
   || path.join(process.env.PARALITH_ROOT || 'C:/REPO/paralith-mono', 'backend/native/module/AOS.wasm');
-const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const addr = (s) => s.padEnd(43, '_');
 const F = {
   owner: addr('owner'), sched: addr('scheduler'), user: addr('user'),
@@ -16,14 +16,14 @@ const F = {
 const luaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const fixtures = `F = { ${Object.entries(F).map(([k, v]) => `${k} = ${luaString(v)}`).join(', ')} }`;
 const bundle = [
-  read('vendor/json.lua'),
-  'local jsonx = (function()', read('vendor/jsonenc.lua'), 'end)()',
+  read('protocol/vendor/json.lua'),
+  'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
   'json = require(".json")',
   'Owner = nil',
-  read('token/rng-token.lua'),
+  read('protocol/token/rng-token.lua'),
   fixtures,
-  read('test/token_test.lua'),
+  read('protocol/test/token_test.lua'),
 ].join('\n');
 
 const handle = await AoLoader(fs.readFileSync(AOS_WASM), {

@@ -1,7 +1,7 @@
 // node --test test/bls.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as bls from '../provider/bls.mjs';
+import * as bls from '../bls.mjs';
 
 const runDkg = (n, t) => {
   const deals = {};

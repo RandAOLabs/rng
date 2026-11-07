@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const V2 = path.resolve(HERE, '..');
+const ROOT = path.resolve(HERE, '../..');
 const AOS_WASM = process.env.AOS_WASM
   || path.join(process.env.PARALITH_ROOT || 'C:/REPO/paralith-mono', 'backend/native/module/AOS.wasm');
-const read = (p) => fs.readFileSync(path.join(V2, p), 'utf8');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const sha = (s) => createHash('sha256').update(s, 'latin1').digest('hex');
 const addr = (s) => s.padEnd(43, '_');
 
@@ -58,15 +58,15 @@ const lua = (v) => Array.isArray(v) ? `{ ${v.map(lua).join(', ')} }`
   : typeof v === 'number' || typeof v === 'boolean' ? String(v) : luaString(v);
 
 const bundle = [
-  read('vendor/json.lua'),
-  'local jsonx = (function()', read('vendor/jsonenc.lua'), 'end)()',
+  read('protocol/vendor/json.lua'),
+  'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
   'json = require(".json")',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
   'fair = (function()', read('lib/fair.lua'), 'end)()',
-  read('fair/fair.lua'),
+  read('protocol/fair/fair.lua'),
   `F = ${lua(F)}`,
-  read('test/fair_test.lua'),
+  read('protocol/test/fair_test.lua'),
 ].join('\n');
 
 function verdict(text) {

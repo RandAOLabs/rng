@@ -2,14 +2,8 @@ name: HyperBEAM RNG
 
 on:
   pull_request:
-    paths:
-      - 'v2/**'
-      - '.github/workflows/hyperbeam-rng.yml'
   push:
-    branches: [v2, permissionless]
-    paths:
-      - 'v2/**'
-      - '.github/workflows/hyperbeam-rng.yml'
+    branches: [main, mono, permissionless]
 
 permissions:
   contents: read
@@ -17,27 +11,24 @@ permissions:
 jobs:
   threshold-crypto:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: v2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: v2/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - name: Check operational JavaScript
         run: |
           node --check deploy/deploy.mjs
-          node --check provider/ao.mjs
-          node --check provider/bls.mjs
-          node --check provider/daemon.mjs
-          node --check provider/hb.mjs
-          node --check provider/anyhonest.mjs
-          node --check provider/anyhonest-validator.mjs
-          node --check provider/anyhonest-cracker.mjs
+          node --check validator/ao.mjs
+          node --check validator/bls.mjs
+          node --check validator/daemon.mjs
+          node --check validator/hb.mjs
+          node --check validator/anyhonest.mjs
+          node --check validator/anyhonest-validator.mjs
+          node --check validator/anyhonest-cracker.mjs
       # The Lua suites run inside the AOS wasm module, which lives in the private
       # paralith-mono repo. PARALITH_MONO_TOKEN must be a read-only token for it.
       - name: Fetch AOS wasm module
@@ -50,26 +41,27 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Verify AOS wasm module
-        run: echo "164c0859e796d30f682944be8bdd544a1292e9140f6f2998ce5ef93e2184a8c8  ../paralith-mono/backend/native/module/AOS.wasm" | sha256sum -c -
+        run: echo "164c0859e796d30f682944be8bdd544a1292e9140f6f2998ce5ef93e2184a8c8  paralith-mono/backend/native/module/AOS.wasm" | sha256sum -c -
       - name: Test (Lua contracts incl. beacon v3, token, fair; BLS; JS validator; deploy dry-run)
         env:
           AOS_WASM: ${{ github.workspace }}/paralith-mono/backend/native/module/AOS.wasm
-          AO_LOADER: ${{ github.workspace }}/v2/node_modules/@permaweb/ao-loader/dist/index.cjs
-        run: npm test
+          AO_LOADER: ${{ github.workspace }}/node_modules/@permaweb/ao-loader/dist/index.cjs
+        run: npm run test:protocol && npm run test:node
 
-  console:
+  site:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: v2/console
+        working-directory: site
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: v2/console/package-lock.json
+          cache-dependency-path: site/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm run build

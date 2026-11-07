@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import * as tl from '../provider/anyhonest.mjs';
+import * as tl from '../anyhonest.mjs';
 
 const T = 4096; // small for tests; the protocol default is 2^27
 const big = (h) => BigInt('0x' + h);

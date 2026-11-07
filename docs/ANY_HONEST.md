@@ -2,13 +2,13 @@
 
 Status: v3 (permissionless, DAO-governed, fixed supply, fair play) is built on
 branch `permissionless` and not yet deployed. The live testnet beacon is still
-v2 (`MZMoXv-2`) until the cutover in [`deploy/README.md`](./deploy/README.md).
-Design, threat model and economics: [`docs/PERMISSIONLESS.md`](./docs/PERMISSIONLESS.md).
+v2 (`MZMoXv-2`) until the cutover in [`deploy/README.md`](../deploy/README.md).
+Design, threat model and economics: [`docs/PERMISSIONLESS.md`](PERMISSIONLESS.md).
 
 ## Purpose
 
 Any-honest is the strongest of three tiers: **local** (free, predictable to
-the sender), **fast** (`beacon/beacon.lua`: on-demand 2-of-3 threshold BLS,
+the sender), **fast** (`protocol/beacon/beacon.lua`: on-demand 2-of-3 threshold BLS,
 about one message phase, safe unless 2 of 3 operators collude; rounds only for
 paid requests, no heartbeat) and **any-honest** (this document: safe if any one
 validator is honest, slower). See `docs/PERMISSIONLESS.md`, "Randomness tiers".
@@ -21,21 +21,21 @@ work and a Wesolowski proof verified by HyperBEAM's `~rng@1.0` device.
 
 ## Who does what
 
-- **The beacon** is an AO process (`beacon/anyhonest.lua`), run on
+- **The beacon** is an AO process (`protocol/beacon/anyhonest.lua`), run on
   `lua-patch@1.0`: it keeps its state in the node's VM and publishes only the
   keys that change. `deploy/deploy.mjs spawn-beacon` builds it with the
-  `vendor/lua53b.lua` adapter (`--lua53a` for the old build).
+  `protocol/vendor/lua53b.lua` adapter (`--lua53a` for the old build).
 - **Validators** are anyone who bonds the stake. They run either the JS
-  validator (`provider/anyhonest-validator.mjs`, Node 22 only) or the
+  validator (`validator/anyhonest-validator.mjs`, Node 22 only) or the
   `rng-validator@1.0` device inside a HyperBEAM node. Either one makes each
   puzzle, keeps the secret on disk, commits, reveals, says Ready and Pause,
   and follows a successor beacon. The console's `/validators` page has the steps.
 - **The RNG DAO** (YapDAO `stake-dao/1`, staking RNG) governs the beacon. See
   [Governance](#governance).
-- **Fair play** (`fair/fair.lua`, or `lib/fair.lua` embedded in a game) lets a
+- **Fair play** (`protocol/fair/fair.lua`, or `lib/fair.lua` embedded in a game) lets a
   player's own secret make each draw fair to them. See [Fair play](#fair-play).
-- **Crackers** are a separate service, `provider/anyhonest-cracker.mjs`
-  (`provider/Dockerfile.cracker`), that anyone may run for the crack bounty.
+- **Crackers** are a separate service, `validator/anyhonest-cracker.mjs`
+  (`validator/Dockerfile.cracker`), that anyone may run for the crack bounty.
   One crack is about 3 minutes of one CPU core, so a cracker works one puzzle
   at a time on its own CPU budget, never on a HyperBEAM node's cores.
 
@@ -265,7 +265,7 @@ included, and because every timelock outlasts the vote the DAO can always
 cancel a queued action before it lands. Governance can never take a bond or a user balance: a
 fault costs at most a tenth of the stake, and changes to what a bond is exposed
 to land 10 days after the vote, time enough to exit. Proposal templates are in
-`governance/proposals/`.
+`deploy/proposals/`.
 
 ## Fair play
 

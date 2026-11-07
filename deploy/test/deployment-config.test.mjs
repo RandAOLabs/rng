@@ -8,15 +8,15 @@ import {
   loadAllocations, genesisPrelude, badParams, genesisConfig, daoRules, sameScheduler,
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, handoverErrors, fundError, BEACON_GOV_DELAY_MS,
   fastGenesisConfig,
-} from '../deploy/deploy.mjs';
+} from '../deploy.mjs';
 
-const V2 = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const readJson = (p) => JSON.parse(fs.readFileSync(path.join(V2, p), 'utf8'));
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const readJson = (p) => JSON.parse(fs.readFileSync(path.join(ROOT, p), 'utf8'));
 const pid = (s) => s.padEnd(43, '_');
 const DEPLOYER = pid('deployer');
 const state = readJson('deploy/native-testnet.json');
 const env = Object.fromEntries(
-  fs.readFileSync(path.join(V2, 'console/deploy/native-testnet.env'), 'utf8')
+  fs.readFileSync(path.join(ROOT, 'site/deploy/native-testnet.env'), 'utf8')
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => line.split(/=(.*)/s).slice(0, 2)),
@@ -30,8 +30,8 @@ test('console deployment follows the canonical native-testnet processes', () => 
 });
 
 test('deployment manifests retain state and load the pinned console environment', () => {
-  const consoleCompose = fs.readFileSync(path.join(V2, 'console/deploy/compose.yaml'), 'utf8');
-  const hyperbeamCompose = fs.readFileSync(path.join(V2, 'deploy/compose.hyperbeam-stage.yaml'), 'utf8');
+  const consoleCompose = fs.readFileSync(path.join(ROOT, 'site/deploy/compose.yaml'), 'utf8');
+  const hyperbeamCompose = fs.readFileSync(path.join(ROOT, 'deploy/compose.hyperbeam-stage.yaml'), 'utf8');
   assert.match(consoleCompose, /native-testnet\.env/);
   assert.match(hyperbeamCompose, /store-overlay5:\/app\/cache-mainnet/);
   assert.match(hyperbeamCompose, /node-config\.json:\/app\/node-config\.json:ro/);
@@ -154,7 +154,7 @@ test('token, DAO, beacon and fair must share one scheduler', () => {
 });
 
 test('proposal templates are valid against the DAO caps, reserved names and beacon tags', () => {
-  const dir = path.join(V2, 'governance/proposals');
+  const dir = path.join(ROOT, 'deploy/proposals');
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
   assert.ok(files.length >= 8);
   const committee = readJson('deploy/committee.json');
@@ -214,10 +214,10 @@ test('checkV3 passes on a healthy deployment and flags each problem', () => {
 });
 
 test('dry-run plan prints the whole v3 sequence and sends nothing', () => {
-  const out = execFileSync(process.execPath, [path.join(V2, 'deploy/deploy.mjs'), 'plan', '--dry-run'], {
+  const out = execFileSync(process.execPath, [path.join(ROOT, 'deploy/deploy.mjs'), 'plan', '--dry-run'], {
     // An unreachable node: a dry run must not touch the network.
     env: { ...process.env, HB_NODE: 'http://127.0.0.1:9', HB_WALLET: '', RNG_DEPLOYER: DEPLOYER,
-      RNG_SCHEDULER: pid('sched'), RNG_STATE: path.join(V2, 'deploy/does-not-exist.json') },
+      RNG_SCHEDULER: pid('sched'), RNG_STATE: path.join(ROOT, 'deploy/does-not-exist.json') },
     encoding: 'utf8',
   });
   const lines = out.trim().split('\n').map((l) => JSON.parse(l));
@@ -277,23 +277,23 @@ test('dry-run plan prints the whole v3 sequence and sends nothing', () => {
   for (const gone of ['Configure', 'Admin.Add-Validator', 'Admin.Reinstate', 'Admin.Mint', 'Faucet', 'Claim-Protocol']) {
     assert.equal(at(gone), -1, `${gone} is not part of v3`);
   }
-  assert.equal(fs.existsSync(path.join(V2, 'deploy/does-not-exist.json')), false, 'dry run writes no state');
+  assert.equal(fs.existsSync(path.join(ROOT, 'deploy/does-not-exist.json')), false, 'dry run writes no state');
 });
 
 test('legacy commands target the live v2 beacon from the read-only inventory', () => {
-  const run = (...args) => execFileSync(process.execPath, [path.join(V2, 'deploy/deploy.mjs'), ...args, '--dry-run'], {
+  const run = (...args) => execFileSync(process.execPath, [path.join(ROOT, 'deploy/deploy.mjs'), ...args, '--dry-run'], {
     env: { ...process.env, HB_NODE: 'http://127.0.0.1:9', HB_WALLET: '', RNG_DEPLOYER: DEPLOYER }, encoding: 'utf8' });
-  const before = fs.readFileSync(path.join(V2, 'deploy/native-testnet.json'), 'utf8');
+  const before = fs.readFileSync(path.join(ROOT, 'deploy/native-testnet.json'), 'utf8');
   const succ = JSON.parse(run('legacy-set-successor', state.anyHonest, pid('v3')));
   assert.deepEqual([succ.target, succ.action, succ.data], [state.anyHonest, 'Admin.Set-Successor', { successor: pid('v3') }]);
   const tune = JSON.parse(run('legacy-tune', 'commitWindowMs=5000'));
   assert.deepEqual([tune.target, tune.action, tune.data], [state.anyHonest, 'Configure', { commitWindowMs: 5000 }]);
-  assert.equal(fs.readFileSync(path.join(V2, 'deploy/native-testnet.json'), 'utf8'), before);
+  assert.equal(fs.readFileSync(path.join(ROOT, 'deploy/native-testnet.json'), 'utf8'), before);
 });
 
 test('no guardian anywhere: beacon, deploy script, templates', () => {
-  for (const f of ['beacon/anyhonest.lua', 'beacon/beacon.lua', 'deploy/deploy.mjs']) {
-    const src = fs.readFileSync(path.join(V2, f), 'utf8');
+  for (const f of ['protocol/beacon/anyhonest.lua', 'protocol/beacon/beacon.lua', 'deploy/deploy.mjs']) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
     assert.doesNotMatch(src, /guardianUntil|isGuardian|Clear-Guardian|RNG_GUARDIAN|--no-guardian|GUARDIAN_MS/, f);
   }
 });
@@ -312,12 +312,12 @@ test('fast genesis takes the existing committee and refuses a bad one', () => {
 });
 
 test('fund-fast and gov-fast dry-run against the fast tier', () => {
-  const tmp = path.join(V2, 'deploy', `.fast-test-${process.pid}.json`);
+  const tmp = path.join(ROOT, 'deploy', `.fast-test-${process.pid}.json`);
   const S = pid('sched');
   fs.writeFileSync(tmp, JSON.stringify({ scheduler: S, token: pid('token'), dao: pid('dao'), fast: pid('fast'),
     processes: { [pid('token')]: { scheduler: S }, [pid('dao')]: { scheduler: S }, [pid('fast')]: { scheduler: S } } }));
   try {
-    const run = (...args) => execFileSync(process.execPath, [path.join(V2, 'deploy/deploy.mjs'), ...args, '--dry-run'], {
+    const run = (...args) => execFileSync(process.execPath, [path.join(ROOT, 'deploy/deploy.mjs'), ...args, '--dry-run'], {
       env: { ...process.env, HB_NODE: 'http://127.0.0.1:9', HB_WALLET: '', RNG_DEPLOYER: DEPLOYER, RNG_SCHEDULER: S,
         RNG_STATE: tmp }, encoding: 'utf8' }).trim().split('\n').map((l) => JSON.parse(l));
     const [fund] = run('fund-fast', '9');
@@ -360,7 +360,7 @@ test('fund-* refuses a beacon that has not run genesis-configure', () => {
 });
 
 test('every beacon governance delay outlasts the DAO vote', () => {
-  const lua = fs.readFileSync(path.join(V2, 'beacon/anyhonest.lua'), 'utf8');
+  const lua = fs.readFileSync(path.join(ROOT, 'protocol/beacon/anyhonest.lua'), 'utf8');
   const block = /local GOV_DELAY_MS = \{([\s\S]*?)\}/.exec(lua)[1];
   const delays = [...block.matchAll(/\["([A-Za-z-]+)"\] = (\d+) \* DAY_MS/g)].map((m) => [m[1], Number(m[2]) * 86400000]);
   assert.deepEqual(delays.map(([k]) => k).sort(), ['Configure', 'Fund-Reserve', 'Move-Reserve', 'Set-Successor', 'Treasury-Spend']);
@@ -369,11 +369,11 @@ test('every beacon governance delay outlasts the DAO vote', () => {
     assert.ok(ms > vote, `${kind} delay ${ms} must exceed the voting period ${vote}`);
     assert.ok(ms >= BEACON_GOV_DELAY_MS, kind);
   }
-  const fast = fs.readFileSync(path.join(V2, 'beacon/beacon.lua'), 'utf8');
+  const fast = fs.readFileSync(path.join(ROOT, 'protocol/beacon/beacon.lua'), 'utf8');
   const fastBlock = /local GOV_DELAY_MS = \{([\s\S]*?)\}/.exec(fast)[1];
   const fastDelays = [...fastBlock.matchAll(/\["([A-Za-z-]+)"\] = (\d+) \* DAY_MS/g)].map((m) => [m[1], Number(m[2]) * 86400000]);
   assert.deepEqual(fastDelays.map(([k]) => k).sort(), ['Claim-Protocol', 'Configure']);
   for (const [kind, ms] of fastDelays) assert.ok(ms > vote, `fast ${kind} delay must exceed the voting period`);
-  const move = readJson('governance/proposals/004-move-reserve.json');
+  const move = readJson('deploy/proposals/004-move-reserve.json');
   assert.equal(move.execTags.Successor, '$SUCCESSOR', 'Move-Reserve names its successor');
 });

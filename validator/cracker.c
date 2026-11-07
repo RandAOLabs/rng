@@ -4,7 +4,7 @@
  *   cracker proof <N hex> <x hex> <T> <l hex>  prints x^floor(2^T / l) mod N
  *
  * Both are T sequential squarings inside mpz_powm. The Wesolowski challenge l
- * is computed by the caller (provider/timelock.mjs), so the hashing rules live
+ * is computed by the caller (validator/anyhonest.mjs), so the hashing rules live
  * in one place.
  */
 #include <stdio.h> /* before gmp.h, so it declares mpz_out_str */
