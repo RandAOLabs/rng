@@ -33,7 +33,7 @@ const tools = [
   },
   {
     name: "rng_governance_status",
-    description: "Read RNG governance parameters and proposals. Governance is a YapDAO (stake-dao/1) staking RNG; a passed proposal's action applies on the beacon on receipt. The launch wallet is an equal owner until it renounces.",
+    description: "Read RNG governance parameters and proposals. Governance is a YapDAO (stake-dao/1) staking RNG; the DAO is the only owner after launch. Money and code actions take effect at their Effective-At, at least 24 h after they arrive; the rest on receipt.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -112,7 +112,7 @@ async function callTool(name: unknown, args: Record<string, unknown>) {
       buy: "No faucet: RNG is a fixed-supply token; buy it on the Paralith orderbook (RNG/GOLD, coming soon)",
     },
     deliveryTrust: "Public reads are free but trust the selected gateway view. A prepaid process subscription binds before reveal and receives the authenticated result from the beacon process.",
-    governance: "YapDAO (stake-dao/1) staked in RNG governs the beacon: passed proposals send Gov.* actions, applied on receipt. The beacon, fair play and the fast tier have two equal owners (the launch wallet until it sends Gov.Renounce-Wallet, and the DAO named by Gov.Set-Dao); owners are published as `gov` in beaconinfo. There is no guardian.",
+    governance: "YapDAO (stake-dao/1) staked in RNG governs the beacon: passed proposals send Gov.* actions. The launch wallet renounces at launch, so the DAO is the only owner of the beacon, fair play and the fast tier. Money and code actions wait for their Effective-At (at least 24 h after they arrive; published as `govPending`), and while one waits validators may leave at once with their bond (Exit-Now, `hatch` in beaconinfo); fees, pause and resume apply on receipt. Owners are published as `gov` in beaconinfo. There is no guardian.",
     recommendedUX: "The AO application process should prepay requests or a subscription so end users never manage RNG credits.",
   });
   throw new Error(`unknown tool: ${String(name)}`);

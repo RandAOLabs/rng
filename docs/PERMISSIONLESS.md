@@ -1,14 +1,17 @@
 # Any-Honest v3: permissionless, DAO-governed
 
-Status: spec, feasibility and build plan. Nothing here is implemented yet.
+Status: spec, feasibility and build plan, kept as the design record; "Governance at
+launch" is current and implemented.
 Branch `permissionless`, based on v2 at `ff06740` (beacon `MZMoXv-2`).
 
 ## Summary
 
-- An RNG-staked instance of YapDAO (`stake-dao/1`) governs the beacon. **YapDAO needs no
-  code changes.** The beacon reads governance parameters from tags, keeps its own
-  timelock, and accepts the DAO through the scheduler-attested `from-process` check it
-  already uses for the token's `Credit-Notice`.
+- An RNG-staked instance of YapDAO (`stake-dao/1`) is the only owner of the beacon, fair
+  play and the fast tier once the launch wallet renounces. **YapDAO needs no code
+  changes.** The protocols read governance parameters from tags, make the DAO's money and
+  code actions wait at least 24 h (`Effective-At`), open an exit hatch while they wait,
+  and accept the DAO through the scheduler-attested `from-process` check they already
+  use for the token's `Credit-Notice`. See "Governance at launch".
 - The RNG token gets a fixed supply minted once at genesis. It has no faucet and no
   mint, and no admin power over balances. It adopts `sequenced-v1` (rune.lua) because
   the DAO deploy and the Paralith vault both require it.
@@ -24,6 +27,114 @@ Branch `permissionless`, based on v2 at `ff06740` (beacon `MZMoXv-2`).
   batch.
 - Third parties need only the JS validator, a wallet and RNG for the bond. The
   HyperBEAM fork with `rng-validator@1.0` + `rng@1.0` is optional.
+
+## Governance at launch (2026-11-07, current)
+
+This section is what goes live. Where the design record below says otherwise
+(D2, D11, D17, the handler table, T2, T8, T9), this section wins.
+
+### Who owns the protocols
+
+The launch wallet bootstraps: it spawns the token, the DAO, the beacon, fair
+play and the fast tier, sends the genesis `Gov.Configure` and the funding
+transfers. In the same deploy step (`deploy.mjs dao-handover`, part of
+`plan`) it sends `Gov.Set-Dao` and then `Gov.Renounce-Wallet` to the beacon,
+fair play and the fast tier, and reads back that each one publishes
+`gov.dao = <RNG DAO>` and `gov.wallet = false`. After that the wallet has no
+powers. The RNG DAO is the only owner.
+
+### Who governs the DAO
+
+RNG Labs stakes 50,000,000 RNG in the DAO at launch (`LABS_STAKE_RNG`,
+`RNG_LABS_STAKE` overrides it). That is the majority of the stake at launch,
+so Labs decides votes for as long as no coalition stakes more. The rest of
+Labs' allocation stays liquid. The plan is to sell it to the public over time
+or move it into the reserve or the treasury, so control spreads as RNG is
+sold. Labs can add stake if it needs to.
+
+DAO rules (`daoRules`, stake-dao/1): voting period 1 day (86,400,000 ms; a
+vote can raise it but never set it below 1 day), quorum 10 % of the stake,
+pass when Yes is above 50 % of Yes + No + NoWithVeto, veto when NoWithVeto is
+above 33.34 % of all votes, proposal threshold 25,000 RNG, deposit 5,000 RNG
+(lost to a veto), unstake delay 14 days, at most 20 open proposals and one per
+proposer.
+
+### Effective-At
+
+Every DAO action may carry `Effective-At` (milliseconds, scheduler time).
+Actions that move money or code must carry one at least 24 hours
+(`Gov.EXIT_FLOOR_MS`, a constant in `vendor/gov.lua`: no vote can lower it)
+after the action arrives. Harmless actions apply on receipt, or wait for a
+later `Effective-At` if they name one.
+
+| Process | Harmless: on receipt | Money/code: `Effective-At` >= receipt + 24 h |
+|---|---|---|
+| Beacon | `Gov.Configure` of `Request-Price`, `Subscription-Price`, `Subscription-Rounds`, `Abandon-After-Ms`, `Min-Commits`, `Max-Active`, `Max-Validators`, `Catch-Up-Ms`, `Rejoin-Base-Ms`, `Rejoin-Cap-Ms`, `Heartbeat`, `Fair-Window-Ms` (prices <= 1,000,000 RNG); `Gov.Pause`; `Gov.Resume`; `Gov.Cancel` | `Gov.Configure` that changes `Stake`, `Slash`, `Commit-Window-Ms`, `Reveal-Window-Ms`, `Crack-Bounty`, `Max-In-Flight`, `Cadence-Ms`, `Target-Interval-Ms`, `Round-Price` or `T` (or names `H`); `Gov.Set-Successor`; `Gov.Move-Reserve`; `Gov.Treasury-Spend`; `Gov.Fund-Reserve`; `Gov.Remove-Validator`; `Gov.Set-Dao`; `Gov.Approve-Code` |
+| Fast tier | `Gov.Configure` of `Signer-Fee`, `Protocol-Fee` (<= 1,000,000 RNG each), `Abandon-After-Ms`; `Gov.Pause`; `Gov.Resume`; `Gov.Cancel` | `Gov.Configure` naming the committee (`Committee`, `Share-Public-Keys`, `Group-Key`, `Threshold`, `Verification`); `Gov.Claim-Protocol`; `Gov.Set-Dao`; `Gov.Approve-Code` |
+| Fair play | `Fair.Configure` of `Fair-Window-Ms`, `Keep`, `Max-Open`, `Min-Interval-Ms`, `Max-Games`, `Max-Per-Game`; `Gov.Cancel` | `Fair.Configure` that changes `Request-Price`, or names the beacon or token while unset; `Gov.Set-Dao`; `Gov.Approve-Code` |
+
+A value equal to the current one changes nothing and counts as harmless.
+`Gov.Renounce-Wallet` is the wallet's alone and only ever removes power.
+`Gov.Apply` is anyone's.
+
+A waiting action is checked against the hard bounds when it arrives and
+stored. Each process publishes its queue as `govPending` (id, verb, class,
+`effectiveAt`, `expiresAt`, summary) in `beaconinfo` or `fairinfo`. Once it is
+due, anyone sends `Gov.Apply Gov-Id=<id>` and the bounds are checked again
+(two changes that are legal alone but not together: the second is refused at
+apply and stays pending). The DAO drops a pending action with a later
+proposal, `Gov.Cancel Gov-Id=<id>`. An action not applied within 14 days after
+it was due lapses. `Effective-At` can be at most 90 days ahead, and at most 32
+actions wait at once.
+
+Code: `Gov.Approve-Code` records the code root and its `Effective-At`. Anyone
+may upload the matching code at once (`Gov.Upgrade`, one message or a
+manifest and parts), but it installs only at or after `Effective-At`. Parts
+that arrive early are kept; once due, any part or the manifest sent again
+installs them. `Gov.Cancel Gov-Id=code` drops the approval, and it lapses 14
+days after it was due.
+
+### The exit hatch
+
+While any passed money/code action is pending (stored and not yet applied,
+cancelled or lapsed), `beaconinfo.hatch` (and `fairinfo.hatch`) is true and:
+
+- A beacon validator may send `Exit-Now`. It is out of every round not yet
+  opened, its whole bond is refunded in the same message, and it is paid
+  nothing for the rounds it still owes. It is never slashed for them: there is
+  no bond left to take, and a missed duty finds no validator. Those rounds run
+  on by the usual rules: its output still counts if it reveals, it can be
+  cracked (the treasury pays the bounty), and a round that cannot finish is
+  abandoned and its requests refunded. Randomness stays any-honest.
+- A fast-tier committee member may send `Exit-Now`: it leaves the committee
+  and its earnings are paid at once. The fast tier holds no bonds. If fewer
+  than `threshold` members remain, rounds are abandoned and refunded.
+- Payers withdraw their beacon and fast-tier balances (`Withdraw`) and games
+  their free fair-play balance (`Fair.Withdraw`). These work at any time, while
+  paused too, hatch or not.
+
+Only a passed DAO action opens the hatch. Nobody else can: a stranger's or
+another process's `Gov.*` is refused, and a harmless action waiting for a
+later `Effective-At` does not open it. It closes when nothing money/code is
+pending.
+
+### Treasury cap
+
+Treasury spends and reserve funding together take at most 10 % of the
+treasury per 30-day window (the window opens at the first outflow, on the
+treasury balance then; `beaconinfo.treasuryWindow`). The cap is checked when
+the action is proposed and again when it applies.
+
+### What this does not protect
+
+- There is no instant emergency fix. The fastest brake is `Gov.Pause`, one
+  voting period (1 day). The fastest money or code change is one voting
+  period plus the 24 h floor. Validators and payers can always leave at once.
+- The hard bounds hold for the code that is running. A code upgrade can
+  change the code, bounds included. The protection against a bad upgrade is
+  the 24 h floor plus the exit hatch, not the bounds.
+- Labs' stake decides votes at launch. The floor and the hatch are what a
+  validator or payer relies on if they disagree with a vote.
 
 ## Randomness tiers
 
@@ -91,7 +202,7 @@ output (`fair.view`, enough to recompute `final`).
 | # | Decision | Why |
 |---|---|---|
 | D1 | No YapDAO changes. Governance actions are one tags-only message per proposal, and the beacon parses its parameters from tags (`Gov-*` names below). | DAO caps fit: 16 tags, values ≤ 512 B, ≤ 2048 B total. An `h`/`hProof` (< N, ≤ 512 hex chars) fits one tag each. |
-| D2 | **Superseded 2026-11-07:** no queue or timelock; every owner action applies on receipt (ANY_HONEST.md, Governance). Was: the beacon keeps its own timelock: 10 days (longer than the DAO's 7-day vote) for `Gov.Set-Successor`, `Gov.Move-Reserve`, `Gov.Treasury-Spend`, `Gov.Fund-Reserve` and a `Gov.Configure` of `stake`, `slash`, `commitWindowMs`, `revealWindowMs`, `crackBounty`, `maxInFlight`, `cadenceMs` or `targetIntervalMs`; other Configure parameters apply at once (bounded). A queued action expires 14 days after it is due. There is no guardian: only the DAO cancels, by proposal. | The DAO has no delay (DAO.md:121). A counter-proposal (Gov.Cancel) can pass inside the delay, and a validator can exit before a change to its bond's exposure lands. |
+| D2 | **Superseded again: see "Governance at launch"** (money/code waits Effective-At >= 24 h, exit hatch, treasury cap). Earlier 2026-11-07: no queue or timelock; every owner action applies on receipt (ANY_HONEST.md, Governance). Was: the beacon keeps its own timelock: 10 days (longer than the DAO's 7-day vote) for `Gov.Set-Successor`, `Gov.Move-Reserve`, `Gov.Treasury-Spend`, `Gov.Fund-Reserve` and a `Gov.Configure` of `stake`, `slash`, `commitWindowMs`, `revealWindowMs`, `crackBounty`, `maxInFlight`, `cadenceMs` or `targetIntervalMs`; other Configure parameters apply at once (bounded). A queued action expires 14 days after it is due. There is no guardian: only the DAO cancels, by proposal. | The DAO has no delay (DAO.md:121). A counter-proposal (Gov.Cancel) can pass inside the delay, and a validator can exit before a change to its bond's exposure lands. |
 | D3 | The DAO process, the beacon and the RNG token run on **one scheduler** (`hyperbeam.tylerw.ai`, where Paralith also runs) | `from-process` is believed only when *our own* scheduler signed the delivery |
 | D4 | Treasury and reserve stay inside the beacon and are never sent to the DAO | The DAO cannot target its staked token (dao.lua:192), so RNG it held would be stuck forever |
 | D5 | Fixed supply of 1,000,000,000 RNG at 6 decimals (10^15 atoms < 2^53). Minted once at genesis, all of it to RNG Labs (one allocation; `$DEPLOYER` on testnet), then sealed. | Enclosed economy. A sealed token has no owner to capture. Distribution is by ordinary transfers (D16). |
@@ -100,8 +211,8 @@ output (`fair.view`, enough to recompute `final`).
 | D8 | Each round takes `maxActive` = 64 validators. `maxActive // 4` seats go by seniority (earliest `readyAt`: ready without a break; a fault or Pause starts it over); the rest by rank: `min(bond, 4·stake)` descending, then `joinedAt` ascending, then address. Operator validators bond 4·stake from day one. | Fresh Sybils cannot push out incumbents at max bond, and bonding alone never buys every seat (see threat T3) |
 | D9 | Ready (first time and every rejoin) needs bond + earnings refill ≥ `stake`. `rejoinBond` is removed. | Owner goal: rejoin = top back up to full stake |
 | D10 | `Admin.Reinstate`, `Admin.Add-Validator` and `Claim-Protocol` are deleted. `Admin.Remove-Validator` becomes DAO-only `Gov.Remove-Validator`, which always refunds the full bond to the validator. | The DAO cannot take a bond |
-| D11 | **Superseded 2026-11-07:** two equal owners, the wallet until `Gov.Renounce-Wallet` and the DAO named by `Gov.Set-Dao` (paralith-mono `gov.lua`). Was: the deployer wallet is owner until `Gov.Handover`, a one-way switch to the DAO. There is no guardian (owner decision, 2026-11-07). After handover every action, the brake (`Gov.Pause`) included, is a DAO proposal. Every timelock (10 d) is longer than the 7-day vote, so the DAO can always pass a `Gov.Cancel` before a queued action lands. | No privileged wallet after handover. The cost: a pause takes a 7-day vote. Validators can still `Pause`/`Exit` at once, and bonds and balances are never reachable by governance. |
-| D17 | **Superseded 2026-11-07:** the same two owners, committee and fee spend on receipt. Was: the fast tier (`beacon.lua`) is governed the same way: deployer until `Gov.Handover`, then only the DAO's attested `from-process`. Governance sets `Signer-Fee`/`Protocol-Fee` (at once) and the committee (`Committee`, `Share-Public-Keys`, `Group-Key`, `Threshold`, `Verification`: queued 10 d, needs a new DKG ceremony), pauses new requests, and spends the protocol's fee share (`Gov.Claim-Protocol`, queued 10 d). No owner `Claim-Protocol`, no `Configure` outside governance, no mint. | Same trust model as the any-honest beacon; a committee swap is what decides fast-tier safety, so it waits out the timelock. |
+| D11 | **Superseded again: see "Governance at launch"** (the wallet bootstraps and renounces at launch; the DAO is the only owner). Earlier 2026-11-07: two equal owners, the wallet until `Gov.Renounce-Wallet` and the DAO named by `Gov.Set-Dao` (paralith-mono `gov.lua`). Was: the deployer wallet is owner until `Gov.Handover`, a one-way switch to the DAO. There is no guardian (owner decision, 2026-11-07). After handover every action, the brake (`Gov.Pause`) included, is a DAO proposal. Every timelock (10 d) is longer than the 7-day vote, so the DAO can always pass a `Gov.Cancel` before a queued action lands. | No privileged wallet after handover. The cost: a pause takes a 7-day vote. Validators can still `Pause`/`Exit` at once, and bonds and balances are never reachable by governance. |
+| D17 | **Superseded again: see "Governance at launch"** (committee and fee-share spend wait Effective-At >= 24 h; fees on receipt). Earlier 2026-11-07: the same two owners, committee and fee spend on receipt. Was: the fast tier (`beacon.lua`) is governed the same way: deployer until `Gov.Handover`, then only the DAO's attested `from-process`. Governance sets `Signer-Fee`/`Protocol-Fee` (at once) and the committee (`Committee`, `Share-Public-Keys`, `Group-Key`, `Threshold`, `Verification`: queued 10 d, needs a new DKG ceremony), pauses new requests, and spends the protocol's fee share (`Gov.Claim-Protocol`, queued 10 d). No owner `Claim-Protocol`, no `Configure` outside governance, no mint. | Same trust model as the any-honest beacon; a committee swap is what decides fast-tier safety, so it waits out the timelock. |
 | D12 | Fair play is a separate process, `protocol/fair/fair.lua`, built on an embeddable `lib/fair.lua`. Each game chooses one of the two. | It must not slow the beacon. Embedding saves a ~160 ms hop. |
 | D13 | Players sign fair-play messages with an ephemeral browser key by default; the wallet is optional | Avoids two wallet popups per game. Fairness needs knowledge of the secret, not identity. |
 | D14 | Heartbeat `roundPrice` drops from 3 to 1 RNG. The reserve is 200 M, about 3.2 years at 2 rounds/s. | 3 RNG/round spends 19 % of supply a year |
@@ -140,11 +251,11 @@ output (`fair.view`, enough to recompute `final`).
 - `isDeployer(msg)`: `governor == "" and provenSigner(msg) == Owner` (wallet, pre-handover only).
 - `govOnly`: `isGovernor or isDeployer`.
 
-> **Superseded 2026-11-07.** Owners and verbs are paralith-mono's `gov.lua`
-> (`Gov.Set-Dao`, `Gov.Renounce-Wallet`, `Gov.Approve-Code`, `Gov.Upgrade`);
-> `Gov.Handover`, `Gov.Cancel`, `Gov.Apply`, the queue, the timelock and the
-> treasury window are gone, and every action below applies on receipt. See
-> ANY_HONEST.md, Governance. The table is kept as the design record.
+> **Superseded.** Owners and verbs are `vendor/gov.lua`'s (`Gov.Set-Dao`,
+> `Gov.Renounce-Wallet`, `Gov.Approve-Code`, `Gov.Upgrade`); `Gov.Handover` is
+> gone. Which actions wait, `Gov.Apply`, `Gov.Cancel`, the exit hatch and the
+> treasury window are in "Governance at launch" above: the floor is 24 h after
+> receipt, not 10 days. The table is kept as the design record.
 
 **Governance handlers.** All read **tags**. Data is used as a fallback only when the deployer signs. Tag names are compared lowercased with `-` and `_` stripped.
 
@@ -244,10 +355,11 @@ The counter only increases and never resets, as in dao.lua's payouts.
 ### YapDAO instance (no code change, deploy only)
 
 - `deploy-dao.mjs` in the yap repo with `RUNE_TOKEN=<RNG pid>` (it is generic over `Dao-Token`, dao.lua:458-465). Rules:
-  `Dao-Name = RNG DAO`, threshold 25 000 RNG, deposit 5 000, voting period 7 d,
+  `Dao-Name = RNG DAO`, threshold 25 000 RNG, deposit 5 000, voting period 1 d,
   quorum 1 000 bps, pass 5 000, veto 3 334, unstake delay 14 d, 20 open proposals.
 - Proposal templates (`deploy/proposals/*.json`) hold `{ title, body, execProcess, execTags }`,
-  e.g. `{ "Action": "Gov.Configure", "Reveal-Window-Ms": "30000" }`.
+  e.g. `{ "Action": "Gov.Configure", "Request-Price": "4" }`; money/code templates carry
+  `"Effective-At": "$EFFECTIVE_AT"`, which `dao-propose` fills with the vote's end + 24 h + 1 day.
 
 ### Fair play `lib/fair.lua` + `protocol/fair/fair.lua`
 
@@ -320,15 +432,15 @@ and compare `nextRoundAt` and `rejoinAt` against `localNow − offset`.
 | # | Threat | Mitigation | Residual |
 |---|---|---|---|
 | T1 | Forged DAO message (a tag claiming `from-process`) | believed only when our scheduler signed it; mixed signers refused | trust in the node operator (true for every AO process) |
-| T2 | DAO capture (whale buys > 50 % of staked RNG) | 7-day vote, ⅓ veto; 10-day timelock (longer than the vote, so a Gov.Cancel can pass) on successor, reserve, treasury, reserve funding and bond-exposure parameters; treasury outflow ≤ 10 % per 30 days; handover refused over a non-empty queue. **Bonds and user balances are not reachable by governance**: removal refunds in full, a fault takes ≤ stake/10, and slash/stake/window changes land 10 d after the vote, so a validator exits first. | the reserve (via a malicious successor, T9) and ≤ 10 % of the treasury per 30 days, each ≥ 17 days after the proposal, visibly |
+| T2 | DAO capture (whale buys > 50 % of staked RNG; at launch Labs holds the majority of the stake) | **Current: see "Governance at launch"**: 1-day vote, ⅓ veto, money/code waits Effective-At >= 24 h with the exit hatch open (validators take their bonds out at once, payers withdraw), treasury ≤ 10 % per 30 days. Design record: 7-day vote, ⅓ veto; 10-day timelock (longer than the vote, so a Gov.Cancel can pass) on successor, reserve, treasury, reserve funding and bond-exposure parameters; treasury outflow ≤ 10 % per 30 days; handover refused over a non-empty queue. **Bonds and user balances are not reachable by governance**: removal refunds in full, a fault takes ≤ stake/10, and slash/stake/window changes land 10 d after the vote, so a validator exits first. | the reserve (via a malicious successor, T9) and ≤ 10 % of the treasury per 30 days, each ≥ 17 days after the proposal, visibly |
 | T3 | Sybils fill the active set, then grind the last commit (all validators colluding sets the value) | D8: rank by capped bond, so incumbents at 4·stake cannot be displaced (operators bond 4·stake from day one); a quarter of the seats go by seniority, which bonding cannot buy; consumers needing per-draw guarantees use fair play | an attacker at 4·stake takes up to ¾ of the seats from incumbents below the cap; the whole set only if the senior seats are also its own |
 | T4 | Withholding a reveal to bias, or to abort a round after seeing the other outputs | the time-lock makes the value fixed at commit close; crack + slash; a round whose commits are complete is not abandoned while a crack is paid for, until the 7-day cap | delay only; a round short of a commit can still be abandoned after `abandonAfterMs` (30 min, far above the crack time) if nobody cracks; any round after 7 d with no crack |
 | T5 | Spam registrations, registry squatting | first bond ≥ stake; registry cap; refund otherwise; a full registry evicts its lowest-ranked never-ready entry, and anyone evicts one idle 7 d | a squatter that does send Ready must then do (or be slashed for) the work |
 | T6 | Reserve drained → halt | request-driven fallback, refund of stuck requests | heartbeat consumers see gaps |
 | T7 | All validators suspended | `health = halted`, banner, validator logs; requests refunded after `abandonAfterMs` | liveness depends on operators |
-| T8 | Slow emergency response (no guardian) | a pause is a DAO proposal (7-day vote); every queued action waits 10 d, so the DAO can cancel it first; validators can `Pause`/`Exit` at once; the fast tier's committee change is timelocked the same way | a live bug runs until a vote passes |
+| T8 | Slow emergency response (no guardian) | **Current:** a pause is a DAO proposal (1-day vote, on receipt); a money/code fix takes one vote + 24 h; validators and payers leave at once. Design record: a pause is a DAO proposal (7-day vote); every queued action waits 10 d, so the DAO can cancel it first; validators can `Pause`/`Exit` at once; the fast tier's committee change is timelocked the same way | a live bug runs until a vote passes |
 | T10 | Fast-tier committee collusion | 2 of 3 operators can predict or choose a fast value; a request binds before the first partial is published; users who need more use any-honest | fast values while 2 operators collude |
-| T9 | Malicious successor drains the reserve | DAO vote + 10-day timelock; Move-Reserve names its successor at queue time and pays only it, with an ack received since it was named; acks of cancelled or replaced successors are deleted; validators' devices only follow a successor naming this beacon | same as T2 |
+| T9 | Malicious successor drains the reserve | **Current:** DAO vote + Effective-At >= 24 h (Set-Successor and Move-Reserve each), exit hatch open meanwhile. Design record: DAO vote + 10-day timelock; Move-Reserve names its successor at queue time and pays only it, with an ack received since it was named; acks of cancelled or replaced successors are deleted; validators' devices only follow a successor naming this beacon | same as T2 |
 | T10 | Lost payout (a sequenced transfer never delivered) | the sequence never resets; a `Resend-Payout`-style handler is a follow-up (token window 256) | stalls if > 256 are lost |
 | F1 | Player grinds the secret | commit fixed before its batch's request is sent; v_b unknown to anyone until reveals (any-honest) | — |
 | F2 | Player withholds the reveal after seeing v (1-bit option) | forfeit is final and games MUST score it as the worst outcome; entry is charged before commit | a game that rewards forfeit is broken by design |

@@ -175,10 +175,11 @@ final value. Membership changes cannot mutate an existing round.
 
 The new beacon's genesis `Gov.Configure` names the old one as `predecessor`
 and sends it `Successor-Ack` (`Resend-Successor-Ack` sends it again). On the
-old beacon, an owner sends `Gov.Set-Successor` (on receipt). A validator stops taking new rounds on the old beacon (Pause),
+old beacon, the DAO passes `Gov.Set-Successor` (money: it applies at its
+`Effective-At`, at least 24 h after it arrives). A validator stops taking new rounds on the old beacon (Pause),
 reveals what it still owes, then moves to a successor that names the old
 beacon as predecessor, and records the move in `secrets-dir/beacon.json`.
-`Gov.Move-Reserve` (on receipt) sends the unspent reserve to the successor it
+`Gov.Move-Reserve` (also money, the same floor) sends the unspent reserve to the successor it
 names, once that is the successor and has acked since it was named, on the
 same token. Stakes do not move: validators exit the old beacon to get
 theirs back and bond on the new one.
@@ -187,7 +188,7 @@ theirs back and bond on the new one.
 
 | Key | What | Changes |
 | --- | --- | --- |
-| `beaconinfo` | rounds open and revealing, listed validators, params, prices, `mode`, `health`, `at`, `gov` (owners), `features` | every message |
+| `beaconinfo` | rounds open and revealing, listed validators, params, prices, `mode`, `health`, `at`, `gov` (owners), `govPending`, `hatch`, `treasuryWindow`, `features` | every message |
 | `beaconvalidators` | the full registry | when it changes |
 | `beaconparams` | the group `g`, `n`, the puzzle `T` and `h` | on `Gov.Configure` |
 | `beaconround-<round % 8>` | a finalized round: commits, outputs, value | when it finalizes |
@@ -244,28 +245,59 @@ published round before reporting success.
 
 ## Governance
 
-The beacon, fair play and the fast tier each have two equal owners
-(paralith-mono's `gov.lua`, vendored in `protocol/vendor/`): the launch wallet,
-until it sends `Gov.Renounce-Wallet` (one way, refused while no DAO is set),
-and the RNG DAO named by `Gov.Set-Dao` (a passed proposal: one tags-only
-message, sent by the DAO process and attested by our scheduler). Every owner
-action applies on receipt; there is no queue, no `Gov.Apply`, `Gov.Cancel` or
-`Gov.Handover`, and no guardian.
+The launch wallet bootstraps the beacon, fair play and the fast tier (spawn,
+genesis `Gov.Configure`, funding). In the same deploy step it names the RNG
+DAO (`Gov.Set-Dao`) and renounces (`Gov.Renounce-Wallet`), and the deploy
+script reads back `gov.wallet = false`. From then on the DAO is the only
+owner: a passed proposal is one tags-only message, sent by the DAO process and
+attested by our scheduler. Owners and code approval come from
+`protocol/vendor/gov.lua`. There is no guardian.
 
-| Action | Effect |
-| --- | --- |
-| `Gov.Set-Dao` | names the DAO owner (either owner; the DAO can hand its seat to another DAO) |
-| `Gov.Renounce-Wallet` | the wallet leaves for good (the wallet only) |
-| `Gov.Approve-Code`, `Gov.Upgrade` | an owner approves a code root, anyone uploads it (the wallet installs directly) |
-| `Gov.Configure` | parameters, inside hard bounds (`slash` at most a tenth of `stake`, one incident at most half); token, unit, self and predecessor never change after genesis |
-| `Gov.Set-Successor`, `Gov.Move-Reserve` | name a successor (the newest replaces it); move the whole reserve to it once it has acked since it was named |
-| `Gov.Treasury-Spend`, `Gov.Fund-Reserve` | up to what the treasury holds; never to the DAO, the beacon or the token |
-| `Gov.Remove-Validator` | remove a validator, bond refunded in full |
-| `Gov.Pause` / `Gov.Resume` | the brake |
+RNG Labs stakes 50,000,000 RNG in the DAO at launch, the majority of the
+stake, so it decides votes while no coalition stakes more; the rest of its
+RNG stays liquid, to be sold over time or moved to the reserve or treasury.
+The DAO votes for 1 day. docs/PERMISSIONLESS.md, "Governance at launch", has
+the full rules.
+
+Every DAO action may carry `Effective-At` (ms, scheduler time). Money and code
+actions must, at least 24 h after they arrive (`Gov.EXIT_FLOOR_MS`, a
+constant). They are checked against the bounds, published in `govPending`, and
+applied by anyone with `Gov.Apply` once due (the bounds are checked again).
+The DAO cancels one with `Gov.Cancel`; one not applied within 14 days after it
+was due lapses.
+
+| Action | Class | Effect |
+| --- | --- | --- |
+| `Gov.Configure` | money if it changes `stake`, `slash`, `commitWindowMs`, `revealWindowMs`, `crackBounty`, `maxInFlight`, `cadenceMs`, `targetIntervalMs`, `roundPrice` or `T`/`h`; else harmless | parameters, inside hard bounds (`slash` at most a tenth of `stake`, one incident at most half, prices at most 1,000,000 RNG); token, unit, self and predecessor never change after genesis |
+| `Gov.Set-Successor`, `Gov.Move-Reserve` | money | name a successor (the newest replaces it); move the whole reserve to it once it has acked since it was named |
+| `Gov.Treasury-Spend`, `Gov.Fund-Reserve` | money | together at most 10 % of the treasury per 30-day window (`treasuryWindow`); never to the DAO, the beacon or the token |
+| `Gov.Remove-Validator` | money | remove a validator, bond refunded in full |
+| `Gov.Set-Dao` | money | hand the DAO seat to another DAO |
+| `Gov.Approve-Code`, `Gov.Upgrade` | code | the DAO approves a root for its `Effective-At`; anyone uploads it at once, and it installs only from then on |
+| `Gov.Pause` / `Gov.Resume` | harmless | the brake: no heartbeat, no new requests or subscriptions |
+| `Gov.Cancel` | harmless | drop a pending action (`Gov-Id=code`: the code approval) |
+| `Gov.Apply` | anyone | run a pending action once due |
+| `Gov.Renounce-Wallet` | wallet only | the wallet leaves for good |
+
+**Exit hatch.** While any passed money or code action is pending,
+`beaconinfo.hatch` is true and a validator may send `Exit-Now`: its whole bond
+comes back in that message, it is out of every round not yet opened, it is
+paid nothing for the rounds it still owes and never slashed for them. Those
+rounds go on by the usual rules (its reveal still counts, a crack fills it, or
+the round is abandoned and refunded), so one honest validator still keeps the
+value unpredictable. On the fast tier a member's `Exit-Now` takes it off the
+committee with its earnings. Payers withdraw (`Withdraw`, `Fair.Withdraw`) at
+any time, hatch or not.
+
+There is no instant emergency fix: the fastest brake is a 1-day vote
+(`Gov.Pause`), the fastest money or code change a 1-day vote plus 24 h. The
+hard bounds bind the code that runs; an upgrade could change them, so what
+protects a validator or payer from a bad upgrade is the 24 h floor and the
+hatch.
 
 A `Gov.*` from the DAO carrying an `X-Dao-Proposal` already seen runs once.
-Owners are published as `gov` in `beaconinfo` (and `fairinfo`) and kept in the
-process state, so a rebuilt VM never re-arms a renounced wallet; an owner
+Owners and the pending queue are kept in the process state, so a rebuilt VM
+never re-arms a renounced wallet or loses a pending action; an owner or queue
 change is checkpointed at once on lua-patch@1.0. Governance can never take a
 bond or a user balance: removal refunds in full and a fault costs at most a
 tenth of the stake. Proposal templates are in `deploy/proposals/`.

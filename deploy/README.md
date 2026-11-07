@@ -105,23 +105,42 @@ beacon believes the DAO and the token only through its own scheduler's
 
 ## Owners
 
-The beacon, fair play and the fast tier carry paralith-mono's `gov.lua`
-(vendored in `protocol/vendor/`, checked byte for byte against
-`PARALITH_MONO` by `deploy/test`). Each has two equal owners: the launch
-wallet, until it sends `Gov.Renounce-Wallet`, and the DAO named by
-`Gov.Set-Dao`. Every owner action applies on receipt: there is no queue,
-no `Gov.Apply`/`Gov.Cancel` and no `Gov.Handover`. New code is approved by an
-owner (`Gov.Approve-Code`) and uploaded by anyone (`Gov.Upgrade`); the
-wallet installs directly. Owners are published as `gov` in `beaconinfo` /
-`fairinfo` and kept in the process state, so a rebuilt VM never re-arms a
-renounced wallet. The token is never governed.
+The beacon, fair play and the fast tier carry `protocol/vendor/gov.lua`
+(paralith-mono's, extended with Effective-At and the exit hatch;
+`protocol/vendor/SOURCE`). The launch wallet bootstraps them, then in the same
+step hands them to the RNG DAO and renounces: after launch the DAO is the
+only owner and the wallet has no powers. docs/PERMISSIONLESS.md, "Governance
+at launch", is the plain statement of the rules; in short:
 
-- `set-dao [beacon|fair|fast ...]`: the recorded DAO becomes an owner (default:
-  every deployed protocol). Refused unless the DAO is a live `stake-dao/1` on
-  RNG with no admin, on our scheduler; reads `gov.dao` back.
-- `renounce-wallet <role ...> --confirm`: one way; refused until that
-  protocol reads the DAO as owner; reads `gov.wallet = false` back. A fresh
-  deploy does not send it.
+- **DAO-only.** `dao-handover --confirm` sends `Gov.Set-Dao` and then
+  `Gov.Renounce-Wallet` to every deployed protocol and reads back
+  `gov.dao = <DAO>` and `gov.wallet = false` on each (`plan` does this).
+  `set-dao` and `renounce-wallet <role> --confirm` are the two halves, for a
+  protocol deployed on its own.
+- **Labs' stake.** RNG Labs stakes 50,000,000 RNG (`dao-stake`, default
+  `LABS_STAKE_RNG`; `RNG_LABS_STAKE` or an amount overrides it). That is the
+  majority of the stake at launch: Labs decides votes only while no coalition
+  stakes more. The rest of Labs' allocation stays liquid, meant to be sold to
+  the public over time or moved to the reserve or treasury, so control
+  spreads as RNG is sold. Labs can add stake if it needs to.
+- **Votes take 1 day** (`Voting-Period` 86,400,000 ms, the lowest stake-dao/1
+  allows; it can only be raised).
+- **Money and code wait 24 h.** A proposal that moves money or code carries
+  `Effective-At` (`dao-propose` fills `$EFFECTIVE_AT` = the vote's end + 24 h
+  + 1 day, and refuses one earlier than the vote's end + 24 h). The protocol
+  refuses less than 24 h after receipt, stores it in `govPending`, and anyone
+  applies it once due: `gov-apply <beacon|fair|fast> <Gov-Id>`. The DAO
+  cancels with `016-cancel.json`. Code: `010-approve-code.json`, then anyone
+  uploads with `Gov.Upgrade`; it installs from `Effective-At` on.
+- **Exit hatch.** While one waits, validators `Exit-Now` (bond back at once)
+  and payers withdraw.
+- **No instant fix.** The fastest brake is `009-pause.json`, a 1-day vote; the
+  fastest money or code change is 1 day + 24 h.
+
+Owners and the queue are published as `gov` and `govPending` in
+`beaconinfo` / `fairinfo` and kept in the process state, so a rebuilt VM
+never re-arms a renounced wallet or loses a pending action. The token is
+never governed.
 
 ## Fresh deploy (2026-11-07)
 
@@ -133,12 +152,14 @@ New token (`RNG`, no `TEST-`), new DAO (`RNG DAO`), no predecessor
 export RNG_STATE=deploy/v3-main.json PARALITH_MONO=/c/REPO/pm-dao HB_NODE=$NODE HB_WALLET=<deployer.json>
 node deploy/deploy.mjs plan deploy/allocations-deployer.json --dry-run
 node deploy/deploy.mjs spawn-token deploy/allocations-deployer.json && node deploy/deploy.mjs spawn-dao --lua53b
-node deploy/deploy.mjs spawn-beacon && node deploy/deploy.mjs genesis-configure && node deploy/deploy.mjs set-dao beacon
+node deploy/deploy.mjs spawn-beacon && node deploy/deploy.mjs genesis-configure
 node deploy/deploy.mjs fund-reserve && node deploy/deploy.mjs fund-treasury
-node deploy/deploy.mjs spawn-fair && node deploy/deploy.mjs configure-fair && node deploy/deploy.mjs set-dao fair && node deploy/deploy.mjs fund-fair 40
+node deploy/deploy.mjs spawn-fair && node deploy/deploy.mjs configure-fair && node deploy/deploy.mjs fund-fair 40
 node deploy/deploy.mjs bond-for 100000 deploy/anyhonest-validators.json
-node deploy/deploy.mjs spawn-fast && node deploy/deploy.mjs genesis-configure-fast && node deploy/deploy.mjs set-dao fast
-node deploy/deploy.mjs verify
+node deploy/deploy.mjs spawn-fast && node deploy/deploy.mjs genesis-configure-fast
+node deploy/deploy.mjs dao-stake                    # Labs: 50,000,000 RNG
+node deploy/deploy.mjs dao-handover --confirm       # set-dao + renounce-wallet on all three, read back
+node deploy/deploy.mjs verify                       # includes "<role> wallet renounced"
 ```
 
 ## Launch runbook (testnet cutover)
@@ -166,7 +187,8 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    to the token it stakes (paralith-mono `dao.lua:193`), so RNG sent there is
    unspendable. The DAO controls both through `Gov.*`: the reserve pays
    heartbeat rounds (and moves only to a successor), the treasury is
-   spendable by an owner on receipt (`Gov.Treasury-Spend`), and can top up
+   spendable by the DAO (`Gov.Treasury-Spend`, 24 h after the vote, at most
+   10 % of the treasury per 30 days with reserve funding), and can top up
    the reserve (`Gov.Fund-Reserve`). Every `fund-*` refuses until
    `beaconinfo.token` is set (step 3): before genesis the beacon can only
    refund the Credit-Notice through its sender, and past 16 senders or 256
@@ -178,7 +200,9 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    `fund-game <rng> <game>` (or any Transfer to the fair process with
    `X-Fair-Game = <game>`); an unfunded game gets `Game-Unfunded`, and a game
    takes back its free balance with `Fair.Withdraw { Nonce }`. Re-run
-   `configure-fair` whenever governance changes the beacon's `requestPrice`.
+   `configure-fair` before the handover; after it the DAO changes both prices
+   by proposal (`002-configure.json` and `015-fair-configure.json` with the
+   same `EFFECTIVE_AT=`).
 5. **Validators bond and migrate.** Each launch validator receives 100,000 RNG
    and bonds all of it (4 x stake, the rank cap) in one transfer:
    `bond-for 100000 deploy/anyhonest-validators.json`. At the cap from day
@@ -188,17 +212,16 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    match the operators). Third parties run
    `node validator/anyhonest-validator.mjs init`, get RNG, then `bond` and
    `run`. The in-node devices need the v3-aware `rng-validator@1.0` (WP5)
-   build first. Soak 72 h on deployer ownership: `status`, `test-subscription`.
+   build first. Check `status` and `test-subscription` before the handover
+   (step 9): there is no deployer soak after it.
    A later allocation for Paralith contracts' RNG is a plain `grant`, not
    part of launch.
 
-   *Soak vs runway.* The 72 h soak is a pre-handover live test: the v3 beacon
-   runs real rounds with real validators while the deployer can still pause
-   or roll back, before anything is handed to the DAO. The runway is how long
+   *Runway.* The runway is how long
    the reserve keeps paying heartbeat rounds: 200 M RNG at 2 rounds/s x
    1 RNG (172,800 RNG/day) is about 1,157 days (3.2 years), extendable by
    `Gov.Fund-Reserve` from the treasury; after it the beacon falls back to
-   request-driven rounds. The soak spends about 0.5 M of it.
+   request-driven rounds.
 6. **Successor on the old beacon (legacy Admin path).** With the v2 owner wallet:
    `RNG_LEGACY_STATE=deploy/native-testnet.json node deploy/deploy.mjs legacy-set-successor MZMoXv-2aLD1MaR5tHEpXNrZgc6DoUpdw2q4DvlfxC0 <v3 beacon>`.
    Devices pause there, finish their reveals and move to v3. Each validator
@@ -215,17 +238,18 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    console env (`site/deploy/native-testnet.env`) together, so
    `deploy/test/deployment-config.test.mjs` stays green. Point each cracker's
    `config.json` `beacon` at v3 and restart it.
-9. **The DAO as co-owner.** `set-dao` (`Gov.Set-Dao` on the beacon, fair
-   play and the fast tier). There is no guardian. It refuses unless the DAO
-   publishes a `stake-dao/1` `daoinfo` on our token with no admin, on our
-   scheduler. `renounce-wallet <role> --confirm` later leaves the DAO the only
-   owner. Prove it:
-   `dao-stake 30000`, `dao-propose deploy/proposals/001-handover-proof.json`,
-   `dao-vote <id> Yes`. After the 7-day vote the DAO executes it; check the
-   proposal is `executed` and `Reveal-Window-Ms` is still 30000 with no
-   `Not authorised` refusal. Then `verify` (includes "co-owned by the DAO").
+9. **The DAO as the only owner.** `dao-stake` (Labs, 50,000,000 RNG), then
+   `dao-handover --confirm`: `Gov.Set-Dao` and `Gov.Renounce-Wallet` on the
+   beacon, fair play and the fast tier, each read back with `gov.wallet =
+   false`. There is no guardian. `set-dao` refuses unless the DAO publishes a
+   `stake-dao/1` `daoinfo` on our token with no admin, on our scheduler.
+   Prove it: `dao-propose deploy/proposals/001-handover-proof.json` (a
+   harmless re-set of `Request-Price`, applied on receipt), `dao-vote <id>
+   Yes`. After the 1-day vote the DAO executes it; check the proposal is
+   `executed` with no `Not authorised` refusal. Then `verify` (includes
+   "owned by the DAO" and "wallet renounced").
 
-**Fast tier (step 8b, before set-dao).** On-demand 2-of-3 threshold BLS on
+**Fast tier (step 8b, before the handover).** On-demand 2-of-3 threshold BLS on
 the existing committee; no heartbeat, rounds open only for paid requests.
 
 ```bash
@@ -244,7 +268,8 @@ the dead token `qFXxcv...`, so move it to `retired` in `native-testnet.json`
 (nothing to migrate; its balances are in the old TEST-RNG). The new process
 publishes `nextRoundAt: 0`, so a daemon still on the old build keeps working;
 the install only drops the dead cadence check. A committee change later is a
-new DKG ceremony plus `012-fast-committee.json` (applies on receipt).
+new DKG ceremony plus `012-fast-committee.json` (money: 24 h after the vote,
+with the exit hatch open meanwhile).
 
 **Verify after every step:** `node deploy/deploy.mjs status` (or `verify`,
 which exits 1 on any failed check: sealed token, DAO on RNG with no admin,
@@ -252,12 +277,14 @@ beacon token/self/predecessor, health `ok`, reserve funded, owners (`gov`), fair
 bound, one scheduler). Validators: `anyhonest-validator.mjs status`.
 
 **Rollback**
-- While the wallet is an owner: `gov Gov.Pause` stops the v3 heartbeat and new
+- Before `dao-handover`: `gov Gov.Pause` stops the v3 heartbeat and new
   requests. Clear the old beacon's successor
   (`legacy-set-successor MZMoXv-2... ""`), re-point console and crackers to
-  MZMoXv-2, which keeps running until retired. Do not retire it before the
-  soak ends.
-- After `renounce-wallet`: the DAO pauses by proposal (`dao-propose
-  deploy/proposals/009-pause.json`, 7-day vote; the fast tier takes the
-  same proposal with `execProcess` `$FAST`). The fix is a new beacon voted in with `003-set-successor.json`, or new code (`010-approve-code.json`).
-  Validators can `Pause`/`Exit` at any time; governance can never take a bond.
+  MZMoXv-2, which keeps running until retired.
+- After it: only the DAO. It pauses by proposal (`dao-propose
+  deploy/proposals/009-pause.json`, 1-day vote, on receipt; the fast tier takes
+  the same proposal with `execProcess` `$FAST`). The fix is a new beacon voted
+  in with `003-set-successor.json`, or new code (`010-approve-code.json`):
+  each one vote + 24 h, then `gov-apply`. There is no faster path.
+  Validators can `Pause`/`Exit` at any time and `Exit-Now` while a money/code
+  action waits; governance can never take a bond.

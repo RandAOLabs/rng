@@ -68,7 +68,7 @@ export function describeAction(action: DaoProposal["action"], beacon: string) {
   return { name, args, toBeacon: Boolean(beacon) && action.process === beacon, executed: action.executed };
 }
 
-/** Who governs the beacon: the launch wallet and the DAO are equal owners until the wallet renounces. */
+/** Who governs the beacon: the DAO; the launch wallet renounces at launch. */
 export function ownersLabel(gov: GovOwners | undefined) {
   if (!gov) return "—";
   if (gov.dao && gov.wallet) return "Wallet and DAO";

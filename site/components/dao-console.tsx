@@ -86,7 +86,7 @@ export function DaoConsole() {
         <section className="py-10">
           <h1 style={h1}>RNG DAO</h1>
           <div className="mt-4 max-w-[760px] space-y-3 text-[15px] leading-relaxed text-[var(--gray)]">
-            <p className="m-0">RNG holders govern the beacon through a YapDAO <code>stake-dao/1</code> process. Stake RNG to vote. A passed proposal sends one message, usually a <code>Gov.*</code> action to the beacon, and it applies on receipt.</p>
+            <p className="m-0">RNG holders govern the beacon through a YapDAO <code>stake-dao/1</code> process. Stake RNG to vote. A passed proposal sends one message, usually a <code>Gov.*</code> action to the beacon. Fees, pause and resume apply on receipt; anything that moves money or code takes effect at least 24 hours later, and validators may leave with their bond meanwhile.</p>
             <p className="m-0">This page is read-only. Staking, proposing and voting happen on YapDAO.</p>
             {dao.process && <p className="m-0"><a className="button invert" href={yapUrl(dao.process)} target="_blank" rel="noreferrer">Vote on yapdao.com</a></p>}
           </div>
