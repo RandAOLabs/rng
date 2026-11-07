@@ -602,6 +602,84 @@ local function runFairTests()
   local again = fair.credit(st, { from = F.token, fromProcess = true, sender = F.payer, quantity = "5", reference = "t1", forGame = G })
   check("a pruned reference is still a duplicate", again and again.duplicate == true and st.accounts[G].balance == balBefore)
 
+  -- Owners (vendor/gov.lua): the launch wallet and the DAO Gov.Set-Dao
+  -- names, equal, every action on receipt. Raw reply text asserted.
+  local function out() return base.results.output.data end
+  local function finfo() return json.decode(base.fairinfo) end
+  send(delivery(F.dao, { Action = "Fair.Configure", Keep = "4" }))
+  eq("no DAO yet: a DAO delivery is nobody", out(), '{"error":"Not authorised"}')
+  send(wallet(F.stranger, { Action = "Gov.Set-Dao", Dao = F.dao }))
+  eq("a stranger cannot set the DAO", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.stranger, { Action = "Gov.Set-Dao", Dao = F.stranger, ["from-process"] = F.dao }))
+  eq("a wallet forging the DAO's from-process is nobody", out(), '{"error":"Not authorised","ok":false}')
+  send(delivery(F.game, { Action = "Gov.Set-Dao", Dao = F.game }))
+  eq("another process is nobody", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
+  eq("the wallet cannot renounce before a DAO is set", out(), '{"error":"Set a DAO first","ok":false}')
+  local revGov = base.fairrev
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.dao }))
+  eq("the wallet sets the DAO", out(), '{"dao":"' .. F.dao .. '","ok":true}')
+  check("an owner change is published at once", base.fairrev ~= revGov
+    and json.decode(base.fairstate).owners.dao == F.dao, base.fairrev)
+  check("fairinfo publishes the owners", base.fairinfo:find('"gov":{"approved":"","code":"","dao":"' .. F.dao
+    .. '","version":0,"wallet":true}', 1, true) ~= nil, base.fairinfo:match('"gov":%b{}'))
+  send(wallet(F.owner, { Action = "gov.set_dao", dao = F.dao }))
+  eq("verb and tag names fold case, - and _", out(), '{"dao":"' .. F.dao .. '","ok":true}')
+
+  -- Fair.Configure: either owner, by tag, at once; Data from the wallet only.
+  r = send(delivery(F.dao, { Action = "Fair.Configure", Keep = "4", ["Max-Open"] = "9" }))
+  check("the DAO configures by tag", r.ok == true and r.keep == 4 and r.maxOpen == 9, out())
+  check("tag numbers are stored as integers", out():find('"keep":4,', 1, true) ~= nil
+    and math.type(Fair.state.keep) == "integer", out())
+  send(delivery(F.dao, { Action = "Fair.Configure", Data = encode({ keep = 5 }) }))
+  eq("the DAO's Data is not read", Fair.state.keep, 4)
+  send(delivery(F.dao, { Action = "fair.configure", max_open = "8" }))
+  eq("the DAO's tags fold too", Fair.state.maxOpen, 8)
+  eq("a tag spelled twice with two values is refused",
+    send(wallet(F.owner, { Action = "Fair.Configure", Keep = "5", keep = "6" })).error, "Bad-Parameter")
+  eq("a fraction is refused", send(delivery(F.dao, { Action = "Fair.Configure", Keep = "4.5" })).error, "Bad-Parameter")
+  eq("bounds hold for the DAO", send(delivery(F.dao, { Action = "Fair.Configure", ["Fair-Window-Ms"] = "9999" })).error,
+    "Bad-Parameter")
+  eq("the beacon stays locked for the DAO", send(delivery(F.dao, { Action = "Fair.Configure", Beacon = F.other })).error,
+    "Beacon-Locked")
+  eq("bad Data from the wallet", send(wallet(F.owner, { Action = "Fair.Configure", Data = "{" })).error, "Bad-Config")
+  check("the wallet still configures beside the DAO", configure({ keep = 3 }).ok == true and Fair.state.keep == 3)
+  eq("a stranger cannot configure", send(wallet(F.stranger, { Action = "Fair.Configure", Keep = "4" })).error, "Not authorised")
+  eq("the DAO's address as a wallet is nobody", send(wallet(F.dao, { Action = "Fair.Configure", Keep = "4" })).error,
+    "Not authorised")
+
+  -- Code: approved by an owner, uploaded by anyone; the state carries over.
+  local code = "local prev = compute\nFairUpgrade = 1\nfunction compute(b, r) return prev(b, r) end"
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code }))
+  eq("unapproved code is refused", out(), '{"error":"No approved code","ok":false}')
+  send(delivery(F.dao, { Action = "Gov.Approve-Code", ["Code-Root"] = Gov.rootOf(code) }))
+  eq("the DAO approves a root", out(), '{"approved":"' .. Gov.rootOf(code) .. '","ok":true}')
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code }))
+  eq("anyone uploads the approved code", out(), '{"installed":"' .. Gov.rootOf(code) .. '","ok":true,"version":1}')
+  check("the new code runs on the same state", FairUpgrade == 1 and Fair.state.keep == 3 and finfo().gov.version == 1)
+
+  -- Renounce: one way, the wallet's alone.
+  send(delivery(F.dao, { Action = "Gov.Renounce-Wallet" }))
+  eq("the DAO cannot renounce the wallet", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
+  eq("the wallet renounces", out(), '{"ok":true,"wallet":false}')
+  eq("the wallet is out", configure({ keep = 4 }).error, "Not authorised")
+  check("the DAO still configures", send(delivery(F.dao, { Action = "Fair.Configure", Keep = "4" })).ok == true)
+
+  -- A cold VM: the owners come back from fairstate; never a renounced wallet.
+  Fair = { rev = 0, owner = "", state = fair.new() }
+  send(wallet(F.stranger, { Action = "Get-Info" }))
+  check("a rebuilt VM keeps the renounced wallet and the DAO", finfo().gov.wallet == false and finfo().gov.dao == F.dao
+    and Fair.state.keep == 4, base.fairinfo:match('"gov":%b{}'))
+  check("installed code comes back approved", finfo().gov.code == "" and finfo().gov.approved == Gov.rootOf(code))
+  eq("the wallet stays out after a rebuild", configure({ keep = 5 }).error, "Not authorised")
+  local fs = json.decode(base.fairstate)
+  fs.owners = nil
+  base.fairstate, base.fairrev = encode(fs), string.format("%d", Fair.rev + 1)
+  Fair = { rev = 0, owner = "", state = fair.new() }
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.owner }))
+  eq("a published state with no owners re-arms nobody", out(), '{"error":"Not authorised","ok":false}')
+
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
   return table.concat(lines, "\n")
 end

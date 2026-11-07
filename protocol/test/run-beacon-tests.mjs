@@ -61,6 +61,8 @@ const bundle = [
   'json = require(".json")',
   'Owner = nil -- AOS presets Owner; on a node the contract resolves it from the spawn signer',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
+  read('protocol/vendor/sha256.lua'),
+  read('protocol/vendor/gov.lua'),
   read('protocol/beacon/beacon.lua'),
   fixtures,
   read('protocol/test/beacon_test.lua'),

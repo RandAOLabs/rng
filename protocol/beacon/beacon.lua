@@ -40,13 +40,14 @@
 -- first), so one stolen key cannot inject a value. With verification =
 -- "device", one post carrying a valid group signature is enough.
 --
--- Governance mirrors anyhonest.lua: the deployer wallet governs until
--- Gov.Handover names the DAO process; after that only the DAO (a from-process
--- our scheduler attests) does. Governance sets fees and the committee, can
--- pause new requests, and spends the protocol's fee share; it cannot mint,
--- move a balance or a member's earnings, or skip the 10-day timelock on a
--- committee change or a fee spend (the DAO's vote is 7 days, so a cancelling
--- proposal can pass first). A committee change means a new DKG ceremony.
+-- Governance mirrors anyhonest.lua and paralith-mono's gov.lua (vendor/gov.lua,
+-- bundled ahead of this file): two equal owners, the launch wallet until it
+-- sends Gov.Renounce-Wallet and the DAO named by Gov.Set-Dao (a from-process
+-- our scheduler attests). Every owner action takes effect on receipt: there
+-- is no queue and no timelock. Governance sets fees and the committee, can
+-- pause new requests, spends the protocol's fee share, and approves code
+-- (Gov.Approve-Code, Gov.Upgrade); it cannot mint, or move a balance or a
+-- member's earnings. A committee change means a new DKG ceremony.
 
 local json = require(".json")
 
@@ -71,12 +72,12 @@ local ABANDON_CAP_MS = 7 * 86400000
 
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
-local DAY_MS = 86400000
--- Queued governance waits this long after the DAO votes (7 days), so the DAO
--- can pass a Gov.Cancel first; anyone applies it once due, until it expires.
-local GOV_DELAY_MS = { ["Configure"] = 10 * DAY_MS, ["Claim-Protocol"] = 10 * DAY_MS }
-local GOV_EXPIRE_MS = 14 * DAY_MS
 local MAX_FEE = 1000000 -- RNG per signer or protocol share of one request
+
+--- gov.lua's owner record (GovState) at spawn: the wallet on, no DAO.
+local function freshOwners(wallet)
+  return { dao = "", wallet = wallet, approved = "", code = { sha = "", version = 0 } }
+end
 
 -- All state lives in one table, published whole as `beaconstate` after every
 -- message and restored from it when the VM comes back without its globals.
@@ -113,12 +114,12 @@ local function freshState()
     attest = {},          -- "r" -> { by = member -> sig, sigs = sig -> members }
     equivocations = {},   -- member -> conflicting signatures posted
     partials = { round = 0, by = {} }, -- open round's partial signatures, by member
-    -- Governance. Before Gov.Handover the deployer wallet (Owner) governs;
-    -- after it only `governor`, the DAO process, as attested by our scheduler.
-    governor = "",
-    -- executed: "governor|X-Dao-Proposal" -> true, the last EXECUTED_KEEP
+    -- Governance: gov.lua's GovState, kept here so it is published, restored
+    -- and rolled back with the rest of the state (bindOwners).
+    owners = freshOwners(true),
+    -- executed: "dao|X-Dao-Proposal" -> true, the last EXECUTED_KEEP
     -- (executedOrder); executedFloor: the highest numeric proposal pruned.
-    gov = { queue = {}, nextId = 1, executed = {}, executedOrder = {}, executedFloor = 0 },
+    gov = { executed = {}, executedOrder = {}, executedFloor = 0 },
     paused = false,
     transferSeq = 0,      -- X-Transfer-Sequence of the last token Transfer; only ever increases
   }
@@ -143,16 +144,35 @@ end
 
 local function restore(base)
   local published = int(base and base.beaconrev, 0)
-  if published <= int(Beacon.rev, 0) then return end
+  if published <= int(Beacon.rev, 0) then return false end
   local ok, saved = pcall(json.decode, base.beaconstate or "")
   if ok and type(saved) == "table" then
     Beacon = freshState()
+    -- A published state without owners has none: never re-arm the wallet.
+    Beacon.owners = freshOwners(false)
     for k, v in pairs(deflate(saved)) do Beacon[k] = v end
     local hok, history = pcall(json.decode, base.beaconhistory or "")
     if hok and type(history) == "table" and type(history.rounds) == "table" then
       Beacon.history = deflate(history.rounds)
     end
+    return true
   end
+  return false
+end
+
+--- gov.lua reads and writes the global GovState; point it at the state's
+--- owner record, so owners are published, restored and rolled back with the
+--- state. Code installed in a VM that is gone is not running here (the
+--- spawn module is): its root comes back approved, for anyone to resend.
+local function bindOwners(reloaded)
+  local o = Beacon.owners
+  if type(o) ~= "table" then o = freshOwners(false); Beacon.owners = o end
+  if type(o.code) ~= "table" then o.code = { sha = "", version = 0 } end
+  if reloaded and (o.code.sha or "") ~= "" then
+    if (o.approved or "") == "" then o.approved = o.code.sha end
+    o.code = { sha = "", version = int(o.code.version, 0) }
+  end
+  GovState = o
 end
 
 local function deepCopy(v)
@@ -254,7 +274,6 @@ local function resolveOwner(base)
   return Owner
 end
 
-local function isOwner(address) return Owner ~= nil and Owner ~= "" and address ~= nil and address == Owner end
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -327,13 +346,6 @@ local function transferOut(to, rngAmount, note) return transferAtoms(to, rngAmou
 
 local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
 
-local function govQueueView()
-  local list = {}
-  for _, e in pairs(Beacon.gov.queue) do list[#list + 1] = e end
-  table.sort(list, function(a, b) return int(a.id, 0) < int(b.id, 0) end)
-  return list
-end
-
 --- Requests that will never get a value: refunded exactly what each was
 --- charged (to its balance; Withdraw pays it out through the token's
 --- sequenced-v1 stream), processes told. Signers are paid nothing for it.
@@ -399,8 +411,8 @@ local function info()
     price = { fast = p, beacon = p }, signerFee = int(Beacon.signerFee, 1), protocolFee = int(Beacon.protocolFee, 1),
     token = Beacon.token, unit = int(Beacon.unit, 1), self = Beacon.self,
     protocolAccrued = int(Beacon.protocolAccrued, 0), verification = Beacon.verification,
-    governor = Beacon.governor or "", paused = Beacon.paused == true,
-    govQueue = govQueueView(), transferSeq = int(Beacon.transferSeq, 0),
+    -- gov.lua's owners: { dao, wallet, approved, code, version }.
+    gov = Gov.info(), paused = Beacon.paused == true, transferSeq = int(Beacon.transferSeq, 0),
     abandonAfterMs = int(Beacon.abandonAfterMs, 1800000), abandonAt = abandonAt(nextRound),
     features = { "on-demand", "pay-and-request", "gov", "abandon" },
   }
@@ -751,15 +763,16 @@ H["Balance"] = function(base, msg, from)
 end
 
 ---------------------------------------------------------------------------
--- Governance: the DAO (after Gov.Handover) or the deployer (before it)
+-- Governance: the launch wallet and the DAO, equal owners (vendor/gov.lua)
 ---------------------------------------------------------------------------
 
+--- Which owner sent the current message: "wallet", "dao" or nil
+--- (gov.lua's Gov.ownerOf over the verified body; set by compute).
+local Who = nil
+
 --- The DAO process, believed only as a from-process our scheduler attested.
-local function isGovernor(from)
-  local g = Beacon.governor or ""
-  return FromProcess and g ~= "" and from == g
-end
---- The DAO executes a proposal once: true when this governor's proposal
+local function isGovernor() return Who == "dao" end
+--- The DAO executes a proposal once: true when this DAO's proposal
 --- already ran (a redelivery), else records it. The last EXECUTED_KEEP are
 --- remembered; a numeric id at or below the highest one pruned also counts as
 --- run. A redelivery follows its first copy closely, and a DAO proposal is
@@ -782,17 +795,17 @@ local function executedBefore(g, from, proposal)
   return false
 end
 
---- The deployer wallet, until Gov.Handover switches it off for good.
-local function isDeployer(msg) return (Beacon.governor or "") == "" and isOwner(provenSigner(msg)) end
-local function govOnly(msg, from) return isDeployer(msg) or isGovernor(from) end
+--- The launch wallet, until Gov.Renounce-Wallet switches it off for good.
+local function isDeployer() return Who == "wallet" end
+local function govOnly() return Who ~= nil end
 
 --- Governance arguments are tags ("Signer-Fee", "signer_fee" or "signerfee"
---- all name signerFee). Only a deployer's message may give them in Data
+--- all name signerFee). Only the wallet's message may give them in Data
 --- (JSON) instead, where no tag gives them.
 local function norm(k) return (tostring(k):lower():gsub("[%-_]", "")) end
 local function govArgs(msg)
   local data = {}
-  if isDeployer(msg) then for k, v in pairs(dataOf(msg)) do data[norm(k)] = v end end
+  if isDeployer() then for k, v in pairs(dataOf(msg)) do data[norm(k)] = v end end
   return function(name)
     local dashed = (name:gsub("(%u)", "-%1"):gsub("^%-", ""))
     for _, n in ipairs({ dashed, (dashed:gsub("%-", "_")), name:lower() }) do
@@ -810,18 +823,6 @@ local function listArg(v)
     v = ok and d or nil
   end
   return type(v) == "table" and v or nil
-end
-
-local function enqueue(kind, entry, now)
-  local g = Beacon.gov
-  local gone = {}
-  for id, e in pairs(g.queue) do if now > int(e.at, 0) + GOV_EXPIRE_MS then gone[#gone + 1] = id end end
-  for _, id in ipairs(gone) do g.queue[id] = nil end
-  local id = int(g.nextId, 1)
-  g.nextId = id + 1
-  entry.id, entry.kind, entry.queuedAt, entry.at = id, kind, now, now + GOV_DELAY_MS[kind]
-  g.queue[tostring(id)] = entry
-  return entry
 end
 
 --- The committee a Gov.Configure names, checked whole: { committee,
@@ -900,11 +901,11 @@ end
 
 --- The first Gov.Configure that names the token is genesis: token, unit and
 --- self are fixed from then on, and the whole committee applies at once.
---- After genesis fees apply at once (a request pays the price of the moment
---- it is made); a committee change (members, keys, threshold, verification)
---- is queued for GOV_DELAY_MS.Configure and needs a new DKG ceremony.
-H["Gov.Configure"] = function(base, msg, from, now)
-  if not govOnly(msg, from) then return fail(base, "Not authorised") end
+--- After genesis everything applies at once too: fees (a request pays the
+--- price of the moment it is made) and a committee change (members, keys,
+--- threshold, verification), which needs a new DKG ceremony first.
+H["Gov.Configure"] = function(base, msg)
+  if not govOnly() then return fail(base, "Not authorised") end
   local arg = govArgs(msg)
   local genesis = Beacon.token == ""
   local token, self, unit = arg("token"), arg("self"), arg("unit")
@@ -926,8 +927,7 @@ H["Gov.Configure"] = function(base, msg, from, now)
       if not fees[k] or fees[k] < 1 or fees[k] > MAX_FEE then return fail(base, "Bad-Parameter") end
     end
   end
-  -- Applies at once, like the fees: it only sets how long requests wait
-  -- before their refund.
+  -- It only sets how long requests wait before their refund.
   local abandonAfter = arg("abandonAfterMs")
   if abandonAfter ~= nil then
     abandonAfter = int(abandonAfter, nil)
@@ -937,86 +937,57 @@ H["Gov.Configure"] = function(base, msg, from, now)
   if not c then return fail(base, why) end
   Beacon.signerFee, Beacon.protocolFee = fees.signerFee, fees.protocolFee
   if abandonAfter then Beacon.abandonAfterMs = abandonAfter end
-  local queued = nil
   if genesis then
     Beacon.token, Beacon.self = token, self
     if unit ~= nil then Beacon.unit = int(unit, Beacon.unit) end
-    applyCommittee(c)
-  elseif changed then
-    queued = enqueue("Configure", { committee = c }, now)
   end
+  if genesis or changed then applyCommittee(c) end
   local out = info()
-  out.ok, out.queued = true, queued
+  out.ok = true
   return reply(base, out)
 end
 
---- One way: the DAO governs from here, and the deployer path is gone. Refused
---- while anything is queued: nothing the deployer queued lands under the DAO.
-H["Gov.Handover"] = function(base, msg)
-  if not isDeployer(msg) then return fail(base, "Not authorised") end
-  if Beacon.token == "" then return fail(base, "Not-Configured") end
-  local governor = govArgs(msg)("governor")
-  if not isAoAddress(governor) or governor == Owner or governor == Beacon.self or governor == Beacon.token then
-    return fail(base, "Bad-Governor")
-  end
-  if next(Beacon.gov.queue) ~= nil then return fail(base, "Queue-Not-Empty") end
-  Beacon.governor = governor
-  return reply(base, { governor = governor })
-end
-
---- The protocol's fee share, to a recipient, after the timelock. Never to the
---- DAO, this process or the token (atoms there are stranded or recycled).
-H["Gov.Claim-Protocol"] = function(base, msg, from, now)
-  if not govOnly(msg, from) then return fail(base, "Not authorised") end
+--- The protocol's fee share, all of it, to a recipient. Never to the DAO,
+--- this process or the token (atoms there are stranded or recycled).
+H["Gov.Claim-Protocol"] = function(base, msg)
+  if not govOnly() then return fail(base, "Not authorised") end
   local to = govArgs(msg)("recipient")
-  if not isAoAddress(to) or to == Beacon.governor or to == Beacon.self or to == Beacon.token then
+  if not isAoAddress(to) or to == GovState.dao or to == Beacon.self or to == Beacon.token then
     return fail(base, "Bad-Recipient")
   end
-  return reply(base, { queued = enqueue("Claim-Protocol", { recipient = to }, now) })
+  local amount, outbox = int(Beacon.protocolAccrued, 0), {}
+  if amount > 0 then
+    Beacon.protocolAccrued = 0
+    outbox["rng-protocol"] = transferOut(to, amount, "RNG fast-tier protocol fees")
+  end
+  return reply(base, { claimed = amount, recipient = to }, outbox)
 end
 
 --- No new requests. Requests already bound are still signed and paid.
-H["Gov.Pause"] = function(base, msg, from)
-  if not govOnly(msg, from) then return fail(base, "Not authorised") end
+H["Gov.Pause"] = function(base)
+  if not govOnly() then return fail(base, "Not authorised") end
   Beacon.paused = true
   return reply(base, { paused = true })
 end
 
-H["Gov.Resume"] = function(base, msg, from)
-  if not govOnly(msg, from) then return fail(base, "Not authorised") end
+H["Gov.Resume"] = function(base)
+  if not govOnly() then return fail(base, "Not authorised") end
   Beacon.paused = false
   return reply(base, { paused = false })
 end
 
-H["Gov.Cancel"] = function(base, msg, from)
-  if not govOnly(msg, from) then return fail(base, "Not authorised") end
-  local id = tostring(int(govArgs(msg)("govId"), -1))
-  local e = Beacon.gov.queue[id]
-  if not e then return fail(base, "Unknown-Gov-Id") end
-  Beacon.gov.queue[id] = nil
-  return reply(base, { cancelled = e.id })
+--- gov.lua's verbs (Gov.Set-Dao, Gov.Renounce-Wallet, Gov.Approve-Code,
+--- Gov.Upgrade), over the request as the node delivered it.
+local Req = nil
+local function govVerb(base)
+  Gov.handle(base, Req)
+  return base
 end
-
---- Anyone: runs a queued action once its delay has passed, until it expires.
-H["Gov.Apply"] = function(base, msg, from, now)
-  local id = tostring(int(govArgs(msg)("govId"), -1))
-  local e = Beacon.gov.queue[id]
-  if not e then return fail(base, "Unknown-Gov-Id") end
-  if now < int(e.at, 0) then return fail(base, "Too-Early") end
-  Beacon.gov.queue[id] = nil
-  if now > int(e.at, 0) + GOV_EXPIRE_MS then return reply(base, { error = "Expired", dropped = e.id }) end
-  local out, outbox = { applied = e.id, kind = e.kind }, {}
-  if e.kind == "Configure" then
-    applyCommittee(e.committee)
-  elseif e.kind == "Claim-Protocol" then
-    local amount = int(Beacon.protocolAccrued, 0)
-    if amount > 0 then
-      Beacon.protocolAccrued = 0
-      outbox["rng-protocol"] = transferOut(e.recipient, amount, "RNG fast-tier protocol fees")
-    end
-    out.claimed = amount
-  end
-  return reply(base, out, outbox)
+for _, verb in ipairs({ "Gov.Set-Dao", "Gov.Renounce-Wallet", "Gov.Approve-Code", "Gov.Upgrade" }) do H[verb] = govVerb end
+-- gov.lua replies with output only; compute adds this message's notices.
+Gov.reply = function(base, t)
+  Gov.DEFAULT.reply(base, t)
+  base.results.outbox = {}
 end
 
 ---------------------------------------------------------------------------
@@ -1063,16 +1034,18 @@ local function resolveHandler(action)
   if H[action] then return H[action] end
   if ACTION_ALIASES == nil then
     ACTION_ALIASES = {}
-    for name, fn in pairs(H) do ACTION_ALIASES[tostring(name):lower()] = fn end
+    for name, fn in pairs(H) do ACTION_ALIASES[norm(name)] = fn end
   end
-  return ACTION_ALIASES[tostring(action):lower()]
+  -- Case, `-` and `_` folded: "Gov.SetDao" and "gov.set_dao" name Gov.Set-Dao.
+  return ACTION_ALIASES[norm(action)]
 end
 
 function compute(base, req, opts)
   base = type(base) == "table" and base or {}
-  restore(base)
+  bindOwners(restore(base))
   resolveOwner(base)
   local raw = (req and req.body) or {}
+  Req, Who = req, nil
   local msg = caseInsensitive(type(raw) == "table" and raw or {})
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
@@ -1089,10 +1062,11 @@ function compute(base, req, opts)
     local saved = deepCopy(Beacon)
     local ok, out = pcall(function()
       local from = actor(msg, base)
+      Who = Gov.ownerOf(base, type(raw) == "table" and raw or nil)
       -- The DAO executes a proposal once: a redelivered Gov.* with the same
-      -- X-Dao-Proposal from the governor does nothing.
+      -- X-Dao-Proposal from the DAO does nothing.
       local proposal = msg["X-Dao-Proposal"]
-      if proposal ~= nil and tostring(msg.Action):lower():sub(1, 4) == "gov." and isGovernor(from) then
+      if proposal ~= nil and tostring(msg.Action):lower():sub(1, 4) == "gov." and isGovernor() then
         if executedBefore(Beacon.gov, from, proposal) then
           return reply(base, { duplicate = true, proposal = tostring(proposal) })
         end
@@ -1104,6 +1078,7 @@ function compute(base, req, opts)
       -- A handler that failed sends nothing, so it takes no sequence number,
       -- and leaves no half-applied state.
       Beacon = saved
+      bindOwners(false)
       FromProcess = false
       Notices, HistoryNew, Finalized, Abandoned = {}, {}, nil, nil
     end

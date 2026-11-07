@@ -101,7 +101,7 @@ function runBeaconTests()
   eq("the token is fixed after genesis", r.error, "Token-Locked")
   r = deployer({ Self = string.rep("z", 43) })
   eq("self is fixed after genesis", r.error, "Token-Locked")
-  eq("no queue after refusals", #info().govQueue, 0)
+  check("no owner change after refusals", info().gov.dao == "" and info().gov.wallet == true)
 
   -- No rounds without requests: the committee has nothing to sign.
   r = send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 1, signature = "p1" }) }))
@@ -253,7 +253,7 @@ function runBeaconTests()
   -- 3 and pays out 3, whatever the fee is when it is signed.
   r = deployer({ ["Signer-Fee"] = "5" })
   eq("fees apply at once", r.price.fast, 11)
-  check("a fee change is not queued", r.queued == nil and #info().govQueue == 0)
+  check("a fee change is not queued", r.queued == nil and info().govQueue == nil)
   -- No cadence: the next round is signed the moment it has a request.
   send(wallet(F.members[1], { Action = "Round", Data = encode({ round = 2, signature = F.sig2 }) }), 1)
   r = send(wallet(F.members[2], { Action = "Round", Data = encode({ round = 2, signature = F.sig2 }) }), 1)
@@ -266,13 +266,9 @@ function runBeaconTests()
   r = send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 3, signature = "p" }) }))
   eq("no heartbeat: round 3 waits for a request", r.error, "Nothing-Pending")
 
-  -- A committee change is queued for 10 days (a new DKG), then anyone applies it.
+  -- A committee change (a new DKG first) applies at once: no queue, no timelock.
   r = deployer({ Verification = "device" })
-  local q = r.queued
-  check("committee change queued, not applied", q and q.kind == "Configure" and Beacon.verification == "attestations", r.error)
-  eq("too early to apply", send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(q.id) })).error, "Too-Early")
-  r = send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(q.id) }), 10 * DAY)
-  check("applied after 10 days", r.applied == q.id and Beacon.verification == "device", r.error)
+  check("committee change applied at once", r.ok == true and r.queued == nil and Beacon.verification == "device", r.error)
 
   -- Pay and request in one token Transfer (X-Request-Id), here from a wallet:
   -- no push to the wallet; it reads its round from `seen`.
@@ -316,44 +312,66 @@ function runBeaconTests()
   eq("device mode does not pay the submitting non-participant", Beacon.accrued[F.members[3]], 2)
   ao = savedAo
 
-  -- Handover: one way, to a process, never to the deployer.
-  eq("a stranger cannot hand over", send(wallet(F.stranger, { Action = "Gov.Handover", Governor = F.dao })).error, "Not authorised")
-  eq("handover to the deployer refused", deployer({ Action = "Gov.Handover", Governor = F.owner }).error, "Bad-Governor")
-  eq("handover to the token refused", deployer({ Action = "Gov.Handover", Governor = F.token }).error, "Bad-Governor")
-  q = deployer({ Threshold = "3" }).queued
-  eq("handover refused while anything is queued", deployer({ Action = "Gov.Handover", Governor = F.dao }).error, "Queue-Not-Empty")
-  deployer({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(q.id) })
-  r = deployer({ Action = "Gov.Handover", Governor = F.dao, Guardian = F.stranger })
-  check("handover names the DAO, no guardian", r.governor == F.dao and info().governor == F.dao and r.guardian == nil, r.error)
-  eq("deployer locked out after handover", deployer({ ["Signer-Fee"] = "2" }).error, "Not authorised")
-  eq("handover only once", deployer({ Action = "Gov.Handover", Governor = F.stranger }).error, "Not authorised")
+  -- Owners (vendor/gov.lua): the launch wallet and the DAO Gov.Set-Dao names,
+  -- equal, every action on receipt; the wallet until Gov.Renounce-Wallet.
+  -- Replies are asserted as the raw text the node returns.
+  local function out() return base.results.output.data end
+  local function govInfo() return info().gov end
+  dao({ Action = "Gov.Pause" })
+  eq("no DAO yet: a DAO delivery is nobody", out(), '{"error":"Not authorised"}')
+  send(wallet(F.stranger, { Action = "Gov.Set-Dao", Dao = F.dao }))
+  eq("a stranger cannot set the DAO", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.stranger, { Action = "Gov.Set-Dao", Dao = F.stranger, ["from-process"] = F.dao }))
+  eq("a wallet forging the DAO's from-process cannot set the DAO", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.sched, { Action = "Gov.Set-Dao", Dao = F.stranger }))
+  eq("the scheduler alone is nobody", out(), '{"error":"Not authorised","ok":false}')
+  send({ target = F.beacon, Action = "Gov.Set-Dao", Dao = F.stranger, ["from-process"] = F.dao })
+  eq("an unsigned delivery is nobody", out(), '{"error":"Not authorised","ok":false}')
+  local hmacOnly = wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.stranger })
+  hmacOnly.commitments.c = nil
+  send(hmacOnly)
+  check("an hmac committer names nobody", out():find('"ok":true', 1, true) == nil and govInfo().dao == "", out())
+  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
+  eq("the wallet cannot renounce before a DAO is set", out(), '{"error":"Set a DAO first","ok":false}')
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = "short" }))
+  eq("a DAO must be a process id", out(), '{"error":"Dao must be a 43-character process id","ok":false}')
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = string.rep("a", 42) .. "!" }))
+  eq("a DAO id is base64url", out(), '{"error":"Dao must be a 43-character process id","ok":false}')
+  check("refusals named no DAO", govInfo().dao == "" and govInfo().wallet == true)
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.dao }))
+  eq("the wallet sets the DAO", out(), '{"dao":"' .. F.dao .. '","ok":true}')
+  check("beaconinfo publishes the owners", base.beaconinfo:find('"gov":{"approved":"","code":"","dao":"' .. F.dao
+    .. '","version":0,"wallet":true}', 1, true) ~= nil, base.beaconinfo:match('"gov":%b{}'))
+  check("no governor or queue is published", info().governor == nil and info().govQueue == nil)
+  for _, gone in ipairs({ "Gov.Handover", "Gov.Apply", "Gov.Cancel", "Gov.Fund", "Gov.Mint" }) do
+    send(wallet(F.owner, { Action = gone, Governor = F.dao, ["Gov-Id"] = "1" }))
+    eq(gone .. " does not exist", out(), '{"error":"unknown action \'' .. gone .. '\'"}')
+  end
+  send(wallet(F.owner, { Action = "gov.set_dao", dao = F.dao }))
+  eq("the verb and tag names fold case, - and _", out(), '{"dao":"' .. F.dao .. '","ok":true}')
+  local twice = wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.dao, dao = F.stranger })
+  send(twice)
+  eq("one tag spelled twice with two values is no tag", out(), '{"error":"Dao must be a 43-character process id","ok":false}')
+  eq("the DAO is unchanged", govInfo().dao, F.dao)
+
+  -- Both owners act, at once.
   eq("the DAO's address as a wallet is nobody", send(wallet(F.dao, { Action = "Gov.Pause" })).error, "Not authorised")
   eq("a wallet forging the DAO's from-process is nobody",
     send(wallet(F.stranger, { Action = "Gov.Pause", ["from-process"] = F.dao })).error, "Not authorised")
-
-  -- The DAO governs fees and the committee; it cannot mint or take balances.
+  eq("another process is nobody", send(delivery(F.game, { Action = "Gov.Pause" })).error, "Not authorised")
   r = dao({ Action = "Gov.Configure", ["Signer-Fee"] = "2", protocol_fee = "2" })
   check("the DAO sets fees by tag", r.price and r.price.fast == 6, r.error)
-  eq("data is the deployer's only", dao({ Action = "Gov.Configure", Data = encode({ signerFee = 9 }) }).signerFee, 2)
+  eq("data is the wallet's only", dao({ Action = "Gov.Configure", Data = encode({ signerFee = 9 }) }).signerFee, 2)
   eq("fee bounds", dao({ Action = "Gov.Configure", ["Signer-Fee"] = "0" }).error, "Bad-Parameter")
+  r = deployer({ ["Signer-Fee"] = "3" })
+  check("the wallet still governs beside the DAO", r.ok == true and r.signerFee == 3, r.error)
+  dao({ Action = "Gov.Configure", ["Signer-Fee"] = "2" })
   r = dao({ Action = "Gov.Configure", Committee = encode({ F.members[1], F.members[2] }), Threshold = "2",
     ["Group-Key"] = F.groupKey2, ["Share-Public-Keys"] = encode({ F.sharePublicKeys[1], F.sharePublicKeys[2] }) })
-  q = r.queued
-  check("a new committee is queued", q and q.kind == "Configure" and #info().committee == 3, r.error)
-  eq("a stranger cannot cancel", send(wallet(F.stranger, { Action = "Gov.Cancel", ["Gov-Id"] = tostring(q.id) })).error, "Not authorised")
-  r = dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(q.id) })
-  check("the DAO cancels it inside the timelock", r.cancelled == q.id and #info().govQueue == 0, r.error)
-  q = dao({ Action = "Gov.Configure", Committee = encode({ F.members[1], F.members[2] }), Threshold = "2",
-    ["Group-Key"] = F.groupKey2, ["Share-Public-Keys"] = encode({ F.sharePublicKeys[1], F.sharePublicKeys[2] }) }).queued
-  r = send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(q.id) }), 10 * DAY)
-  check("the new committee applies after the timelock", r.applied == q.id and #info().committee == 2
+  check("a new committee applies at once", r.ok == true and r.queued == nil and #info().committee == 2
     and info().groupKey == F.groupKey2 and Beacon.committee[F.members[3]] == nil, r.error)
   eq("a removed member keeps its earnings", Beacon.accrued[F.members[3]], 2)
   eq("committee bounds", dao({ Action = "Gov.Configure", Threshold = "3" }).error, "Invalid-Threshold")
-  q = dao({ Action = "Gov.Configure", Verification = "attestations" }).queued
-  r = send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(q.id) }), 25 * DAY)
-  check("an action not applied within 14 days of due is dropped", r.error == "Expired"
-    and Beacon.verification == "device" and #info().govQueue == 0, r.error)
   for _, gone in ipairs({ "Configure", "Claim-Protocol", "Admin.Mint", "Mint", "Faucet", "Gov.Clear-Guardian" }) do
     eq(gone .. " does not exist", dao({ Action = gone }).error, "unknown action '" .. gone .. "'")
   end
@@ -363,6 +381,9 @@ function runBeaconTests()
   dao({ Action = "Gov.Resume", ["X-Dao-Proposal"] = "8" })
   r = dao({ Action = "Gov.Pause", ["X-Dao-Proposal"] = "7" })
   check("the same proposal again is a no-op", r.duplicate == true and not Beacon.paused, encode(r))
+  r = send(wallet(F.owner, { Action = "Gov.Pause", ["X-Dao-Proposal"] = "7" }))
+  check("the wallet's message is no DAO proposal", r.paused == true and Beacon.paused, encode(r))
+  deployer({ Action = "Gov.Resume" })
 
   -- Pause: no new requests; a paid one-message request keeps its credit.
   dao({ Action = "Gov.Pause" })
@@ -377,16 +398,107 @@ function runBeaconTests()
   check("withdraw pays the wallet back", ob["rng-withdraw"] and ob["rng-withdraw"].Recipient == F.wallet
     and ob["rng-withdraw"].Quantity == string.format("%d", 6 * U), r.error)
 
-  -- The protocol's share leaves only through a timelocked Gov.Claim-Protocol.
+  -- The protocol's share leaves through Gov.Claim-Protocol, at once.
   eq("not to the DAO", dao({ Action = "Gov.Claim-Protocol", Recipient = F.dao }).error, "Bad-Recipient")
   eq("not to the token", dao({ Action = "Gov.Claim-Protocol", Recipient = F.token }).error, "Bad-Recipient")
-  q = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner }).queued
-  check("claim queued", q and q.kind == "Claim-Protocol" and Beacon.protocolAccrued == 4)
-  r, ob = send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(q.id) }), 10 * DAY)
+  eq("not to itself", dao({ Action = "Gov.Claim-Protocol", Recipient = F.beacon }).error, "Bad-Recipient")
+  eq("a stranger cannot claim", send(wallet(F.stranger, { Action = "Gov.Claim-Protocol", Recipient = F.stranger })).error,
+    "Not authorised")
+  r, ob = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
   paidOut = paidOut + 4
-  check("protocol fees paid after the timelock", r.claimed == 4 and ob["rng-protocol"]
-    and ob["rng-protocol"].Recipient == F.owner and Beacon.protocolAccrued == 0, r.error)
+  eq("protocol fees paid at once (raw)", out(), '{"claimed":4,"recipient":"' .. F.owner .. '"}')
+  check("the claim is one Transfer", ob["rng-protocol"] and ob["rng-protocol"].Recipient == F.owner
+    and ob["rng-protocol"].Quantity == string.format("%d", 4 * U) and Beacon.protocolAccrued == 0)
+  r, ob = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
+  check("nothing accrued: no transfer", r.claimed == 0 and next(ob) == nil, encode(r))
 
+  -- Code: an owner approves a root; the wallet installs code directly;
+  -- anyone uploads approved code. Installed code keeps the state.
+  local roundBefore = info().round
+  local code1 = "local prev = compute\nUpgradeMarker = 1\nfunction compute(b, r, o) return prev(b, r, o) end"
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code1 }))
+  eq("a stranger cannot install code", out(), '{"error":"No approved code","ok":false}')
+  send(wallet(F.stranger, { Action = "Gov.Approve-Code", ["Code-Root"] = Gov.rootOf(code1) }))
+  eq("a stranger cannot approve code", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.owner, { Action = "Gov.Upgrade", Data = "this is not lua" }))
+  check("code that does not load is refused, nothing changes", out():find('"ok":false', 1, true) ~= nil
+    and govInfo().version == 0 and govInfo().code == "", out())
+  send(wallet(F.owner, { Action = "Gov.Upgrade", Data = "UpgradeMarker = 9" }))
+  check("code without a new compute is refused and undone", out():find('"error":"the code must be a full bundle', 1, true) ~= nil
+    and UpgradeMarker == nil, out())
+  send(wallet(F.owner, { Action = "Gov.Upgrade", Data = code1 }))
+  eq("the wallet installs code directly", out(), '{"installed":"' .. Gov.rootOf(code1) .. '","ok":true,"version":1}')
+  check("the new code runs on the old state", UpgradeMarker == 1 and info().round == roundBefore
+    and govInfo().code == Gov.rootOf(code1) and govInfo().version == 1 and govInfo().dao == F.dao)
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code1 }))
+  eq("the running code again changes nothing", out(), '{"error":"No approved code","ok":false}')
+
+  -- Renounce: one way, the wallet's alone; then only the DAO governs.
+  dao({ Action = "Gov.Renounce-Wallet" })
+  eq("the DAO cannot renounce the wallet", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.stranger, { Action = "Gov.Renounce-Wallet" }))
+  eq("a stranger cannot renounce the wallet", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
+  eq("the wallet renounces", out(), '{"ok":true,"wallet":false}')
+  check("beaconinfo shows no wallet", govInfo().wallet == false and govInfo().dao == F.dao)
+  eq("the wallet is locked out of Configure", deployer({ ["Signer-Fee"] = "1" }).error, "Not authorised")
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.owner }))
+  eq("the wallet cannot take the DAO seat", out(), '{"error":"Not authorised","ok":false}')
+  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
+  eq("renouncing twice is refused", out(), '{"error":"Not authorised","ok":false}')
+  local code2 = "local prev = compute\nUpgradeMarker = 2\nfunction compute(b, r, o) return prev(b, r, o) end"
+  send(wallet(F.owner, { Action = "Gov.Upgrade", Data = code2 }))
+  eq("the renounced wallet cannot install code", out(), '{"error":"No approved code","ok":false}')
+
+  -- The DAO approves; anyone uploads, in parts and in any order.
+  local partA, partB = code2:sub(1, 30), code2:sub(31)
+  local manifest = Sha256.hex(partA) .. "\n" .. Sha256.hex(partB)
+  local root2 = Sha256.hex(manifest)
+  dao({ Action = "Gov.Approve-Code", ["Code-Root"] = "nothex" })
+  eq("a root is 64 lowercase hex", out(), '{"error":"Code-Root must be 64 lowercase hex","ok":false}')
+  dao({ Action = "Gov.Approve-Code", ["Code-Root"] = root2 })
+  eq("the DAO approves a root", out(), '{"approved":"' .. root2 .. '","ok":true}')
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code1 .. "\n" }))
+  check("code for another root is refused", out():find('"error":"Code does not match the approved root"', 1, true) ~= nil, out())
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "0", Data = manifest }))
+  eq("a stranger starts the approved upload", out(), '{"have":0,"ok":true,"part":0,"parts":2,"root":"' .. root2 .. '"}')
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "1", Data = partB }))
+  check("a wrong part is refused", out():find('"error":"Part does not match the manifest"', 1, true) ~= nil, out())
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "2", Data = partB }))
+  eq("part 2 first", out(), '{"have":1,"ok":true,"part":2,"parts":2}')
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "1", Data = partA }))
+  eq("the last part installs", out(), '{"installed":"' .. root2 .. '","ok":true,"version":2}')
+  check("the DAO's code runs; the approval is spent", UpgradeMarker == 2 and govInfo().approved == ""
+    and govInfo().code == root2 and govInfo().version == 2)
+
+  -- The DAO hands its seat to another DAO; the old one is nobody after.
+  local dao2 = string.rep("d", 43)
+  dao({ Action = "Gov.Set-Dao", Dao = dao2 })
+  eq("the DAO names its successor", out(), '{"dao":"' .. dao2 .. '","ok":true}')
+  eq("the old DAO is nobody", dao({ Action = "Gov.Pause" }).error, "Not authorised")
+  send(delivery(dao2, { Action = "Gov.Set-Dao", Dao = F.dao }))
+  eq("the new DAO acts", out(), '{"dao":"' .. F.dao .. '","ok":true}')
+
+  -- A cold VM: the owners come back from beaconstate; installed code does
+  -- not (the spawn module runs), so its root comes back approved.
+  local savedBeacon = Beacon
+  Beacon = { rev = 0 }
+  send(wallet(F.stranger, { Action = "Get-Info" }))
+  check("a rebuilt VM keeps the renounced wallet and the DAO", govInfo().wallet == false and govInfo().dao == F.dao, encode(govInfo()))
+  check("installed code comes back approved, not running", govInfo().code == "" and govInfo().approved == root2
+    and govInfo().version == 2, encode(govInfo()))
+  eq("the wallet stays locked out after a rebuild", deployer({ ["Signer-Fee"] = "1" }).error, "Not authorised")
+  check("the rebuilt state is the same state", Beacon.transferSeq == savedBeacon.transferSeq
+    and info().round == savedBeacon.round)
+  local st = json.decode(base.beaconstate)
+  st.owners = nil
+  base.beaconstate, base.beaconrev = encode(st), string.format("%d", Beacon.rev + 1)
+  Beacon = { rev = 0 }
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.owner }))
+  eq("a published state with no owners re-arms nobody", out(), '{"error":"Not authorised","ok":false}')
+  check("and has no wallet", govInfo().wallet == false, encode(govInfo()))
+  Beacon.owners = { dao = F.dao, wallet = false, approved = "", code = { sha = "", version = 2 } }
+  GovState = Beacon.owners
   -- Signers claim their own earnings; a handler that throws leaves no trace.
   local seqBefore = Beacon.transferSeq
   local realEncode = encode

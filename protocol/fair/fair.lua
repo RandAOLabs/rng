@@ -18,10 +18,14 @@
 --                   X-Fair-Game | X-For }                 that game's balance (default: Sender)
 --   Fair.Withdraw { Nonce [, Quantity] }                  the game: its free balance back (atoms);
 --                                                         Nonce strictly increasing per game
---   Fair.Configure { Data = { beacon, token, requestPrice, fairWindowMs, keep,
---                    maxOpen, minIntervalMs, maxGames, maxPerGame } }  the deployer
---     beacon and token are fixed once set; requestPrice is the beacon's (whole
---     RNG) and must follow a governance change of it.
+--   Fair.Configure { Beacon, Token, Request-Price, Fair-Window-Ms, Keep,  an owner (the wallet
+--                    Max-Open, Min-Interval-Ms, Max-Games, Max-Per-Game }  or the DAO), at once;
+--     as tags (any spelling of case, - and _), or in Data (JSON) from the
+--     wallet only. beacon and token are fixed once set; requestPrice is the
+--     beacon's (whole RNG) and must follow a governance change of it.
+--   Gov.Set-Dao / Gov.Renounce-Wallet / Gov.Approve-Code / Gov.Upgrade
+--     vendor/gov.lua: two equal owners, the launch wallet until it renounces
+--     and the DAO Gov.Set-Dao names (a from-process our scheduler attests).
 --   Get-Info                                              anyone; also sends a due request
 -- Sends: Request-Random -> beacon (from this process's beacon balance, a float
 --        topped up from the games' payment after every bound batch),
@@ -32,12 +36,18 @@
 --
 -- Native ~lua@5.3a contract, the beacon's conventions. Bundled after
 -- vendor/json.lua, vendor/jsonenc.lua (encode, jsonObject), lib/rng.lua
--- (global `rng`) and lib/fair.lua (global `fair`).
+-- (global `rng`), lib/fair.lua (global `fair`), vendor/sha256.lua and
+-- vendor/gov.lua (globals `Gov`, `GovState`).
 
 local json = require(".json")
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
-Fair = Fair or { rev = 0, owner = "", state = fair.new({ metered = true }) }
+--- gov.lua's owner record (GovState) at spawn: the wallet on, no DAO.
+local function freshOwners(wallet)
+  return { dao = "", wallet = wallet, approved = "", code = { sha = "", version = 0 } }
+end
+
+Fair = Fair or { rev = 0, owner = "", owners = freshOwners(true), state = fair.new({ metered = true }) }
 
 local function deepCopy(v)
   if type(v) ~= "table" then return v end
@@ -54,13 +64,39 @@ local function deflate(v)
 end
 
 local function restore(base)
-  if tonumber(base.fairrev or "0") <= Fair.rev then return end
+  if tonumber(base.fairrev or "0") <= Fair.rev then return false end
   local ok, saved = pcall(json.decode, base.fairstate or "")
   if ok and type(saved) == "table" then
     local st = fair.new({ metered = true })
     for k, v in pairs(deflate(saved.state or {})) do st[k] = v end
-    Fair = { rev = math.tointeger(saved.rev) or 0, owner = saved.owner or "", state = st }
+    -- A published state without owners has none: never re-arm the wallet.
+    local owners = type(saved.owners) == "table" and deflate(saved.owners) or freshOwners(false)
+    Fair = { rev = math.tointeger(saved.rev) or 0, owner = saved.owner or "", owners = owners, state = st }
+    return true
   end
+  return false
+end
+
+--- gov.lua reads and writes the global GovState; point it at the state's
+--- owner record, so owners are published and restored with the state. Code
+--- installed in a VM that is gone is not running here (the spawn module
+--- is): its root comes back approved, for anyone to resend.
+local function bindOwners(reloaded)
+  local o = Fair.owners
+  if type(o) ~= "table" then o = freshOwners(false); Fair.owners = o end
+  if type(o.code) ~= "table" then o.code = { sha = "", version = 0 } end
+  if reloaded and (o.code.sha or "") ~= "" then
+    if (o.approved or "") == "" then o.approved = o.code.sha end
+    o.code = { sha = "", version = math.tointeger(o.code.version) or 0 }
+  end
+  GovState = o
+end
+
+--- The owner record as one string, to tell whether a message changed it.
+local function ownersKey()
+  local o = Fair.owners
+  return table.concat({ tostring(o.dao), tostring(o.wallet), tostring(o.approved),
+    tostring(o.code.sha), tostring(o.code.version) }, "|")
 end
 
 --- A message must be signed for THIS process, so a commit or reveal signed
@@ -159,6 +195,12 @@ local function fields(raw)
   return setmetatable({}, { __index = function(_, k) return t[k] or lower[tostring(k):lower()] end })
 end
 
+--- gov.lua's verbs, answered by Gov.handle over the request as delivered.
+local GOV_VERBS = { ["gov.setdao"] = true, ["gov.renouncewallet"] = true, ["gov.approvecode"] = true,
+  ["gov.upgrade"] = true }
+-- The wallet owner is the spawn signer (Fair.owner), not the global Owner.
+Gov.walletOwner = function(base) local o = resolveOwner(base); return o ~= "" and o or nil end
+
 local function reply(base, value, outbox)
   local out = {}
   for name, m in pairs(outbox or {}) do
@@ -169,10 +211,49 @@ local function reply(base, value, outbox)
   return base
 end
 
-local function configure(msg, from)
-  if from == nil or from ~= Fair.owner then return nil, "Not authorised" end
-  local ok, d = pcall(json.decode, msg.Data or "")
-  if not ok or type(d) ~= "table" then return nil, "Bad-Config" end
+local CONFIG_KEYS = { "beacon", "token", "requestPrice", "fairWindowMs", "keep", "maxOpen", "minIntervalMs",
+  "maxGames", "maxPerGame" }
+local function norm(k) return (tostring(k):lower():gsub("[%-_]", "")) end
+
+--- Fair.Configure's arguments: tags in any spelling of case, - and _ (a tag
+--- spelled twice with two values is refused), or Data (JSON) from the wallet
+--- only, where no tag gives one. A whole-number tag is read as an integer.
+local function configArgs(raw, who)
+  local want = {}
+  for _, k in ipairs(CONFIG_KEYS) do want[norm(k)] = k end
+  local d, seen = {}, {}
+  local function take(k, v)
+    local name = want[norm(k)]
+    if not name then return true end
+    if type(v) == "string" and v:match("^%d+$") and #v <= 15 then v = math.tointeger(tonumber(v)) end
+    if seen[name] and d[name] ~= v then return false end
+    seen[name], d[name] = true, v
+    return true
+  end
+  for k, v in pairs(raw) do
+    if type(k) == "string" and k ~= "Tags" and not take(k, v) then return nil, "Bad-Parameter" end
+  end
+  if type(raw.Tags) == "table" then
+    for k, v in pairs(raw.Tags) do
+      if type(k) == "string" and raw[k] == nil and not take(k, v) then return nil, "Bad-Parameter" end
+    end
+  end
+  local data = raw.Data or raw.data
+  if who == "wallet" and data ~= nil and data ~= "" then
+    local ok, j = pcall(json.decode, data)
+    if not ok or type(j) ~= "table" then return nil, "Bad-Config" end
+    for k, v in pairs(j) do
+      local name = want[norm(k)]
+      if name and d[name] == nil then d[name] = v end
+    end
+  end
+  return d
+end
+
+local function configure(raw, who)
+  if who == nil then return nil, "Not authorised" end
+  local d, why = configArgs(raw, who)
+  if not d then return nil, why end
   local st, B = Fair.state, fair.BOUNDS
   local function bounded(v, b) v = math.tointeger(v); return v and v >= b[1] and v <= b[2] and v or nil end
   if d.beacon ~= nil then
@@ -219,8 +300,11 @@ end
 
 function compute(base, req)
   base = type(base) == "table" and base or {}
-  restore(base)
+  local reloaded = restore(base)
+  bindOwners(reloaded)
   resolveOwner(base)
+  -- A rebuilt VM republishes once: its owners may read differently now.
+  local ownersBefore = reloaded and "" or ownersKey()
   local raw = (req and req.body) or {}
   raw = type(raw) == "table" and raw or {}
   local msg = fields(raw)
@@ -234,12 +318,16 @@ function compute(base, req)
   local result
   if refused then
     result = reply(base, { error = refused })
+  elseif GOV_VERBS[norm(action)] then
+    Gov.handle(base, req)
+    base.results.outbox = {}
+    result = base
   else
     local saved = deepCopy(st)
     local ok, data, outbox, extra = pcall(function()
       local from, fromProcess = actor(raw, base)
       local a = action:lower()
-      if a == "fair.configure" then return configure(msg, from) end
+      if norm(a) == "fair.configure" then return configure(raw, Gov.ownerOf(base, raw)) end
       if a == "get-info" then
         local m = fair.pump(st, now)
         return { ok = true }, m and { ["fair-request"] = m } or {}
@@ -261,12 +349,14 @@ function compute(base, req)
       result = reply(base, data, outbox)
     end
   end
+  -- An owner change is a state change: published at once.
+  if ownersKey() ~= ownersBefore then st.changes = (st.changes or 0) + 1 end
   -- Publish only when the state moved (or nothing is published yet): a
   -- refusal or a no-op Get-Info re-encodes nothing.
   if (st.changes or 0) == changesBefore and base.fairstate ~= nil then return result end
   Fair.rev = Fair.rev + 1
   result.fairrev = string.format("%d", Fair.rev)
-  result.fairstate = encode({ rev = Fair.rev, owner = Fair.owner, state = {
+  result.fairstate = encode({ rev = Fair.rev, owner = Fair.owner, owners = Fair.owners, state = {
     beacon = st.beacon, windowMs = st.windowMs, keep = st.keep, maxOpen = st.maxOpen,
     sessions = jsonObject(st.sessions), byGame = jsonObject(st.byGame), done = jsonObject(st.done),
     open = st.open, next = st.next, batches = jsonObject(st.batches), bound = st.bound,
@@ -284,6 +374,8 @@ function compute(base, req)
     open = st.open, next = st.next, outstanding = st.outstanding, at = now, protocol = "rng/fair/v1",
     minIntervalMs = st.minIntervalMs, maxGames = st.maxGames, maxPerGame = st.maxPerGame, games = st.gameCount,
     token = st.token, requestPriceAtoms = st.price, transferSeq = st.transferSeq,
-    requestAfter = st.lastRequestAt and (st.lastRequestAt + st.minIntervalMs) or 0 })
+    requestAfter = st.lastRequestAt and (st.lastRequestAt + st.minIntervalMs) or 0,
+    -- gov.lua's owners: { dao, wallet, approved, code, version }.
+    gov = Gov.info() })
   return result
 end

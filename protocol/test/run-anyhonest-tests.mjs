@@ -161,6 +161,8 @@ const bundle = [
   'Owner = nil',
   'TestHarness = true',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
+  read('protocol/vendor/sha256.lua'),
+  read('protocol/vendor/gov.lua'),
   read('protocol/beacon/anyhonest.lua'),
   fixtures,
   read('protocol/test/anyhonest_test.lua'),
