@@ -16,6 +16,7 @@ const readJson = (p) => JSON.parse(fs.readFileSync(path.join(ROOT, p), 'utf8'));
 const pid = (s) => s.padEnd(43, '_');
 const DEPLOYER = pid('deployer');
 const state = readJson('deploy/native-testnet.json');
+const live = readJson('deploy/v3-mainnet.json');
 const env = Object.fromEntries(
   fs.readFileSync(path.join(ROOT, 'site/deploy/native-testnet.env'), 'utf8')
     .split(/\r?\n/)
@@ -23,11 +24,11 @@ const env = Object.fromEntries(
     .map((line) => line.split(/=(.*)/s).slice(0, 2)),
 );
 
-test('console deployment follows the canonical native-testnet processes', () => {
-  assert.equal(env.RNG_TOKEN_ID, state.token);
-  assert.equal(env.RNG_BEACON_ID, state.beacon);
-  assert.equal(env.RNG_ANYHONEST_ID, state.anyHonest);
-  assert.equal(env.RNG_DAO_ID, state.dao);
+test('console deployment follows the live v3 processes', () => {
+  assert.equal(env.RNG_TOKEN_ID, live.token);
+  assert.equal(env.RNG_BEACON_ID, live.fast);
+  assert.equal(env.RNG_ANYHONEST_ID, live.beacon);
+  assert.equal(env.RNG_DAO_ID, live.dao);
 });
 
 test('deployment manifests retain state and load the pinned console environment', () => {
