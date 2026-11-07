@@ -1,9 +1,9 @@
 {
   "title": "Prove DAO control of the beacon",
-  "body": "Re-sets Catch-Up-Ms to its current value (30000). Harmless, so it applies on receipt: passing and executing it proves the beacon takes the DAO as its owner after dao-handover. No parameter changes.",
+  "body": "Re-sets Request-Price to its current value (4). Harmless, so it applies on receipt: passing and executing it proves the beacon takes the DAO as its owner after dao-handover. No parameter changes.",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Configure",
-    "Catch-Up-Ms": "30000"
+    "Request-Price": "4"
   }
 }

@@ -857,13 +857,6 @@ function runTimelockTests()
   eq("applied once", apply(cw).error, "Unknown-Gov-Id")
   r = dao({ Action = "Gov.Configure", ["Commit-Window-Ms"] = "4000" })
   check("a money parameter set to its current value is harmless", r.ok == true and r.pending == nil, encode(r))
-  -- Prices are money: what every payer is charged waits the floor too.
-  r = dao({ Action = "Gov.Configure", ["Request-Price"] = "5" })
-  check("a request price change is money", r.error == "Effective-At-Required" and r.class == "money"
-    and Timelock.params.requestPrice == 4, encode(r))
-  r = dao({ Action = "Gov.Configure", ["Subscription-Price"] = "2" })
-  check("a subscription price change is money", r.error == "Effective-At-Required" and Timelock.params.subscriptionPrice == 1, encode(r))
-  check("the same price again is harmless", dao({ Action = "Gov.Configure", ["Request-Price"] = "4" }).ok == true)
   -- Fewer seats per round or in the registry, or more commits required, are
   -- money; more seats are harmless.
   local ma, mv = Timelock.params.maxActive, Timelock.params.maxValidators
@@ -1302,26 +1295,26 @@ function runTimelockTests()
     "Time-Went-Back")
   check("so nothing changed", not Timelock.paused and Timelock.validators[D] ~= nil)
   -- Nothing the wallet set going may outlive it (no approval, no queue).
-  local wroot = string.rep("e", 64)
-  send(wallet(F.owner, { Action = "Gov.Approve-Code", ["Code-Root"] = wroot }))
-  eq("the wallet's approval is effective at once and dated", out(), '{"approved":"' .. wroot .. '","effectiveAt":'
-    .. string.format("%d", clock) .. ',"ok":true}')
-  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
-  eq("attack: no renounce while a wallet-approved root stands", out(), '{"approved":"' .. wroot
-    .. '","error":"Code-Approval-Pending","ok":false}')
-  GovState.approvedAt = clock - 14 * DAY - 1 -- white box: 14 days on
-  tick()
-  check("a wallet approval is not timeless: it lapses 14 days on", gov().approved == "" and gov().wallet == true, encode(gov()))
   local pq = dao({ Action = "Gov.Treasury-Spend", Recipient = F.stranger, Quantity = "1", ["Effective-At"] = at() }).pending.id
   send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
   eq("attack: no renounce while an action (a puppet DAO's) is queued", out(), '{"error":"Gov-Queue-Not-Empty","ok":false}')
   dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(pq) })
+  dao({ Action = "Gov.Approve-Code", ["Code-Root"] = string.rep("d", 64), ["Effective-At"] = at() })
+  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
+  eq("attack: no renounce while a DAO code approval is pending", out(), '{"error":"Gov-Queue-Not-Empty","ok":false}')
+  dao({ Action = "Gov.Cancel", ["Gov-Id"] = "code" })
+  -- The wallet's own approval (timeless, bootstrap) does not outlive it.
+  local wroot = string.rep("e", 64)
+  send(wallet(F.owner, { Action = "Gov.Approve-Code", ["Code-Root"] = wroot }))
+  check("the wallet approves at once", gov().approved == wroot and gov().approvedAt == 0)
 
   -- Renounce: one way; the wallet's alone; then only the DAO governs.
   dao({ Action = "Gov.Renounce-Wallet" })
   eq("the DAO cannot renounce the wallet", out(), '{"error":"Not authorised","ok":false}')
   send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
   eq("the wallet renounces", out(), '{"ok":true,"wallet":false}')
+  check("renouncing clears the wallet's code approval", gov().approved == "" and gov().approvedAt == 0, encode(gov()))
+  eq("so its root cannot install", send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = "x" })).error, "No approved code")
   -- Attack: the renounced wallet tries every lever.
   eq("the wallet is out of Configure", configure({ cadenceMs = 9 }).error, "Not authorised")
   for _, f in ipairs({ { Action = "Gov.Configure", ["Request-Price"] = "5" }, { Action = "Gov.Pause" }, { Action = "Gov.Resume" },
@@ -1439,23 +1432,6 @@ function runTimelockTests()
   r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "nt-1" }))
   check("the same id in a new message within the window is a duplicate", r.duplicate == true
     and Timelock.balances[F.game] == charged, r.error)
-  -- Max-Price: the payer's ceiling. A price raised past it is refused, not charged.
-  r, ob = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "mp-1", ["Max-Price"] = "3" }))
-  local mpErr = ob["rng-error"] and json.decode(ob["rng-error"].Data) or {}
-  check("Max-Price below the price: Price-Above-Max (the process told the price), nothing charged",
-    r.error == "Price-Above-Max" and mpErr.price == 4 and mpErr.requestId == "mp-1"
-    and Timelock.balances[F.game] == charged and seenOf(F.game .. "|mp-1") == nil, encode(ob))
-  eq("Max-Price must be whole RNG", send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest",
-    ["Request-Id"] = "mp-2", ["Max-Price"] = "4.5" })).error, "Bad-Max-Price")
-  r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "mp-3", ["Max-Price"] = "4" }))
-  check("Max-Price at the price: charged and bound", r.round ~= nil and Timelock.balances[F.game] == charged - 4, encode(r))
-  local sbal = int(Timelock.balances[F.stranger], 0)
-  r, ob = send(delivery(F.token, { Action = "Credit-Notice", Sender = F.stranger, Quantity = tostring(4 * U),
-    ["X-Request-Id"] = "pay-mp", ["X-Max-Price"] = "3", Reference = "t960" }))
-  check("pay-and-request with X-Max-Price below the price: refused, the credit stays", r.error == "Price-Above-Max"
-    and Timelock.balances[F.stranger] == sbal + 4, encode(r))
-  r = send(delivery(F.game, { Action = "Subscribe", ["Subscription-Id"] = "mp-sub", Rounds = "10", ["Max-Price"] = "0" }))
-  eq("Subscribe with Max-Price below its cost", r.error, "Price-Above-Max")
   local maxSeen, accepted = 0, 0
   for i = 1, 100 do
     r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "g-" .. i }), 30000)

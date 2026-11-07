@@ -138,7 +138,7 @@ test('RNG DAO rules follow the spec', () => {
   assert.equal(r['Proposal-Deposit'], String(5_000e6));
   assert.equal(r['Voting-Period'], String(86400000), 'one day: the floor stake-dao/1 allows');
   assert.equal(r['Unstake-Delay'], String(14 * 86400000));
-  assert.deepEqual([r['Quorum-Bps'], r['Pass-Bps'], r['Veto-Bps'], r['Max-Active-Proposals']], ['2000', '5000', '3334', '20']);
+  assert.deepEqual([r['Quorum-Bps'], r['Pass-Bps'], r['Veto-Bps'], r['Max-Active-Proposals']], ['1000', '5000', '3334', '20']);
   assert.ok(Number(r['Max-Proposals-Per-Proposer']) <= Number(r['Max-Active-Proposals']));
   assert.equal(r['Dao-Admin'], undefined, 'stake-dao/1 refuses Dao-Admin');
   assert.equal(daoRules({ token: pid('token') })['Dao-Name'], 'RNG DAO');
@@ -202,8 +202,7 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
     { Action: 'Gov.Set-Successor', Successor: pid('n') }, { Action: 'Gov.Move-Reserve', Successor: pid('n') },
     { Action: 'Gov.Remove-Validator', Validator: pid('v') }, { Action: 'Gov.Configure', Slash: '1200' },
     { Action: 'Gov.Configure', 'Reveal-Window-Ms': '20000' }, { Action: 'Gov.Set-Dao', Dao: pid('dao2') },
-    { Action: 'Gov.Approve-Code', 'Code-Root': 'a'.repeat(64) }, { Action: 'Gov.Configure', 'Request-Price': '5' },
-    { Action: 'Gov.Configure', 'Subscription-Price': '2' }, { Action: 'Gov.Configure', 'Max-Active': '8' },
+    { Action: 'Gov.Approve-Code', 'Code-Root': 'a'.repeat(64) }, { Action: 'Gov.Configure', 'Max-Active': '8' },
     { Action: 'Gov.Configure', 'Min-Commits': '3' }]) {
     const floor = floorFor(tags.Action);
     const ea = { 'Effective-At': effectiveAt({ now: 1e12, floorMs: floor }) };
@@ -215,7 +214,7 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
   }
   assert.match(proposalErrors({ ...ok, execTags: { Action: 'Gov.Move-Reserve', Successor: pid('n'), ...EA } },
     { token: pid('token'), now: 1e12 }).join(), /plus 7 d/, 'the reserve waits a week, not a day');
-  assert.deepEqual(bad({ Action: 'Gov.Configure', 'Abandon-After-Ms': '70000' }), [], 'abandonAfterMs is harmless');
+  assert.deepEqual(bad({ Action: 'Gov.Configure', 'Request-Price': '5' }), [], 'prices are harmless');
   assert.match(bad({ Action: 'Gov.Pause', 'Effective-At': 'soon' }).join(), /whole milliseconds/);
   // gov.lua's verbs: Set-Dao and Approve-Code by vote; Renounce-Wallet is the wallet's alone.
   assert.deepEqual(bad({ Action: 'Gov.Set-Dao', Dao: pid('dao2'), ...EA }), []);
@@ -227,9 +226,7 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
   assert.match(bad({ Action: 'Gov.Clear-Guardian' }).join(), /not a beacon action/);
   // The fast tier has its own Gov.* table.
   const fast = (execTags) => proposalErrors({ ...ok, execProcess: pid('fast'), execTags }, { token: pid('token'), fast: pid('fast') });
-  assert.match(fast({ Action: 'Gov.Configure', 'Signer-Fee': '2' }).join(), /needs Effective-At/, 'fees are money');
-  assert.deepEqual(fast({ Action: 'Gov.Configure', 'Signer-Fee': '2', ...EA }), []);
-  assert.deepEqual(fast({ Action: 'Gov.Configure', 'Abandon-After-Ms': '70000' }), []);
+  assert.deepEqual(fast({ Action: 'Gov.Configure', 'Signer-Fee': '2' }), []);
   assert.match(fast({ Action: 'Gov.Claim-Protocol', Recipient: pid('who') }).join(), /needs Effective-At/);
   assert.deepEqual(fast({ Action: 'Gov.Claim-Protocol', Recipient: pid('who'), ...EA }), []);
   assert.match(fast({ Action: 'Gov.Configure', Threshold: '2' }).join(), /needs Effective-At/);
@@ -608,8 +605,8 @@ return table.concat(out, "\\n")`;
     `{"dao":"${DAO}","ok":true}`,
     '{"error":"Effective-At-Required","ok":false}',
     `{"approved":"${'c'.repeat(64)}","effectiveAt":1700086400005,"ok":true}`,
-    // Nothing approved may outlive the wallet: cancel it first.
-    `{"approved":"${'c'.repeat(64)}","error":"Code-Approval-Pending","ok":false}`,
+    // Nothing pending may outlive the wallet: cancel it first.
+    '{"error":"Gov-Queue-Not-Empty","ok":false}',
     '{"cancelled":"code"}',
     '{"ok":true,"wallet":false}',
     '{"error":"Not authorised","ok":false}',

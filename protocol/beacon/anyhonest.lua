@@ -1038,7 +1038,7 @@ H["Credit-Notice"] = function(base, msg, from, now)
     if not isAoAddress(payer) then return fail(base, "Bad-Sender") end
     add(Timelock.balances, payer, amount)
     FromProcess = false -- the payer may be a wallet: its value is in the round record
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], ["Max-Price"] = msg["X-Max-Price"] }, payer, now)
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"] }, payer, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, payer, int(Timelock.balances[payer], 0)
@@ -1063,17 +1063,6 @@ H["Withdraw"] = function(base, msg, from)
   return reply(base, { withdrawn = amount }, { ["rng-withdraw"] = transferOut(from, amount, "RNG balance withdrawal") })
 end
 
---- Max-Price (optional, whole RNG): the most the payer accepts to be charged.
---- Nil when it allows `cost`, else the refusal's name.
-local function overMax(msg, cost)
-  local v = msg["Max-Price"]
-  if v == nil then return nil end
-  local max = int(v, nil)
-  if not max or max < 0 then return "Bad-Max-Price" end
-  if cost > max then return "Price-Above-Max" end
-  return nil
-end
-
 H["Request-Random"] = function(base, msg, from, now)
   if not from then return fail(base, "Unsigned") end
   local requestId = msg["Request-Id"]
@@ -1091,8 +1080,6 @@ H["Request-Random"] = function(base, msg, from, now)
   if Timelock.paused then return fail(base, "Paused", from, ctx) end
   if #activeValidators() < int(Timelock.params.minCommits, 2) then return fail(base, "Too-Few-Validators", from, ctx) end
   local cost = price()
-  local above = overMax(msg, cost)
-  if above then return fail(base, above, from, { requestId = requestId, price = cost, maxPrice = msg["Max-Price"] }) end
   local bal = int(Timelock.balances[from], 0)
   if bal < cost then return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost }) end
   -- Bind to the round taking commits: no output is revealed before its
@@ -1129,8 +1116,6 @@ H["Subscribe"] = function(base, msg, from, now)
   if rounds < 1 or rounds > 31536000 then return fail(base, "Bad-Rounds", from) end
   local batches = (rounds + batchRounds - 1) // batchRounds
   local cost = batches * int(Timelock.params.subscriptionPrice, 1)
-  local above = overMax(msg, cost)
-  if above then return fail(base, above, from, { subscriptionId = id, price = cost, maxPrice = msg["Max-Price"] }) end
   local balance = int(Timelock.balances[from], 0)
   if balance < cost then return fail(base, "Insufficient-Balance", from,
     { subscriptionId = id, balance = balance, price = cost }) end
@@ -1738,11 +1723,10 @@ local MONEY_VERBS = { ["Gov.Set-Successor"] = true, ["Gov.Move-Reserve"] = true,
 --- Gov.Configure parameters that are money: crackBounty is taken from a
 --- withholder's bond per crack; maxInFlight bounds how many rounds one
 --- incident can fault; cadenceMs and targetIntervalMs set how fast duties
---- come; roundPrice is what the reserve pays per heartbeat round;
---- requestPrice and subscriptionPrice are what every payer is charged; T
---- (with h) is the puzzle every output rests on.
+--- come; roundPrice is what the reserve pays per heartbeat round; T (with h)
+--- is the puzzle every output rests on.
 local MONEY_PARAMS = { "stake", "slash", "commitWindowMs", "revealWindowMs", "crackBounty", "maxInFlight",
-  "cadenceMs", "targetIntervalMs", "roundPrice", "requestPrice", "subscriptionPrice", "T" }
+  "cadenceMs", "targetIntervalMs", "roundPrice", "T" }
 --- Money in one direction: fewer seats per round (maxActive) or in the
 --- registry (maxValidators) concentrates who makes the randomness, and more
 --- commits required (minCommits) can starve every round. Raising the seats

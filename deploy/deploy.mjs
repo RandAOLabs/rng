@@ -184,9 +184,8 @@ export const LABS_STAKE_RNG = 50_000_000;
 
 /** The RNG DAO's definition (DAO.md rules; PERMISSIONLESS.md "YapDAO instance"). Voting-Period
  * is 1 day, the floor stake-dao/1 lets a vote go to (it can be raised later, never below 1 day).
- * Quorum-Bps 2000 (20 % of the stake must vote): while Labs holds most of the stake, a proposal
- * Labs does not vote on needs a fifth of all stake behind it rather than a tenth (PERMISSIONLESS.md
- * "Who governs the DAO"); a vote can lower it, never below stake-dao/1's 5 % floor. */
+ * Quorum-Bps 1000: while Labs holds most of the stake, Labs votes on every proposal (dao-watch;
+ * PERMISSIONLESS.md "Who governs the DAO"). */
 export function daoRules({ token, ticker = 'RNG' }) {
   return {
     'Dao-Name': ticker.startsWith('TEST-') ? 'TEST-RNG DAO' : 'RNG DAO',
@@ -196,7 +195,7 @@ export function daoRules({ token, ticker = 'RNG' }) {
     'Proposal-Threshold': String(25_000 * UNIT),
     'Proposal-Deposit': String(5_000 * UNIT),
     'Voting-Period': String(DAY),
-    'Quorum-Bps': '2000',
+    'Quorum-Bps': '1000',
     'Pass-Bps': '5000',
     'Veto-Bps': '3334',
     'Unstake-Delay': String(14 * DAY),
@@ -258,10 +257,8 @@ const MONEY_VERBS = ['Gov.Set-Successor', 'Gov.Move-Reserve', 'Gov.Treasury-Spen
 // naming them carries Effective-At either way.
 const MONEY_TAGS = {
   beacon: ['Stake', 'Slash', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Crack-Bounty', 'Max-In-Flight', 'Cadence-Ms',
-    'Target-Interval-Ms', 'Round-Price', 'Request-Price', 'Subscription-Price', 'Max-Active', 'Max-Validators',
-    'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
-  'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification', 'Signer-Fee',
-    'Protocol-Fee'].map(word),
+    'Target-Interval-Ms', 'Round-Price', 'Max-Active', 'Max-Validators', 'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
+  'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'].map(word),
   fair: ['Request-Price', 'Beacon', 'Token'].map(word),
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',

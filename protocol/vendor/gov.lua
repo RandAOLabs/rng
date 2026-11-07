@@ -18,14 +18,13 @@
 --- VERBS (dispatch compares names with case, `-` and `_` folded):
 ---   Gov.Set-Dao        Dao=<43-char pid>       owner (wallet or DAO)
 ---   Gov.Renounce-Wallet                        wallet only, one way; refused
----                                              while no DAO is set, while a
----                                              code root is approved, or while
----                                              the contract's queue (Gov.queue)
----                                              holds an action
+---                                              while no DAO is set or while
+---                                              govPending is not empty (the
+---                                              contract's queue, Gov.queue, or
+---                                              a DAO code approval); clears
+---                                              the wallet's code approval
 ---   Gov.Approve-Code   Code-Root=<64 hex>      owner; latest approval wins;
----                      Effective-At=<ms>       the DAO's: >= receipt + EXIT_FLOOR_MS;
----                                              the wallet's: from receipt. Either
----                                              lapses PENDING_EXPIRE_MS after
+---                      Effective-At=<ms>       the DAO's: >= receipt + EXIT_FLOOR_MS
 ---   Gov.Upgrade        Data=<code>             one message, see below
 ---   Gov.Upgrade        Part=0 Data=<manifest>  starts a chunked upload
 ---   Gov.Upgrade        Part=i Data=<part i>    i = 1..n, any order
@@ -102,9 +101,8 @@
 --- answered Not-Yet-Effective, the parts are kept, and once due any part or
 --- the manifest sent again installs it. An approval not installed within
 --- Gov.PENDING_EXPIRE_MS after approvedAt lapses. The wallet's approvals
---- (bootstrap only) have approvedAt = their receipt: at once, and they lapse
---- the same way; the wallet cannot renounce while one stands, so no
---- wallet-era approval outlives the wallet. EXIT_FLOOR_MS and
+--- (bootstrap only) have approvedAt 0: at once; Gov.Renounce-Wallet clears
+--- one, so no wallet-era approval outlives the wallet. EXIT_FLOOR_MS and
 --- RESERVE_FLOOR_MS are constants of this file: no vote lowers them, and
 --- only new code (which itself waits the floor) could.
 ---
@@ -576,7 +574,7 @@ local function upgrade(base, msg, who, now)
       if who == nil then
         return { ok = false, error = "Manifest does not match the approved root", root = root }
       end
-      local at, err = now, nil
+      local at, err = 0, nil
       if who == "dao" then at, err = Gov.when(msg, "money", now) end
       if not at then return { ok = false, error = err } end
       GovState.approved, GovState.approvedAt, changed = root, at, true
@@ -633,10 +631,13 @@ function Gov.handle(base, req)
     if who ~= "wallet" then out = { ok = false, error = "Not authorised" }
     elseif GovState.dao == "" then out = { ok = false, error = "Set a DAO first" }
     -- Nothing the wallet (or a DAO it named) set going may outlive it: no
-    -- approved code root, no queued action. Cancel or apply them first.
-    elseif GovState.approved ~= "" then out = { ok = false, error = "Code-Approval-Pending", approved = GovState.approved }
-    elseif queued(now) > 0 then out = { ok = false, error = "Gov-Queue-Not-Empty" }
-    else GovState.wallet = false; out = { ok = true, wallet = false } end
+    -- pending action (apply or cancel it first), and its own code approval
+    -- goes with it.
+    elseif queued(now) > 0 or Gov.codePending(now) then out = { ok = false, error = "Gov-Queue-Not-Empty" }
+    else
+      GovState.wallet, GovState.approved, GovState.approvedAt, GovUpload = false, "", 0, nil
+      out = { ok = true, wallet = false }
+    end
     dirty = out.ok
   elseif action == "gov.approvecode" then
     local root = tag(msg, "Code-Root")
@@ -644,13 +645,13 @@ function Gov.handle(base, req)
     elseif not isHex64(root) then
       out = { ok = false, error = "Code-Root must be 64 lowercase hex" }
     else
-      local at, err = now, nil
+      local at, err = 0, nil
       if who == "dao" then at, err = Gov.when(msg, "money", now) end
       if not at then out = { ok = false, error = err }
       else
         if root ~= GovState.approved then GovUpload = nil end
         GovState.approved, GovState.approvedAt = root, at
-        out = { ok = true, approved = root, effectiveAt = at }
+        out = { ok = true, approved = root, effectiveAt = at > 0 and at or nil }
       end
     end
     dirty = out.ok
