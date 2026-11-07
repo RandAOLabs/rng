@@ -494,6 +494,13 @@ H["Request-Random"] = function(base, msg, from, now)
   if not configured() then return fail(base, "Not-Configured", from, ctx) end
   if Beacon.paused then return fail(base, "Paused", from, ctx) end
   local cost = price()
+  -- Max-Price (optional, whole RNG): the most the payer accepts to be charged.
+  local maxPrice = msg["Max-Price"]
+  if maxPrice ~= nil then
+    local max = int(maxPrice, nil)
+    if not max or max < 0 then return fail(base, "Bad-Max-Price", from, ctx) end
+    if cost > max then return fail(base, "Price-Above-Max", from, { requestId = requestId, price = cost, maxPrice = max }) end
+  end
   local bal = int(Beacon.balances[from], 0)
   if bal < cost then
     return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost })
@@ -574,7 +581,8 @@ H["Credit-Notice"] = function(base, msg, from, now)
     if not isAoAddress(sender) then return fail(base, "Bad-Sender") end
     add(Beacon.balances, sender, amount)
     FromProcess = false
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"] }, sender, now)
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"],
+      ["Max-Price"] = msg["X-Max-Price"] }, sender, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, sender, int(Beacon.balances[sender], 0)
@@ -761,6 +769,7 @@ end
 H["Exit-Now"] = function(base, msg, from, now)
   local member = provenSigner(msg)
   if not member or FromProcess or not Beacon.committee[member] then return fail(base, "Not a committee member") end
+  if now <= 0 then return fail(base, "No-Time") end
   if not Gov.hatchOpen(Gov.queueOf(Beacon.gov), now) then return fail(base, "Hatch-Closed") end
   Beacon.committee[member], Beacon.sharePublicKeys[member] = nil, nil
   local amount, outbox = int(Beacon.accrued[member], 0), {}
@@ -1023,9 +1032,10 @@ Gov.reply = function(base, t)
 end
 
 --- MONEY/CODE: the committee (who signs, and so who can predict a value),
+--- the fees every request pays (signerFee, protocolFee: a change of either),
 --- the protocol's fee share, the DAO seat, and code (gov.lua's). They wait
---- for an Effective-At >= receipt + Gov.EXIT_FLOOR_MS. Fees (bounded by
---- MAX_FEE), abandonAfterMs, Pause and Resume are harmless: on receipt.
+--- for an Effective-At >= receipt + Gov.EXIT_FLOOR_MS. abandonAfterMs,
+--- Pause and Resume are harmless: on receipt.
 local MONEY_VERBS = { ["Gov.Claim-Protocol"] = true, ["Gov.Set-Dao"] = true }
 local SCHEDULED = { ["Gov.Configure"] = true, ["Gov.Pause"] = true, ["Gov.Resume"] = true,
   ["Gov.Claim-Protocol"] = true, ["Gov.Set-Dao"] = true }
@@ -1037,10 +1047,16 @@ local function govClass(verb, msg)
   if Beacon.token == "" then return "money" end
   local arg = govArgs(msg)
   for _, k in ipairs(COMMITTEE_ARGS) do if arg(k) ~= nil then return "money" end end
+  for _, k in ipairs({ "signerFee", "protocolFee" }) do
+    local v = arg(k)
+    if v ~= nil and int(v, nil) ~= int(Beacon[k], 1) then return "money" end
+  end
   return "harmless"
 end
 
 local function govQueue() return Gov.queueOf(Beacon.gov) end
+-- Gov.Renounce-Wallet is refused while this queue holds an action.
+Gov.queue = govQueue
 
 local function applyVerb(base, verb, msg, from, now)
   if verb == "Gov.Set-Dao" then
@@ -1114,7 +1130,8 @@ H["Gov.Apply"] = function(base, msg, from, now)
   Who = saved
   if not ok then error(res, 0) end
   local out = replyData(res)
-  if out.error then return reply(base, { error = out.error, govId = e.id, verb = e.verb }) end
+  -- Refused: it stays pending but no longer holds the exit hatch open.
+  if out.error then e.refused = true; return reply(base, { error = out.error, govId = e.id, verb = e.verb }) end
   q.pending[key] = nil
   out.applied, out.verb = e.id, e.verb
   return reply(base, out, res.results.outbox)
@@ -1230,6 +1247,11 @@ function compute(base, req, opts)
       advance(now)
       Gov.prune(govQueue(), now)
       local verb = verbName(msg.Action or "none")
+      -- Every Gov.* needs the scheduler's time, never older than the last.
+      if tostring(verb):lower():sub(1, 4) == "gov." then
+        local t, late = Gov.clock(now)
+        if not t then return fail(base, late) end
+      end
       if isGovernor() and SCHEDULED[verb] then return propose(base, verb, msg, from, now) end
       return handler(base, msg, from, now)
     end)

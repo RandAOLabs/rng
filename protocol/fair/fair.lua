@@ -214,6 +214,11 @@ local GOV_VERBS = { ["gov.setdao"] = true, ["gov.renouncewallet"] = true, ["gov.
   ["gov.upgrade"] = true }
 -- The wallet owner is the spawn signer (Fair.owner), not the global Owner.
 Gov.walletOwner = function(base) local o = resolveOwner(base); return o ~= "" and o or nil end
+-- Gov.Renounce-Wallet is refused while this queue holds an action.
+Gov.queue = function()
+  Fair.gov = type(Fair.gov) == "table" and Fair.gov or {}
+  return Gov.queueOf(Fair.gov)
+end
 
 local function reply(base, value, outbox)
   local out = {}
@@ -368,7 +373,12 @@ local function govApply(raw, now)
   local e, key = Gov.due(q, raw["Gov-Id"] or raw["gov-id"], now)
   if not e then return nil, key end
   local d, why = applyFair(e.verb, e.args)
-  if d == nil then return nil, why, { govId = e.id } end
+  if d == nil then
+    -- Refused: it stays pending but no longer holds the exit hatch open.
+    e.refused = true
+    Fair.state.changes = (Fair.state.changes or 0) + 1
+    return nil, why, { govId = e.id }
+  end
   q.pending[key] = nil
   d.applied = e.id
   return d, {}
@@ -420,8 +430,17 @@ function compute(base, req)
   Gov.prune(Gov.queueOf(Fair.gov), now)
   local who = not refused and Gov.ownerOf(base, raw) or nil
   local verb = norm(action)
+  -- Every Gov.* (and Fair.Configure) needs the scheduler's time, never
+  -- older than the last one seen.
+  local late = nil
+  if not refused and (verb:sub(1, 4) == "gov." or verb == "fair.configure") then
+    local t, why = Gov.clock(now)
+    if not t then late = why end
+  end
   if refused then
     result = reply(base, { error = refused })
+  elseif late then
+    result = reply(base, { error = late })
   elseif (who == "dao" and (verb == "fair.configure" or verb == "gov.setdao")) or verb == "gov.apply" or verb == "gov.cancel" then
     local saved, savedOwners = deepCopy(st), deepCopy(GovState)
     local ok, data, outbox, extra = pcall(function()

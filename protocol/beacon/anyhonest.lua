@@ -60,10 +60,17 @@ local IDLE_EVICT_MS = 7 * DAY_MS -- a registered validator that never sent Ready
 local IDLE_FLOOR_MS = 3600000    -- ... and only after this, by a new bond into a full registry
 local MAX_SUBSCRIPTIONS = 16     -- live subscriptions per subscriber
 local MAX_PRICE = 1000000        -- RNG: the most any price (round, request, subscription) may be
--- Treasury outflow (spends + reserve funding) per window: at most a tenth of
--- the treasury at the window's start. The window opens at the first outflow
--- and runs this long.
+-- Treasury outflow (spends + reserve funding): those applied in any rolling
+-- window of this length total at most a tenth of (the treasury now + those
+-- outflows), i.e. of the treasury before them. At most MAX_OUTFLOWS are
+-- remembered at once (each one is a passed DAO action).
 local SPEND_WINDOW_MS = 30 * DAY_MS
+local MAX_OUTFLOWS = 64
+--- The fewest validators a round may take (maxActive): a quarter of the seats
+--- go to the longest-ready incumbents (activeValidators), so with 8 at least
+--- two seats are not for sale to the biggest bonds. An in-process harness
+--- may go lower, as for T.
+local function minActive() return TestHarness == true and 2 or 8 end
 local INFO_VALIDATORS = 128     -- validators listed in beaconinfo; the full registry is `beaconvalidators`
 
 --- gov.lua's owner record (GovState) at spawn: the wallet on, no DAO.
@@ -104,6 +111,12 @@ local function freshState()
     balances = {}, accrued = {}, accruedAtoms = {}, protocolAccrued = 0,
     foundationReserveAtoms = 0, treasuryAtoms = 0,
     subscriptions = {},
+    -- address -> { rounds = { "r" -> RNG held }, release = RNG }: what Exit-Now
+    -- kept back of a validator's bond for the rounds it still owed (one
+    -- crackBounty each). A crack of that round repays the treasury from it,
+    -- its own reveal or an abandon releases it; the rest goes back when the
+    -- last such round settles, and until then the address cannot bond again.
+    exitHolds = {},
     -- bucket -> { requester|requestId -> round it was bound to }: an id goes in
     -- bucket (forget-at // SEEN_BUCKET_MS) and the whole bucket is dropped once
     -- its last forget-at has passed. Published as `timelockseen-<bucket>`.
@@ -270,10 +283,13 @@ end
 --- tell whether a message changed either.
 local function ownersKey()
   local o, g = Timelock.owners, Timelock.gov or {}
-  local n = 0
-  for _ in pairs(type(g.pending) == "table" and g.pending or {}) do n = n + 1 end
+  local n, refused = 0, 0
+  for _, e in pairs(type(g.pending) == "table" and g.pending or {}) do
+    n = n + 1
+    if e.refused then refused = refused + 1 end
+  end
   return table.concat({ tostring(o.dao), tostring(o.wallet), tostring(o.approved), tostring(o.approvedAt),
-    tostring(o.code.sha), tostring(o.code.version), tostring(g.nextId), tostring(n) }, "|")
+    tostring(o.code.sha), tostring(o.code.version), tostring(g.nextId), tostring(n), tostring(refused) }, "|")
 end
 
 --- A message must be signed for THIS beacon: a validator's Commit or Reveal
@@ -432,6 +448,34 @@ local function transferOut(to, rngAmount, note) return transferAtoms(to, rngAmou
 
 local function addAtoms(map, key, atoms)
   map[key] = int(map[key], 0) + int(atoms, 0)
+end
+
+local function exitHolds()
+  Timelock.exitHolds = type(Timelock.exitHolds) == "table" and Timelock.exitHolds or {}
+  return Timelock.exitHolds
+end
+
+--- Round `o` is leaving (finalized or abandoned): what each validator that
+--- left it by the exit hatch still has held for it is released, and once its
+--- last such round has settled the whole release goes back in one Transfer.
+local function settleForfeits(o)
+  local holds, key = exitHolds(), tostring(o.round)
+  local addrs = {}
+  for addr in pairs(o.forfeit or {}) do addrs[#addrs + 1] = addr end
+  table.sort(addrs)
+  for _, addr in ipairs(addrs) do
+    local h = holds[addr]
+    if h and h.rounds[key] ~= nil then
+      h.release = int(h.release, 0) + int(h.rounds[key], 0)
+      h.rounds[key] = nil
+      if next(h.rounds) == nil then
+        holds[addr] = nil
+        if int(h.release, 0) > 0 then
+          Notices["rng-exit-release-" .. addr] = transferOut(addr, int(h.release, 0), "RNG validator bond: exit hatch hold")
+        end
+      end
+    end
+  end
 end
 
 local function distributeAtoms(payees, atoms)
@@ -691,6 +735,7 @@ end
 local function abandon(o, now)
   Timelock.foundationReserveAtoms = int(Timelock.foundationReserveAtoms, 0) + int(o.sponsorAtoms, 0)
   refundPending(o.round, now)
+  settleForfeits(o)
   Timelock.opens[tostring(o.round)] = nil
 end
 
@@ -774,9 +819,10 @@ local function finalize(base, o, now)
   for i, addr in ipairs(addrs) do
     ys[i] = o.outputs[addr].y
     -- A validator that left by the exit hatch owing this round is paid
-    -- nothing for it (its output may still have come in, or been cracked).
+    -- nothing for it (its output may still have come in, or been cracked:
+    -- the cracker has the bounty, and the seat's share goes to the rest).
     local payee = o.outputs[addr].cracker or addr
-    if not (o.forfeit and o.forfeit[addr] and payee == addr) then payees[#payees + 1] = payee end
+    if not (o.forfeit and o.forfeit[addr]) then payees[#payees + 1] = payee end
   end
   local value = rng.hex(rng.sha256("hyperbeam/rng/any-honest/v1/round|" .. Timelock.self .. "|" .. key .. "|" .. table.concat(ys, "|")))
 
@@ -844,6 +890,7 @@ local function finalize(base, o, now)
   recent[#recent + 1] = r
   while #recent > ROUND_HISTORY do Timelock.rounds[tostring(table.remove(recent, 1))] = nil end
   Timelock.pending[key] = nil
+  settleForfeits(o)
   Timelock.opens[key] = nil
   Timelock.round, Timelock.lastRoundAt = math.max(int(Timelock.round, 0), r), now
   return reply(base, { round = r, value = value, served = served }, outbox)
@@ -960,7 +1007,9 @@ H["Credit-Notice"] = function(base, msg, from, now)
     local outbox = {}
     if not Timelock.validators[who] then
       local refused = nil
-      if int(Timelock.bonds[who], 0) + amount < int(Timelock.params.stake, 25000) then refused = "Bond-Below-Stake"
+      -- Left by the exit hatch: no new bond until the rounds it owed settle.
+      if exitHolds()[who] then refused = "Exit-Settling"
+      elseif int(Timelock.bonds[who], 0) + amount < int(Timelock.params.stake, 25000) then refused = "Bond-Below-Stake"
       elseif count(Timelock.validators) >= int(Timelock.params.maxValidators, 256) then
         local idle = {}
         for a, v in pairs(Timelock.validators) do
@@ -989,7 +1038,7 @@ H["Credit-Notice"] = function(base, msg, from, now)
     if not isAoAddress(payer) then return fail(base, "Bad-Sender") end
     add(Timelock.balances, payer, amount)
     FromProcess = false -- the payer may be a wallet: its value is in the round record
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"] }, payer, now)
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], ["Max-Price"] = msg["X-Max-Price"] }, payer, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, payer, int(Timelock.balances[payer], 0)
@@ -1014,6 +1063,17 @@ H["Withdraw"] = function(base, msg, from)
   return reply(base, { withdrawn = amount }, { ["rng-withdraw"] = transferOut(from, amount, "RNG balance withdrawal") })
 end
 
+--- Max-Price (optional, whole RNG): the most the payer accepts to be charged.
+--- Nil when it allows `cost`, else the refusal's name.
+local function overMax(msg, cost)
+  local v = msg["Max-Price"]
+  if v == nil then return nil end
+  local max = int(v, nil)
+  if not max or max < 0 then return "Bad-Max-Price" end
+  if cost > max then return "Price-Above-Max" end
+  return nil
+end
+
 H["Request-Random"] = function(base, msg, from, now)
   if not from then return fail(base, "Unsigned") end
   local requestId = msg["Request-Id"]
@@ -1031,6 +1091,8 @@ H["Request-Random"] = function(base, msg, from, now)
   if Timelock.paused then return fail(base, "Paused", from, ctx) end
   if #activeValidators() < int(Timelock.params.minCommits, 2) then return fail(base, "Too-Few-Validators", from, ctx) end
   local cost = price()
+  local above = overMax(msg, cost)
+  if above then return fail(base, above, from, { requestId = requestId, price = cost, maxPrice = msg["Max-Price"] }) end
   local bal = int(Timelock.balances[from], 0)
   if bal < cost then return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost }) end
   -- Bind to the round taking commits: no output is revealed before its
@@ -1067,6 +1129,8 @@ H["Subscribe"] = function(base, msg, from, now)
   if rounds < 1 or rounds > 31536000 then return fail(base, "Bad-Rounds", from) end
   local batches = (rounds + batchRounds - 1) // batchRounds
   local cost = batches * int(Timelock.params.subscriptionPrice, 1)
+  local above = overMax(msg, cost)
+  if above then return fail(base, above, from, { subscriptionId = id, price = cost, maxPrice = msg["Max-Price"] }) end
   local balance = int(Timelock.balances[from], 0)
   if balance < cost then return fail(base, "Insufficient-Balance", from,
     { subscriptionId = id, balance = balance, price = cost }) end
@@ -1175,9 +1239,17 @@ H["Crack"] = function(base, msg, from, now)
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) - bountyAtoms
   addAtoms(Timelock.accruedAtoms, cracker, bountyAtoms)
   -- The Treasury fronts the bounty. The withholder's bond reimburses it when
-  -- possible; the Foundation reserve is never used for cracking prizes.
-  local reimbursement = math.min(bountyRng, int(Timelock.bonds[target], 0))
-  Timelock.bonds[target] = int(Timelock.bonds[target], 0) - reimbursement
+  -- possible (for one that left by the exit hatch, what Exit-Now held back
+  -- for this round); the Foundation reserve is never used for cracking prizes.
+  local reimbursement
+  local hold = o.forfeit and o.forfeit[target] and exitHolds()[target] or nil
+  if hold and hold.rounds[tostring(o.round)] ~= nil then
+    reimbursement = math.min(bountyRng, int(hold.rounds[tostring(o.round)], 0))
+    hold.rounds[tostring(o.round)] = int(hold.rounds[tostring(o.round)], 0) - reimbursement
+  else
+    reimbursement = math.min(bountyRng, int(Timelock.bonds[target], 0))
+    Timelock.bonds[target] = int(Timelock.bonds[target], 0) - reimbursement
+  end
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) + reimbursement * int(Timelock.unit, 1)
   o.outputs[target] = { y = res.y, via = "crack", proof = d.proof, cracker = cracker }
   if complete(o) then return finalize(base, o, now) end
@@ -1262,13 +1334,16 @@ local hatchOpen
 
 --- The exit hatch (docs/PERMISSIONLESS.md): while a passed money or code
 --- action is pending, a validator leaves at once. It is out of every round
---- not yet opened, its whole bond goes back now, and the rounds it still
---- owes pay it nothing. It is never slashed for them: a fault finds no
---- validator. Those rounds run on by the usual rules (its output revealed or
---- cracked, else the round abandoned and its requests refunded).
+--- not yet opened, its bond goes back now less one crackBounty for each
+--- round it still owes (exitHolds), and those rounds pay it nothing. It is
+--- never slashed for them: a fault finds no validator. Those rounds run on
+--- by the usual rules (its output revealed or cracked, else the round
+--- abandoned and its requests refunded); a crack repays the treasury from
+--- the hold, so leaving and cracking its own rounds earns nothing.
 H["Exit-Now"] = function(base, msg, from, now)
   local v = from and Timelock.validators[from]
   if not v then return fail(base, "Not a validator") end
+  if now <= 0 then return fail(base, "No-Time") end
   if not hatchOpen(now) then return fail(base, "Hatch-Closed") end
   local forfeited = {}
   for _, o in pairs(Timelock.opens) do
@@ -1287,10 +1362,17 @@ H["Exit-Now"] = function(base, msg, from, now)
   end
   table.sort(forfeited)
   local bond = int(Timelock.bonds[from], 0)
+  local bounty, held, rounds = int(Timelock.params.crackBounty, 10), 0, {}
+  for _, r in ipairs(forfeited) do
+    local slice = math.min(bounty, bond - held)
+    rounds[tostring(r)], held = slice, held + slice
+  end
+  if #forfeited > 0 then exitHolds()[from] = { rounds = rounds, release = 0, exitedAt = now } end
   Timelock.validators[from], Timelock.bonds[from] = nil, nil
   local outbox = {}
-  if bond > 0 then outbox["rng-bond-refund"] = transferOut(from, bond, "RNG validator bond: exit hatch") end
-  return reply(base, { exited = true, refunded = bond, forfeited = forfeited, validators = activeValidators() }, outbox)
+  if bond - held > 0 then outbox["rng-bond-refund"] = transferOut(from, bond - held, "RNG validator bond: exit hatch") end
+  return reply(base, { exited = true, refunded = bond - held, held = held, forfeited = forfeited,
+    validators = activeValidators() }, outbox)
 end
 
 --- Ready: give me work. Allowed once in good standing (every output it owes
@@ -1429,7 +1511,7 @@ local function badParams(p)
      -- A fault takes at most a tenth of the stake: no setting turns slashing into confiscation.
      or p.slash < 1 or p.slash * 10 > p.stake or p.stake > 10000000
      or p.rejoinBaseMs < p.revealWindowMs or p.rejoinCapMs < p.rejoinBaseMs or p.rejoinCapMs > 30 * DAY_MS
-     or p.minCommits < 2 or p.minCommits > p.maxActive or p.maxActive > 128
+     or p.minCommits < 2 or p.minCommits > p.maxActive or p.maxActive < minActive() or p.maxActive > 128
      or p.maxValidators < p.maxActive or p.maxValidators > 1024
      or (p.heartbeat ~= 0 and p.heartbeat ~= 1)
      or p.roundPrice < 1 or p.requestPrice < 1 or p.subscriptionPrice < 1 or p.crackBounty < 1
@@ -1446,19 +1528,29 @@ local function badParams(p)
      or p.fairWindowMs < 1
 end
 
---- The treasury outflow window (ported from the audited design): spends and
---- reserve funding applied in it total at most a tenth of the treasury at
---- its start. Takes `atoms` of it, or returns nil past the cap.
-local function spendWindow(atoms, now)
+--- The treasury outflows (spends and reserve funding) of the last
+--- SPEND_WINDOW_MS, oldest first, and their sum: an outflow at `at` counts
+--- while now < at + SPEND_WINDOW_MS.
+local function outflows(now)
   local g = Timelock.gov
-  local w = g.window
-  if type(w) ~= "table" or now >= int(w.start, 0) + SPEND_WINDOW_MS then
-    w = { start = now, base = int(Timelock.treasuryAtoms, 0), used = 0 }
-    g.window = w
+  g.window = nil -- the fixed window this replaced
+  local keep, used = {}, 0
+  for _, o in ipairs(type(g.outflows) == "table" and g.outflows or {}) do
+    if now < int(o.at, 0) + SPEND_WINDOW_MS then keep[#keep + 1] = o; used = used + int(o.atoms, 0) end
   end
-  if (int(w.used, 0) + atoms) * 10 > int(w.base, 0) then return nil end
-  w.used = int(w.used, 0) + atoms
-  return w
+  g.outflows = keep
+  return keep, used
+end
+
+--- The cap (a rolling window): the outflows of the last 30 days plus
+--- `atoms` at most a tenth of (the treasury now + those outflows). Takes
+--- `atoms` of it, or returns nil and why. Called before the treasury pays.
+local function spendWindow(atoms, now)
+  local list, used = outflows(now)
+  if (used + atoms) * 10 > int(Timelock.treasuryAtoms, 0) + used then return nil, "Over-Treasury-Cap" end
+  if #list >= MAX_OUTFLOWS then return nil, "Too-Many-Outflows" end
+  list[#list + 1] = { at = now, atoms = atoms }
+  return true
 end
 
 --- Checked whole before any of it applies, and all of it applies at once.
@@ -1567,7 +1659,8 @@ H["Gov.Treasury-Spend"] = function(base, msg, from, now)
   end
   if not atoms or atoms <= 0 then return fail(base, "Bad-Quantity") end
   if atoms > int(Timelock.treasuryAtoms, 0) then return fail(base, "Insufficient-Treasury") end
-  if not spendWindow(atoms, now) then return fail(base, "Over-Treasury-Cap") end
+  local capOk, capWhy = spendWindow(atoms, now)
+  if not capOk then return fail(base, capWhy) end
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) - atoms
   return reply(base, { spentAtoms = tostring(atoms), recipient = to, treasuryAtoms = tostring(Timelock.treasuryAtoms) },
     { ["rng-treasury-spend"] = transferAtoms(to, atoms, "RNG DAO Treasury spend") })
@@ -1580,7 +1673,8 @@ H["Gov.Fund-Reserve"] = function(base, msg, from, now)
   local atoms = int(govArgs(msg)("quantity"), nil)
   if not atoms or atoms <= 0 then return fail(base, "Bad-Quantity") end
   if atoms > int(Timelock.treasuryAtoms, 0) then return fail(base, "Insufficient-Treasury") end
-  if not spendWindow(atoms, now) then return fail(base, "Over-Treasury-Cap") end
+  local capOk, capWhy = spendWindow(atoms, now)
+  if not capOk then return fail(base, capWhy) end
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) - atoms
   Timelock.foundationReserveAtoms = int(Timelock.foundationReserveAtoms, 0) + atoms
   return reply(base, { reserveAtoms = tostring(Timelock.foundationReserveAtoms),
@@ -1644,10 +1738,20 @@ local MONEY_VERBS = { ["Gov.Set-Successor"] = true, ["Gov.Move-Reserve"] = true,
 --- Gov.Configure parameters that are money: crackBounty is taken from a
 --- withholder's bond per crack; maxInFlight bounds how many rounds one
 --- incident can fault; cadenceMs and targetIntervalMs set how fast duties
---- come; roundPrice is what the reserve pays per heartbeat round; T (with h)
---- is the puzzle every output rests on.
+--- come; roundPrice is what the reserve pays per heartbeat round;
+--- requestPrice and subscriptionPrice are what every payer is charged; T
+--- (with h) is the puzzle every output rests on.
 local MONEY_PARAMS = { "stake", "slash", "commitWindowMs", "revealWindowMs", "crackBounty", "maxInFlight",
-  "cadenceMs", "targetIntervalMs", "roundPrice", "T" }
+  "cadenceMs", "targetIntervalMs", "roundPrice", "requestPrice", "subscriptionPrice", "T" }
+--- Money in one direction: fewer seats per round (maxActive) or in the
+--- registry (maxValidators) concentrates who makes the randomness, and more
+--- commits required (minCommits) can starve every round. Raising the seats
+--- or lowering minCommits is harmless.
+local MONEY_IF_LOWER = { "maxActive", "maxValidators" }
+local MONEY_IF_HIGHER = { "minCommits" }
+--- Verbs that move (or name where to move) the Foundation reserve wait
+--- Gov.RESERVE_FLOOR_MS, not the 24 h floor.
+local RESERVE_VERBS = { ["Gov.Set-Successor"] = true, ["Gov.Move-Reserve"] = true }
 --- The DAO's verbs that go through Effective-At (the rest of Gov.* are
 --- Apply, Cancel and gov.lua's own).
 local SCHEDULED = { ["Gov.Configure"] = true, ["Gov.Pause"] = true, ["Gov.Resume"] = true }
@@ -1665,12 +1769,22 @@ local function govClass(verb, msg)
     local v = arg(k)
     if v ~= nil and int(v, nil) ~= int(Timelock.params[k], nil) then return "money" end
   end
+  for _, k in ipairs(MONEY_IF_LOWER) do
+    local v = int(arg(k), nil)
+    if v ~= nil and v < int(Timelock.params[k], 0) then return "money" end
+  end
+  for _, k in ipairs(MONEY_IF_HIGHER) do
+    local v = int(arg(k), nil)
+    if v ~= nil and v > int(Timelock.params[k], 0) then return "money" end
+  end
   if arg("h") ~= nil or arg("hProof") ~= nil then return "money" end
   return "harmless"
 end
 
 local function govQueue() return Gov.queueOf(Timelock.gov) end
 hatchOpen = function(now) return Gov.hatchOpen(govQueue(), now) end
+-- Gov.Renounce-Wallet is refused while this queue holds an action.
+Gov.queue = govQueue
 
 --- Runs `verb` as the DAO (or the wallet) now. Gov.Set-Dao from the DAO is
 --- applied here, not by gov.lua (which refuses it unscheduled).
@@ -1726,9 +1840,10 @@ local function propose(base, verb, msg, from, now)
   if not ok then error(res, 0) end
   local out = replyData(res)
   if out.error then return fail(base, out.error) end
-  local at, why = Gov.when(msg, class, now)
+  local floor = RESERVE_VERBS[verb] and Gov.RESERVE_FLOOR_MS or Gov.EXIT_FLOOR_MS
+  local at, why = Gov.when(msg, class, now, floor)
   if not at then
-    return reply(base, { error = why, class = class, earliest = class == "money" and now + Gov.EXIT_FLOOR_MS or nil })
+    return reply(base, { error = why, class = class, earliest = class == "money" and now + floor or nil })
   end
   local args, bytes, summary = argsOf(msg)
   if bytes > MAX_ARGS_BYTES then return fail(base, "Too-Large") end
@@ -1751,7 +1866,9 @@ H["Gov.Apply"] = function(base, msg, from, now)
   Who = saved
   if not ok then error(res, 0) end
   local out = replyData(res)
-  if out.error then return reply(base, { error = out.error, govId = e.id, verb = e.verb }) end
+  -- Refused: it stays pending (the DAO may cancel it) but no longer holds
+  -- the exit hatch open.
+  if out.error then e.refused = true; return reply(base, { error = out.error, govId = e.id, verb = e.verb }) end
   q.pending[key] = nil
   out.applied, out.verb = e.id, e.verb
   return reply(base, out, res.results.outbox)
@@ -1903,6 +2020,25 @@ local function health(now)
   return { status = status, active = active, eligible = eligible, minCommits = minCommits, since = int(h.since, now) }
 end
 
+local function treasuryView(now)
+  local list, used = outflows(now)
+  local base = int(Timelock.treasuryAtoms, 0) + used
+  return { windowMs = SPEND_WINDOW_MS, used = tostring(used), base = tostring(base),
+    remaining = tostring(math.max(0, base // 10 - used)), outflows = #list,
+    nextDropAt = list[1] and int(list[1].at, 0) + SPEND_WINDOW_MS or 0 }
+end
+
+local function exitHoldsView()
+  local out = {}
+  for addr, h in pairs(exitHolds()) do
+    local held, rounds = 0, {}
+    for r, n in pairs(h.rounds) do held = held + int(n, 0); rounds[#rounds + 1] = int(r, 0) end
+    table.sort(rounds)
+    out[addr] = { held = held, release = int(h.release, 0), rounds = rounds }
+  end
+  return next(out) and out or nil
+end
+
 local function info(now, healthNow)
   local activeSet = {}
   for _, a in ipairs(activeValidators()) do activeSet[a] = true end
@@ -1959,11 +2095,13 @@ local function info(now, healthNow)
     -- The DAO's actions waiting for their Effective-At; while a money or
     -- code one waits, the exit hatch is open (Exit-Now).
     govPending = Gov.pendingView(govQueue(), now), hatch = hatchOpen(now), exitFloorMs = Gov.EXIT_FLOOR_MS,
-    -- The treasury outflow cap: spends and reserve funding since `start`
-    -- (`used`) stay within a tenth of the treasury then (`base`), in atoms.
-    treasuryWindow = type(Timelock.gov.window) == "table" and { start = int(Timelock.gov.window.start, 0),
-      base = tostring(int(Timelock.gov.window.base, 0)), used = tostring(int(Timelock.gov.window.used, 0)),
-      endsAt = int(Timelock.gov.window.start, 0) + SPEND_WINDOW_MS } or nil,
+    -- The treasury outflow cap (rolling): spends and reserve funding of the
+    -- last `windowMs` (`used`) stay within a tenth of `base` (the treasury
+    -- now + `used`); `remaining` may still go out now; the oldest counted
+    -- outflow drops out at `nextDropAt`. Atoms.
+    treasuryWindow = treasuryView(now),
+    -- What Exit-Now held back per address, until the rounds it owed settle.
+    exitHolds = exitHoldsView(),
     -- What this beacon accepts beyond the per-step actions. `act': H["Act"].
     -- `ready': validators say Ready/Pause and every failed duty is slashed.
     -- `bond-join': a validator joins by bonding the stake (X-Bond). `gov': Gov.*.
@@ -2023,6 +2161,10 @@ function compute(base, req)
         end
       end
       local verb = verbName(msg.Action or "none")
+      if tostring(verb):lower():sub(1, 4) == "gov." then
+        local t, late = Gov.clock(now)
+        if not t then return fail(base, late) end
+      end
       if isGovernor() and SCHEDULED[verb] then return propose(base, verb, msg, from, now) end
       return handler(base, msg, from, now)
     end)

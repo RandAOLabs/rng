@@ -18,9 +18,14 @@
 --- VERBS (dispatch compares names with case, `-` and `_` folded):
 ---   Gov.Set-Dao        Dao=<43-char pid>       owner (wallet or DAO)
 ---   Gov.Renounce-Wallet                        wallet only, one way; refused
----                                              while no DAO is set
+---                                              while no DAO is set, while a
+---                                              code root is approved, or while
+---                                              the contract's queue (Gov.queue)
+---                                              holds an action
 ---   Gov.Approve-Code   Code-Root=<64 hex>      owner; latest approval wins;
----                      Effective-At=<ms>       the DAO's: >= receipt + EXIT_FLOOR_MS
+---                      Effective-At=<ms>       the DAO's: >= receipt + EXIT_FLOOR_MS;
+---                                              the wallet's: from receipt. Either
+---                                              lapses PENDING_EXPIRE_MS after
 ---   Gov.Upgrade        Data=<code>             one message, see below
 ---   Gov.Upgrade        Part=0 Data=<manifest>  starts a chunked upload
 ---   Gov.Upgrade        Part=i Data=<part i>    i = 1..n, any order
@@ -97,16 +102,27 @@
 --- answered Not-Yet-Effective, the parts are kept, and once due any part or
 --- the manifest sent again installs it. An approval not installed within
 --- Gov.PENDING_EXPIRE_MS after approvedAt lapses. The wallet's approvals
---- (bootstrap only) have approvedAt 0: at once. EXIT_FLOOR_MS is a constant
---- of this file: no vote lowers it, and only new code (which itself waits
---- the floor) could.
+--- (bootstrap only) have approvedAt = their receipt: at once, and they lapse
+--- the same way; the wallet cannot renounce while one stands, so no
+--- wallet-era approval outlives the wallet. EXIT_FLOOR_MS and
+--- RESERVE_FLOOR_MS are constants of this file: no vote lowers them, and
+--- only new code (which itself waits the floor) could.
+---
+--- TIME. Every Gov.* message needs the scheduler's timestamp: none (or 0) is
+--- refused No-Time, and one older than the last Gov.* seen (GovState.lastNow)
+--- Time-Went-Back. Gov.clock(now) is that check; contracts call it before
+--- classifying a Gov.* of their own.
 ---
 --- QUEUE HELPERS (Gov.when, Gov.schedule, Gov.due, Gov.prune, Gov.hatchOpen,
 --- Gov.pendingView) keep a contract's pending DAO actions in a table it owns
 --- ({ pending = { [id] = entry }, nextId }); an entry is { id, verb, class
---- ("money" or "harmless"), effectiveAt, proposedAt, args, summary }. A
---- pending "money" entry, or a pending DAO code approval, opens the exit
---- hatch (Gov.hatchOpen): the contract then lets validators leave at once.
+--- ("money" or "harmless"), effectiveAt, proposedAt, args, summary[,
+--- refused] }. A pending "money" entry, or a pending code approval, opens
+--- the exit hatch (Gov.hatchOpen) from its receipt until its effectiveAt +
+--- Gov.HATCH_GRACE_MS (not until it lapses); an entry refused at Gov.Apply
+--- (`refused`, set by the contract) no longer holds it open. The contract
+--- then lets validators leave at once. A contract sets `Gov.queue` (a
+--- function returning its queue) so Gov.Renounce-Wallet can see it.
 ---
 --- COLD RESTORE. `GovState` lives only in the VM. A contract's restore path
 --- calls `Gov.restore(published, field[, rebuilt])` with its own info key (raw
@@ -131,6 +147,11 @@ local DAY_MS = 86400000
 --- A DAO money or code action takes effect no sooner than this after it
 --- arrives. A constant: no vote can lower it.
 Gov.EXIT_FLOOR_MS = DAY_MS
+--- The floor for actions that move the Foundation reserve (Gov.Move-Reserve,
+--- and Gov.Set-Successor, which names where it may go): a week.
+Gov.RESERVE_FLOOR_MS = 7 * DAY_MS
+--- The exit hatch stays open this long past a pending action's Effective-At.
+Gov.HATCH_GRACE_MS = 3600000
 Gov.PENDING_EXPIRE_MS = 14 * DAY_MS -- a pending action not applied this long after it is due lapses
 Gov.MAX_AHEAD_MS = 90 * DAY_MS      -- Effective-At at most this far ahead
 Gov.MAX_PENDING = 32                -- pending actions held at once
@@ -235,10 +256,20 @@ end
 -- Effective-At and the pending queue
 ---------------------------------------------------------------------------
 
+--- The scheduler time of a Gov.* message, or nil and why: refused when it
+--- has none, or when it is older than the last one seen.
+function Gov.clock(now)
+  now = int(now)
+  if not now or now <= 0 then return nil, "No-Time" end
+  if now < (int(GovState.lastNow) or 0) then return nil, "Time-Went-Back" end
+  GovState.lastNow = now
+  return now
+end
+
 --- When a DAO action of `class` ("money" or "harmless") arriving at `now`
 --- takes effect: its Effective-At, or now. Money needs Effective-At >= now +
---- EXIT_FLOOR_MS. Returns the time, or nil and why.
-function Gov.when(msg, class, now)
+--- `floor` (default EXIT_FLOOR_MS; never less). Returns the time, or nil and why.
+function Gov.when(msg, class, now, floor)
   local v = tag(msg, "Effective-At")
   local at = nil
   if v ~= nil then
@@ -247,7 +278,7 @@ function Gov.when(msg, class, now)
   end
   if class == "money" then
     if at == nil then return nil, "Effective-At-Required" end
-    if at < now + Gov.EXIT_FLOOR_MS then return nil, "Effective-At-Too-Soon" end
+    if at < now + math.max(int(floor) or 0, Gov.EXIT_FLOOR_MS) then return nil, "Effective-At-Too-Soon" end
   end
   if at and at > now + Gov.MAX_AHEAD_MS then return nil, "Effective-At-Too-Far" end
   if at == nil or at < now then at = now end
@@ -314,12 +345,23 @@ function Gov.cancelCode()
   return true
 end
 
---- The exit hatch: open while a passed money or code action is pending.
+--- The exit hatch: open from the receipt of a passed money or code action
+--- until its Effective-At + HATCH_GRACE_MS, unless it was refused at apply.
 function Gov.hatchOpen(q, now)
   for _, e in pairs(q.pending) do
-    if e.class == "money" and now <= (int(e.effectiveAt) or 0) + Gov.PENDING_EXPIRE_MS then return true end
+    if e.class == "money" and not e.refused and now <= (int(e.effectiveAt) or 0) + Gov.HATCH_GRACE_MS then return true end
   end
-  return Gov.codePending(now)
+  return Gov.codePending(now) and now <= (int(GovState.approvedAt) or 0) + Gov.HATCH_GRACE_MS
+end
+
+--- Live entries in the contract's queue (Gov.queue), the code approval apart.
+local function queued(now)
+  local q = type(Gov.queue) == "function" and Gov.queue() or nil
+  if type(q) ~= "table" or type(q.pending) ~= "table" then return 0 end
+  Gov.prune(q, now)
+  local n = 0
+  for _ in pairs(q.pending) do n = n + 1 end
+  return n
 end
 
 --- Published as `govPending`: id, verb, class, effectiveAt, expiresAt, summary.
@@ -534,7 +576,7 @@ local function upgrade(base, msg, who, now)
       if who == nil then
         return { ok = false, error = "Manifest does not match the approved root", root = root }
       end
-      local at, err = 0, nil
+      local at, err = now, nil
       if who == "dao" then at, err = Gov.when(msg, "money", now) end
       if not at then return { ok = false, error = err } end
       GovState.approved, GovState.approvedAt, changed = root, at, true
@@ -571,13 +613,15 @@ function Gov.handle(base, req)
   if type(action) ~= "string" or string.sub(key(action), 1, 4) ~= "gov." then return false end
   action = key(action)
   local who = Gov.ownerOf(base, msg)
-  local now = int(req.timestamp or req.Timestamp) or 0
+  local now, late = Gov.clock(req.timestamp or req.Timestamp)
   -- An install re-runs this file, so `Gov` is then a new table. Its hooks
   -- are the new code's when that code set them at load, and otherwise (a
   -- contract that binds them per slot) the old code's finish the slot.
   local old = Gov
   local out, dirty
-  if action == "gov.setdao" then
+  if not now then
+    out = { ok = false, error = late }
+  elseif action == "gov.setdao" then
     local dao = tag(msg, "Dao")
     if not who then out = { ok = false, error = "Not authorised" }
     elseif not validId(dao) then out = { ok = false, error = "Dao must be a 43-character process id" }
@@ -588,6 +632,10 @@ function Gov.handle(base, req)
   elseif action == "gov.renouncewallet" then
     if who ~= "wallet" then out = { ok = false, error = "Not authorised" }
     elseif GovState.dao == "" then out = { ok = false, error = "Set a DAO first" }
+    -- Nothing the wallet (or a DAO it named) set going may outlive it: no
+    -- approved code root, no queued action. Cancel or apply them first.
+    elseif GovState.approved ~= "" then out = { ok = false, error = "Code-Approval-Pending", approved = GovState.approved }
+    elseif queued(now) > 0 then out = { ok = false, error = "Gov-Queue-Not-Empty" }
     else GovState.wallet = false; out = { ok = true, wallet = false } end
     dirty = out.ok
   elseif action == "gov.approvecode" then
@@ -596,13 +644,13 @@ function Gov.handle(base, req)
     elseif not isHex64(root) then
       out = { ok = false, error = "Code-Root must be 64 lowercase hex" }
     else
-      local at, err = 0, nil
+      local at, err = now, nil
       if who == "dao" then at, err = Gov.when(msg, "money", now) end
       if not at then out = { ok = false, error = err }
       else
         if root ~= GovState.approved then GovUpload = nil end
         GovState.approved, GovState.approvedAt = root, at
-        out = { ok = true, approved = root, effectiveAt = at > 0 and at or nil }
+        out = { ok = true, approved = root, effectiveAt = at }
       end
     end
     dirty = out.ok

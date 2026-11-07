@@ -129,7 +129,7 @@ for (const n of ['q1c', 'q2c', 'q3c', 'q4c', 'o1a', 'o1b', 'o1c', 'o2a', 'o2b', 
 // v3: request-driven rounds served by c and d.
 for (const n of ['d1c', 'd1d', 'd2c', 'd2d']) puzzle(n, F.h2);
 // The exit hatch: rounds a validator owes when it leaves.
-for (const n of ['x1c', 'x1d', 'x2d']) puzzle(n, F.h2);
+for (const n of ['x1c', 'x1d', 'x2d', 'x3c', 'x3y', 'x4y']) puzzle(n, F.h2);
 answer('verify-reveal', { c: P.r1a.c, alpha: P.r1b.alpha, h: F.h }); // wrong secret
 // Round 2: c withholds, a stranger cracks it with N - y; round 3: a cracks c.
 F.crack2 = crack(P.r2c.c, T, big(P.r2c.y) === modPow(big(P.r2c.c), 1n << BigInt(T)));
@@ -137,6 +137,9 @@ F.crack3 = crack(P.r3c.c, T);
 F.badCrack = hex(big(F.crack3.proof) + 1n);
 answer('verify-crack', { x: P.r3c.c, t: String(T), y: F.crack3.y, proof: F.badCrack });
 if (big(F.crack2.y) === big(P.r2c.y)) throw new Error('crack2 should submit the non-canonical y');
+// The exit hatch: the exited validator's own wallet cracks the rounds it withheld.
+F.crackX2 = crack(P.x2d.c, T2);
+F.crackX4 = crack(P.x4y.c, T2);
 
 const value = (r, names) => sha(`hyperbeam/rng/any-honest/v1/round|${F.beacon}|${r}|${names.map((n) => P[n].y).join('|')}`);
 F.value1 = value(1, ['r1a', 'r1b', 'r1c']);

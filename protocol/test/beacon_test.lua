@@ -182,7 +182,14 @@ function runBeaconTests()
   check("unfunded process request answered with RNG-Error", ob["rng-error"] and ob["rng-error"].target == F.stranger)
   r = send(delivery(F.game, { Action = "Request-Random", Tier = "timelock", ["Request-Id"] = "x2" }))
   eq("other tiers refused", r.error, "Tier-Unavailable")
-  send(delivery(F.game, { Action = "Request-Random", Tier = "fast", ["Request-Id"] = F.req1 }))
+  -- Max-Price: the payer's ceiling (whole RNG); a higher price is refused, not charged.
+  r, ob = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "mp-1", ["Max-Price"] = "2" }))
+  local mpErr = ob["rng-error"] and json.decode(ob["rng-error"].Data) or {}
+  check("Max-Price below the price: Price-Above-Max, nothing charged", r.error == "Price-Above-Max" and mpErr.price == 3
+    and Beacon.balances[F.game] == 14 and Beacon.seen[F.game .. "|mp-1"] == nil, encode(ob))
+  eq("Max-Price must be whole RNG", send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "mp-2",
+    ["Max-Price"] = "x" })).error, "Bad-Max-Price")
+  send(delivery(F.game, { Action = "Request-Random", Tier = "fast", ["Request-Id"] = F.req1, ["Max-Price"] = "3" }))
   send(delivery(F.game, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = F.req2 }))
   r, ob = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = F.req2 }))
   check("a redelivered request is a no-op, not an error", r.duplicate == true and r.round == 1 and next(ob) == nil)
@@ -278,6 +285,10 @@ function runBeaconTests()
   eq("the wallet's round is in seen", Beacon.seen[F.wallet .. "|pay-1"], 3)
   r = credit(F.wallet, 3 * U, "t3", { ["X-Request-Id"] = "pay-1" })
   eq("the same notice again is a duplicate", r.duplicate, true)
+  r = credit(F.stranger, 3 * U, "t95", { ["X-Request-Id"] = "pay-mp", ["X-Max-Price"] = "2" })
+  credited = credited + 3
+  check("pay-and-request with X-Max-Price below the price: refused, the credit stays", r.error == "Price-Above-Max"
+    and Beacon.balances[F.stranger] == 3, encode(r))
 
   -- Production mode: rng@1.0 verifies one group signature, while the beacon
   -- requires threshold published partials and pays their members.
@@ -374,12 +385,16 @@ function runBeaconTests()
     send(wallet(F.stranger, { Action = "Gov.Pause", ["from-process"] = F.dao })).error, "Not authorised")
   eq("another process is nobody", send(delivery(F.game, { Action = "Gov.Pause" })).error, "Not authorised")
   r = dao({ Action = "Gov.Configure", ["Signer-Fee"] = "2", protocol_fee = "2" })
-  check("the DAO sets fees by tag", r.price and r.price.fast == 6, r.error)
+  check("a fee change is money: it waits the floor", r.error == "Effective-At-Required" and r.class == "money"
+    and Beacon.signerFee == 1, encode(r))
+  r = enact({ Action = "Gov.Configure", ["Signer-Fee"] = "2", protocol_fee = "2" })
+  check("the DAO sets fees by tag, once due", r.price and r.price.fast == 6 and Beacon.protocolFee == 2, encode(r))
+  check("the same fees again are harmless", dao({ Action = "Gov.Configure", ["Signer-Fee"] = "2" }).ok == true)
   eq("data is the wallet's only", dao({ Action = "Gov.Configure", Data = encode({ signerFee = 9 }) }).signerFee, 2)
   eq("fee bounds", dao({ Action = "Gov.Configure", ["Signer-Fee"] = "0" }).error, "Bad-Parameter")
   r = deployer({ ["Signer-Fee"] = "3" })
   check("the wallet still governs beside the DAO", r.ok == true and r.signerFee == 3, r.error)
-  dao({ Action = "Gov.Configure", ["Signer-Fee"] = "2" })
+  deployer({ ["Signer-Fee"] = "2" })
   local newCommittee = { Action = "Gov.Configure", Committee = encode({ F.members[1], F.members[2] }), Threshold = "2",
     ["Group-Key"] = F.groupKey2, ["Share-Public-Keys"] = encode({ F.sharePublicKeys[1], F.sharePublicKeys[2] }) }
   eq("committee bounds checked on proposal", dao({ Action = "Gov.Configure", Threshold = "4" }).error, "Invalid-Threshold")
@@ -411,6 +426,7 @@ function runBeaconTests()
   eq("cancelled", #info().govPending, 0)
   eq("a stranger cannot cancel", send(wallet(F.stranger, { Action = "Gov.Cancel", ["Gov-Id"] = "1" })).error, "Not authorised")
   for _, f in ipairs({ { Action = "Gov.Configure", Threshold = "2" }, { Action = "Gov.Claim-Protocol", Recipient = F.owner },
+                       { Action = "Gov.Configure", ["Signer-Fee"] = "7" }, { Action = "Gov.Configure", ["Protocol-Fee"] = "7" },
                        { Action = "Gov.Set-Dao", Dao = F.stranger } }) do
     local r1 = dao(f)
     f["Effective-At"] = at(-1)
@@ -482,6 +498,23 @@ function runBeaconTests()
     and govInfo().code == Gov.rootOf(code1) and govInfo().version == 1 and govInfo().dao == F.dao)
   send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code1 }))
   eq("the running code again changes nothing", out(), '{"error":"No approved code","ok":false}')
+
+  -- Every Gov.* needs the scheduler's time, never older than the last one.
+  local function sendAt(body, ts)
+    base = compute(base, { body = body, timestamp = ts, process = F.beacon, slot = slot })
+    slot = slot + 1
+    return json.decode(base.results.output.data)
+  end
+  eq("a Gov.* with no time is refused", sendAt(delivery(F.dao, { Action = "Gov.Pause" }), nil).error, "No-Time")
+  eq("Exit-Now with no time is refused", sendAt(wallet(F.members[1], { Action = "Exit-Now" }), nil).error, "No-Time")
+  eq("a Gov.* older than the last is refused", sendAt(delivery(F.dao, { Action = "Gov.Pause" }), clock - 5000).error,
+    "Time-Went-Back")
+  check("so nothing changed", not Beacon.paused and Beacon.committee[F.members[1]] ~= nil)
+  -- The wallet cannot renounce over a queued action.
+  local qid = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner, ["Effective-At"] = at() }).pending.id
+  send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
+  eq("no renounce over a non-empty queue", out(), '{"error":"Gov-Queue-Not-Empty","ok":false}')
+  dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(qid) })
 
   -- Renounce: one way, the wallet's alone; then only the DAO governs.
   dao({ Action = "Gov.Renounce-Wallet" })

@@ -227,6 +227,7 @@ local function runFairTests()
   eq("request goes to the beacon", req and req.target, F.beacon)
   eq("request action", req and req.Action, "Request-Random")
   eq("request id", req and req["Request-Id"], "fair-1")
+  eq("the request caps the price at what a session reserved (Max-Price)", req and req["Max-Price"], "4")
   eq("no time on the request (the beacon uses its scheduler's)", req and req["Request-Time"], nil)
   eq("sess-1 in batch 1", sessionOf("sess-1").batch, 1)
   eq("early commit in batch 1", sessionOf("early").batch, 1)
@@ -652,6 +653,13 @@ local function runFairTests()
   eq("a stranger cannot configure", send(wallet(F.stranger, { Action = "Fair.Configure", Keep = "4" })).error, "Not authorised")
   eq("the DAO's address as a wallet is nobody", send(wallet(F.dao, { Action = "Fair.Configure", Keep = "4" })).error,
     "Not authorised")
+  -- Every Gov.* and Fair.Configure needs the scheduler's time, never going back.
+  base = compute(base, { body = delivery(F.dao, { Action = "Fair.Configure", Keep = "4" }), process = SELF, slot = 900000 })
+  eq("Fair.Configure with no time is refused", json.decode(base.results.output.data).error, "No-Time")
+  base = compute(base, { body = delivery(F.dao, { Action = "Fair.Configure", Keep = "4" }), timestamp = clock - 1,
+    process = SELF, slot = 900001 })
+  check("one older than the last is refused, nothing changed", json.decode(base.results.output.data).error == "Time-Went-Back"
+    and Fair.state.keep == 3)
   -- requestPrice is money: it waits the floor.
   local price0 = Fair.state.price
   r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5" }))
