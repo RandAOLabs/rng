@@ -1,10 +1,11 @@
 {
   "title": "Set fast-tier fees",
-  "body": "Gov.Configure on the fast tier (on-demand 2-of-3 threshold BLS). Price per request = Threshold x Signer-Fee + Protocol-Fee, in whole RNG (1 to 1,000,000 each). Harmless: applies on receipt to new requests; a request already made pays out what it was charged.",
+  "body": "Gov.Configure on the fast tier (on-demand 2-of-3 threshold BLS). Price per request = Threshold x Signer-Fee + Protocol-Fee, in whole RNG (1 to 1,000,000 each). A fee change is money: what every request pays. It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel). A request already made pays out what it was charged; a request with Max-Price below the new price is refused.",
   "execProcess": "$FAST",
   "execTags": {
     "Action": "Gov.Configure",
     "Signer-Fee": "1",
-    "Protocol-Fee": "1"
+    "Protocol-Fee": "1",
+    "Effective-At": "$EFFECTIVE_AT"
   }
 }

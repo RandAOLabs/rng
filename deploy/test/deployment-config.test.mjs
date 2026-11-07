@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   loadAllocations, genesisPrelude, badParams, genesisConfig, daoRules, sameScheduler,
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, setDaoErrors, renounceErrors, fundError,
-  effectiveAt, isMoneyProposal, LABS_STAKE_RNG,
+  effectiveAt, isMoneyProposal, LABS_STAKE_RNG, floorFor, RESERVE_FLOOR_MS, buildErrors, watchAlerts,
   fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources,
 } from '../deploy.mjs';
 
@@ -107,7 +107,7 @@ test('v3 params template is inside the beacon hard bounds, and each bound bites'
   assert.deepEqual(badParams(p), []);
   for (const bad of [{ T: 2 ** 26 }, { revealWindowMs: 9999 }, { commitWindowMs: 10001 }, { abandonAfterMs: 1000 },
     { slash: 30000 }, { slash: 2501 }, { stake: 10 ** 7 + 1 }, { rejoinBaseMs: 1000 }, { rejoinCapMs: 31 * 86400000 },
-    { minCommits: 1 }, { maxActive: 129 }, { maxValidators: 63 }, { heartbeat: 2 }, { roundPrice: 0 },
+    { minCommits: 1 }, { maxActive: 129 }, { maxActive: 7, minCommits: 2 }, { maxValidators: 63 }, { heartbeat: 2 }, { roundPrice: 0 },
     { subscriptionRounds: 0 }, { maxInFlight: 0 }, { fairWindowMs: 0 }, { stake: 1.5 }]) {
     assert.notDeepEqual(badParams({ ...p, ...bad }), [], JSON.stringify(bad));
   }
@@ -138,7 +138,7 @@ test('RNG DAO rules follow the spec', () => {
   assert.equal(r['Proposal-Deposit'], String(5_000e6));
   assert.equal(r['Voting-Period'], String(86400000), 'one day: the floor stake-dao/1 allows');
   assert.equal(r['Unstake-Delay'], String(14 * 86400000));
-  assert.deepEqual([r['Quorum-Bps'], r['Pass-Bps'], r['Veto-Bps'], r['Max-Active-Proposals']], ['1000', '5000', '3334', '20']);
+  assert.deepEqual([r['Quorum-Bps'], r['Pass-Bps'], r['Veto-Bps'], r['Max-Active-Proposals']], ['2000', '5000', '3334', '20']);
   assert.ok(Number(r['Max-Proposals-Per-Proposer']) <= Number(r['Max-Active-Proposals']));
   assert.equal(r['Dao-Admin'], undefined, 'stake-dao/1 refuses Dao-Admin');
   assert.equal(daoRules({ token: pid('token') })['Dao-Name'], 'RNG DAO');
@@ -168,7 +168,9 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
     GROUP_KEY: committee.groupKey };
   assert.ok(!files.some((f) => /guardian/i.test(f)), 'no guardian template');
   for (const f of files) {
-    const p = fillTemplate(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')), vars);
+    const template = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    const p = fillTemplate(template, { ...vars,
+      EFFECTIVE_AT: effectiveAt({ now: 1e12, floorMs: floorFor(template.execTags.Action) }) });
     assert.deepEqual(proposalErrors(p, { token: vars.TOKEN, fast: vars.FAST, fair: vars.FAIR, now: 1e12 }), [], f);
     assert.doesNotMatch(JSON.stringify(p), /Gov\.Handover|on receipt, up to/i, `${f} describes the old design`);
     const target = p.execProcess === vars.FAST ? 'fast-tier' : p.execProcess === vars.FAIR ? 'fair' : 'beacon';
@@ -191,20 +193,29 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
     assert.match(bad({ Action: gone, Governor: pid('x') }).join(), /not a beacon action/, gone);
   }
   assert.deepEqual(bad({ Action: 'Gov.Cancel', 'Gov-Id': '3' }), []);
-  // Money and code need Effective-At, at least the vote's end + 24 h.
+  // Money and code need Effective-At, at least the vote's end + 24 h (7 days for the reserve).
   const EA = { 'Effective-At': effectiveAt({ now: 1e12 }) };
+  assert.equal(floorFor('Gov.Move-Reserve'), 7 * 86400000);
+  assert.equal(floorFor('Gov.Set-Successor'), RESERVE_FLOOR_MS);
+  assert.equal(floorFor('Gov.Treasury-Spend'), 86400000);
   for (const tags of [{ Action: 'Gov.Treasury-Spend', Recipient: pid('who'), Quantity: '1' }, { Action: 'Gov.Fund-Reserve', Quantity: '1' },
     { Action: 'Gov.Set-Successor', Successor: pid('n') }, { Action: 'Gov.Move-Reserve', Successor: pid('n') },
     { Action: 'Gov.Remove-Validator', Validator: pid('v') }, { Action: 'Gov.Configure', Slash: '1200' },
     { Action: 'Gov.Configure', 'Reveal-Window-Ms': '20000' }, { Action: 'Gov.Set-Dao', Dao: pid('dao2') },
-    { Action: 'Gov.Approve-Code', 'Code-Root': 'a'.repeat(64) }]) {
+    { Action: 'Gov.Approve-Code', 'Code-Root': 'a'.repeat(64) }, { Action: 'Gov.Configure', 'Request-Price': '5' },
+    { Action: 'Gov.Configure', 'Subscription-Price': '2' }, { Action: 'Gov.Configure', 'Max-Active': '8' },
+    { Action: 'Gov.Configure', 'Min-Commits': '3' }]) {
+    const floor = floorFor(tags.Action);
+    const ea = { 'Effective-At': effectiveAt({ now: 1e12, floorMs: floor }) };
     assert.match(bad(tags).join(), /needs Effective-At/, tags.Action);
-    assert.deepEqual(proposalErrors({ ...ok, execTags: { ...tags, ...EA } }, { token: pid('token'), now: 1e12 }), [], tags.Action);
-    const early = { 'Effective-At': String(1e12 + 2 * 86400000 - 1) };
+    assert.deepEqual(proposalErrors({ ...ok, execTags: { ...tags, ...ea } }, { token: pid('token'), now: 1e12 }), [], tags.Action);
+    const early = { 'Effective-At': String(1e12 + 86400000 + floor - 1) };
     assert.match(proposalErrors({ ...ok, execTags: { ...tags, ...early } }, { token: pid('token'), now: 1e12 }).join(),
-      /before the vote can end plus 24 h/, tags.Action);
+      floor === 86400000 ? /before the vote can end plus 24 h/ : /before the vote can end plus 7 d/, tags.Action);
   }
-  assert.deepEqual(bad({ Action: 'Gov.Configure', 'Request-Price': '5' }), [], 'prices are harmless');
+  assert.match(proposalErrors({ ...ok, execTags: { Action: 'Gov.Move-Reserve', Successor: pid('n'), ...EA } },
+    { token: pid('token'), now: 1e12 }).join(), /plus 7 d/, 'the reserve waits a week, not a day');
+  assert.deepEqual(bad({ Action: 'Gov.Configure', 'Abandon-After-Ms': '70000' }), [], 'abandonAfterMs is harmless');
   assert.match(bad({ Action: 'Gov.Pause', 'Effective-At': 'soon' }).join(), /whole milliseconds/);
   // gov.lua's verbs: Set-Dao and Approve-Code by vote; Renounce-Wallet is the wallet's alone.
   assert.deepEqual(bad({ Action: 'Gov.Set-Dao', Dao: pid('dao2'), ...EA }), []);
@@ -216,7 +227,9 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
   assert.match(bad({ Action: 'Gov.Clear-Guardian' }).join(), /not a beacon action/);
   // The fast tier has its own Gov.* table.
   const fast = (execTags) => proposalErrors({ ...ok, execProcess: pid('fast'), execTags }, { token: pid('token'), fast: pid('fast') });
-  assert.deepEqual(fast({ Action: 'Gov.Configure', 'Signer-Fee': '2' }), []);
+  assert.match(fast({ Action: 'Gov.Configure', 'Signer-Fee': '2' }).join(), /needs Effective-At/, 'fees are money');
+  assert.deepEqual(fast({ Action: 'Gov.Configure', 'Signer-Fee': '2', ...EA }), []);
+  assert.deepEqual(fast({ Action: 'Gov.Configure', 'Abandon-After-Ms': '70000' }), []);
   assert.match(fast({ Action: 'Gov.Claim-Protocol', Recipient: pid('who') }).join(), /needs Effective-At/);
   assert.deepEqual(fast({ Action: 'Gov.Claim-Protocol', Recipient: pid('who'), ...EA }), []);
   assert.match(fast({ Action: 'Gov.Configure', Threshold: '2' }).join(), /needs Effective-At/);
@@ -259,6 +272,16 @@ test('checkV3 passes on a healthy deployment and flags each problem', () => {
   assert.deepEqual(failing({ beaconinfo: { ...good.beaconinfo, foundationReserveAtoms: '0' } }), ['beacon reserve funded']);
   assert.deepEqual(failing({ daoinfo: { ...good.daoinfo, Token: pid('x') } }), ['dao configured on RNG']);
   assert.deepEqual(failing({ fairinfo: { ...good.fairinfo, token: '' } }), ['fair paid in RNG']);
+  // verify checks each protocol runs the build recorded for it (spawn: gov.code "" v0).
+  const built = { ...s, expectedCode: { beacon: { code: '', version: 0 }, fair: { code: 'a'.repeat(64), version: 1 } } };
+  const failingBuilt = (patch) => checkV3({ state: built, ...good, ...patch }).filter((c) => !c.ok).map((c) => c.check);
+  assert.deepEqual(failingBuilt({ fairinfo: { ...good.fairinfo, gov: { ...gov(pid('d'), false), code: 'a'.repeat(64), version: 1 } } }), []);
+  assert.deepEqual(failingBuilt({}), ['fair runs the recorded build']);
+  assert.deepEqual(failingBuilt({ beaconinfo: { ...good.beaconinfo, gov: { ...gov(pid('d'), true), code: 'b'.repeat(64), version: 1 } },
+    fairinfo: { ...good.fairinfo, gov: { ...gov(pid('d'), false), code: 'a'.repeat(64), version: 1 } } }), ['beacon runs the recorded build']);
+  // A cold restore runs the spawn module: the installed root comes back approved, code "".
+  const restored = buildErrors({ state: built, role: 'fair', info: { gov: { ...gov(pid('d'), false), approved: 'a'.repeat(64), version: 1 } } });
+  assert.match(restored.join(), /cold restore: resend the installed code/);
 });
 
 test('dry-run plan prints the whole v3 sequence and sends nothing', () => {
@@ -316,6 +339,7 @@ test('dry-run plan prints the whole v3 sequence and sends nothing', () => {
   assert.deepEqual(renounce.map((l) => l.target), [beacon, fair, fast]);
   assert.ok(sends.indexOf(setDao[2]) < sends.indexOf(renounce[0]), 'set-dao on all, then renounce');
   assert.ok(sends.indexOf(stakes[0]) < sends.indexOf(setDao[0]), 'Labs stakes before the handover');
+  assert.ok(bonds.every((b) => sends.indexOf(b) > sends.indexOf(renounce[2])), 'validators bond only after the wallet renounced');
   const owners = lines.filter((l) => l.op === 'check' && l.owners);
   assert.deepEqual(owners.map((l) => [l.role, l.owners.dao, l.owners.wallet]),
     [['beacon', dao, false], ['fair', dao, false], ['fast', dao, false]]);
@@ -448,14 +472,35 @@ test('set-dao is refused onto a wallet, a foreign DAO, another scheduler or a re
 });
 
 test('renounce-wallet is refused until the protocol reads the DAO as owner', () => {
-  const s = { dao: pid('d'), beacon: pid('b') };
-  const gov = (dao, wallet) => ({ token: pid('t'), gov: { dao, wallet } });
-  assert.deepEqual(renounceErrors({ state: s, role: 'beacon', info: gov(pid('d'), true) }), []);
+  const s = { dao: pid('d'), beacon: pid('b'), token: pid('t'), expectedCode: { beacon: { code: '', version: 0 } } };
+  const gov = (dao, wallet, extra = {}) => ({ token: pid('t'), govPending: [],
+    gov: { dao, wallet, approved: '', code: '', version: 0, ...extra } });
+  const daoinfo = { Standard: 'stake-dao/1', Configured: true, Token: pid('t'), Admin: '' };
+  const why = (info, patch = {}) => renounceErrors({ state: s, role: 'beacon', info, daoinfo, ...patch }).join('; ');
+  assert.deepEqual(renounceErrors({ state: s, role: 'beacon', info: gov(pid('d'), true), daoinfo }), []);
+  // Nothing set going may outlive the wallet, and the DAO must be ours.
+  assert.match(why({ ...gov(pid('d'), true), govPending: [{ id: 1, verb: 'Gov.Set-Dao' }] }), /1 pending action\(s\) \(1\)/);
+  assert.match(why(gov(pid('d'), true, { approved: 'c'.repeat(64) })), /approved: cancel it first/);
+  assert.match(why(gov(pid('d'), true, { code: 'c'.repeat(64), version: 1 })), /not the recorded build/);
+  assert.match(why(gov(pid('d'), true), { state: { ...s, expectedCode: undefined } }), /no audited build recorded/);
+  assert.match(why(gov(pid('d'), true), { daoinfo: null }), /no daoinfo/);
+  assert.match(why(gov(pid('d'), true), { daoinfo: { ...daoinfo, Token: pid('x') } }), /not a configured stake-dao\/1 on our token/);
+  assert.match(why(gov(pid('d'), true), { daoinfo: { ...daoinfo, Standard: 'other/1' } }), /stake-dao\/1/);
+  assert.match(why({ ...gov(pid('d'), true), govPending: undefined }), /no govPending/);
   assert.match(renounceErrors({ state: s, role: 'beacon', info: gov('', true) }).join(), /set-dao beacon first/);
   assert.match(renounceErrors({ state: s, role: 'beacon', info: gov(pid('x'), true) }).join(), /set-dao beacon first/);
   assert.match(renounceErrors({ state: s, role: 'beacon', info: gov(pid('d'), false) }).join(), /no wallet owner left/);
   assert.match(renounceErrors({ state: s, role: 'beacon', info: null }).join(), /publishes no beaconinfo/);
   assert.match(renounceErrors({ state: { ...s, dao: undefined }, role: 'beacon', info: gov('', true) }).join(), /set-dao/);
+});
+
+test('dao-watch flags every open proposal (and a missing Labs vote) and every pending action', () => {
+  const proposals = [{ id: 3, status: 'active', title: 'a' }, { id: 4, status: 'active', title: 'b' }, { id: 2, status: 'passed' }];
+  const alerts = watchAlerts({ proposals, stake: { votes: { 3: 'Yes' } },
+    infos: { beacon: { govPending: [{ id: 7, verb: 'Gov.Treasury-Spend', class: 'money' }] }, fair: { govPending: [] }, fast: null } });
+  assert.deepEqual(alerts.map((a) => a.what), ['proposal 3 open (Labs voted Yes)', 'proposal 4 open: Labs has NOT voted',
+    'beacon pending 7 Gov.Treasury-Spend (money)']);
+  assert.deepEqual(watchAlerts({ proposals: [], infos: {} }), []);
 });
 
 test('the deployer allocation gives the whole supply to the deployer, ticker RNG', () => {
@@ -553,6 +598,8 @@ out[#out + 1] = send("${SCHED}", { Action = "Gov.Approve-Code", ["Code-Root"] = 
 out[#out + 1] = send("${SCHED}", { Action = "Gov.Approve-Code", ["Code-Root"] = string.rep("c", 64),
   ["Effective-At"] = "1700086400005" }, "${DAO}")
 out[#out + 1] = send("${OWNER}", { Action = "Gov.Renounce-Wallet" })
+out[#out + 1] = send("${SCHED}", { Action = "Gov.Cancel", ["Gov-Id"] = "code" }, "${DAO}")
+out[#out + 1] = send("${OWNER}", { Action = "Gov.Renounce-Wallet" })
 out[#out + 1] = send("${OWNER}", { Action = "Gov.Set-Dao", Dao = "${OWNER}" })
 return table.concat(out, "\\n")`;
   const want = [
@@ -561,6 +608,9 @@ return table.concat(out, "\\n")`;
     `{"dao":"${DAO}","ok":true}`,
     '{"error":"Effective-At-Required","ok":false}',
     `{"approved":"${'c'.repeat(64)}","effectiveAt":1700086400005,"ok":true}`,
+    // Nothing approved may outlive the wallet: cancel it first.
+    `{"approved":"${'c'.repeat(64)}","error":"Code-Approval-Pending","ok":false}`,
+    '{"cancelled":"code"}',
     '{"ok":true,"wallet":false}',
     '{"error":"Not authorised","ok":false}',
   ].join('\n');

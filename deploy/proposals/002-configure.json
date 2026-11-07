@@ -1,6 +1,6 @@
 {
   "title": "Tune beacon parameters",
-  "body": "Gov.Configure inside the hard bounds (docs/PERMISSIONLESS.md), up to 14 parameters. Prices, abandon and rejoin windows, sizes and fairWindowMs are harmless and apply on receipt; stake, slash, the commit and reveal windows, crackBounty, maxInFlight, cadence, targetInterval, roundPrice and T are money. It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel). The bounds are checked again when it applies.",
+  "body": "Gov.Configure inside the hard bounds (docs/PERMISSIONLESS.md), up to 14 parameters. Abandon and rejoin windows, raising maxActive or maxValidators, lowering minCommits, and fairWindowMs are harmless and apply on receipt; stake, slash, the commit and reveal windows, crackBounty, maxInFlight, cadence, targetInterval, roundPrice, requestPrice, subscriptionPrice, T, fewer seats (maxActive >= 8, maxValidators) and a higher minCommits are money. It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel). The bounds are checked again when it applies.",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Configure",

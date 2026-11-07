@@ -27,6 +27,9 @@
 //   renounce-wallet <beacon|fair|fast ...> --confirm   Gov.Renounce-Wallet (one way). Refused unless the
 //                                           protocol already reads the recorded DAO as owner; reads back.
 //   gov-apply <beacon|fair|fast> <Gov-Id>   Gov.Apply: anyone runs a pending DAO action once it is due
+//   dao-watch                               every open DAO proposal (and whether Labs has voted on it) and every
+//                                           pending action on beacon, fair, fast; exits 1 when one needs a look
+//   expect-code <beacon|fair|fast> <root> <version>   record an upgrade the DAO installed as the build verify expects
 // Fast tier (on-demand 2-of-3 threshold BLS, beacon/beacon.lua; not a heartbeat):
 //   spawn-fast                              the fast-tier process (lua@5.3a)
 //   genesis-configure-fast [committee.json] deployer Gov.Configure: v3 token, the existing committee
@@ -34,7 +37,8 @@
 //   fund-fast <rng> [for]                   a fast-tier balance (X-For)
 //   gov-fast <Gov.Action> [Tag=Value ...]   any wallet-path Gov.* on the fast tier
 //   dao-stake [rng] (default: Labs' launch stake) | dao-propose <template.json> [KEY=VALUE ...] | dao-vote <id> <Yes|No|NoWithVeto|Abstain>
-//   status | verify                         read and check token, DAO, beacon, fair (verify exits 1 on a failure)
+//   status | verify                         read and check token, DAO, beacon, fair (verify exits 1 on a failure;
+//                                           it checks each protocol runs the recorded build: gov.code/version)
 //   test-subscription                       authenticated-push acceptance test against the v3 beacon
 //   plan <allocations.json> [params.json]   the whole v3 sequence, dry-run only
 //
@@ -140,7 +144,8 @@ export function badParams(p) {
   need(p.slash >= 1 && p.slash * 10 <= p.stake && p.stake <= 10000000, '1 <= slash <= stake / 10, stake <= 10^7');
   need(p.rejoinBaseMs >= p.revealWindowMs && p.rejoinCapMs >= p.rejoinBaseMs && p.rejoinCapMs <= 30 * DAY,
     'revealWindowMs <= rejoinBaseMs <= rejoinCapMs <= 30 d');
-  need(p.minCommits >= 2 && p.minCommits <= p.maxActive && p.maxActive <= 128, '2 <= minCommits <= maxActive <= 128');
+  need(p.minCommits >= 2 && p.minCommits <= p.maxActive && p.maxActive >= 8 && p.maxActive <= 128,
+    '2 <= minCommits <= maxActive, 8 <= maxActive <= 128');
   need(p.maxValidators >= p.maxActive && p.maxValidators <= 1024, 'maxActive <= maxValidators <= 1024');
   need(p.heartbeat === 0 || p.heartbeat === 1, 'heartbeat 0 or 1');
   need(p.roundPrice >= 1 && p.requestPrice >= 1 && p.subscriptionPrice >= 1 && p.crackBounty >= 1, 'prices and bounty >= 1');
@@ -169,12 +174,19 @@ export function genesisConfig({ beacon, token, params, hTable }) {
 
 /** gov.lua's floor: a DAO money/code action takes effect no sooner than this after it arrives. */
 export const EXIT_FLOOR_MS = DAY;
+/** gov.lua's RESERVE_FLOOR_MS: Gov.Set-Successor and Gov.Move-Reserve (the 200 M reserve) wait a week. */
+export const RESERVE_FLOOR_MS = 7 * DAY;
+/** The floor a DAO action waits after it arrives. */
+export const floorFor = (action) => (['Gov.Set-Successor', 'Gov.Move-Reserve'].includes(action) ? RESERVE_FLOOR_MS : EXIT_FLOOR_MS);
 /** RNG Labs' stake in the DAO at launch, whole RNG (RNG_LABS_STAKE overrides). Labs controls
  * votes only while no coalition stakes more (PERMISSIONLESS.md "Who governs"). */
 export const LABS_STAKE_RNG = 50_000_000;
 
 /** The RNG DAO's definition (DAO.md rules; PERMISSIONLESS.md "YapDAO instance"). Voting-Period
- * is 1 day, the floor stake-dao/1 lets a vote go to (it can be raised later, never below 1 day). */
+ * is 1 day, the floor stake-dao/1 lets a vote go to (it can be raised later, never below 1 day).
+ * Quorum-Bps 2000 (20 % of the stake must vote): while Labs holds most of the stake, a proposal
+ * Labs does not vote on needs a fifth of all stake behind it rather than a tenth (PERMISSIONLESS.md
+ * "Who governs the DAO"); a vote can lower it, never below stake-dao/1's 5 % floor. */
 export function daoRules({ token, ticker = 'RNG' }) {
   return {
     'Dao-Name': ticker.startsWith('TEST-') ? 'TEST-RNG DAO' : 'RNG DAO',
@@ -184,7 +196,7 @@ export function daoRules({ token, ticker = 'RNG' }) {
     'Proposal-Threshold': String(25_000 * UNIT),
     'Proposal-Deposit': String(5_000 * UNIT),
     'Voting-Period': String(DAY),
-    'Quorum-Bps': '1000',
+    'Quorum-Bps': '2000',
     'Pass-Bps': '5000',
     'Veto-Bps': '3334',
     'Unstake-Delay': String(14 * DAY),
@@ -242,10 +254,14 @@ const FAIR_GOV_TAGS = {
 // tags it names, which is conservative: a value equal to the current one is harmless there).
 const MONEY_VERBS = ['Gov.Set-Successor', 'Gov.Move-Reserve', 'Gov.Treasury-Spend', 'Gov.Fund-Reserve',
   'Gov.Remove-Validator', 'Gov.Set-Dao', 'Gov.Approve-Code', 'Gov.Claim-Protocol'];
+// Max-Active, Max-Validators (lower) and Min-Commits (higher) are money one way only: a proposal
+// naming them carries Effective-At either way.
 const MONEY_TAGS = {
   beacon: ['Stake', 'Slash', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Crack-Bounty', 'Max-In-Flight', 'Cadence-Ms',
-    'Target-Interval-Ms', 'Round-Price', 'T', 'H', 'H-Proof'].map(word),
-  'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'].map(word),
+    'Target-Interval-Ms', 'Round-Price', 'Request-Price', 'Subscription-Price', 'Max-Active', 'Max-Validators',
+    'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
+  'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification', 'Signer-Fee',
+    'Protocol-Fee'].map(word),
   fair: ['Request-Price', 'Beacon', 'Token'].map(word),
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
@@ -253,10 +269,10 @@ const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-
   'Rejoin-Base-Ms', 'Rejoin-Cap-Ms', 'Heartbeat', 'Round-Price', 'Request-Price', 'Subscription-Price',
   'Subscription-Rounds', 'Crack-Bounty', 'Fair-Window-Ms'].map(word);
 
-/** The Effective-At a proposal made at `now` names: the end of its vote, plus the 24 h floor, plus
- * `marginMs` for the vote to close and the DAO to deliver it. */
-export function effectiveAt({ now = Date.now(), votingPeriodMs = DAY, marginMs = DAY } = {}) {
-  return String(now + votingPeriodMs + EXIT_FLOOR_MS + marginMs);
+/** The Effective-At a proposal made at `now` names: the end of its vote, plus the floor (24 h, or
+ * 7 days for the reserve: floorFor), plus `marginMs` for the vote to close and the DAO to deliver it. */
+export function effectiveAt({ now = Date.now(), votingPeriodMs = DAY, marginMs = DAY, floorMs = EXIT_FLOOR_MS } = {}) {
+  return String(now + votingPeriodMs + floorMs + marginMs);
 }
 
 /** Whether a (filled) proposal is a money/code action that must carry Effective-At. */
@@ -313,8 +329,9 @@ export function proposalErrors(p, { token, fast, fair, now, votingPeriodMs = DAY
     if (ea !== undefined && !/^\d{1,15}$/.test(ea)) errs.push('Effective-At must be whole milliseconds');
     if (isMoneyProposal(p, target)) {
       if (ea === undefined) errs.push(`${action} moves money or code: it needs Effective-At (>= the vote's end + 24 h)`);
-      else if (now !== undefined && /^\d+$/.test(ea) && Number(ea) < now + votingPeriodMs + EXIT_FLOOR_MS) {
-        errs.push(`Effective-At ${ea} is before the vote can end plus 24 h (${now + votingPeriodMs + EXIT_FLOOR_MS})`);
+      else if (now !== undefined && /^\d+$/.test(ea) && Number(ea) < now + votingPeriodMs + floorFor(action)) {
+        errs.push(`Effective-At ${ea} is before the vote can end plus ${floorFor(action) === DAY ? '24 h' : '7 d'}`
+          + ` (${now + votingPeriodMs + floorFor(action)})`);
       }
     }
   }
@@ -351,15 +368,62 @@ export function setDaoErrors({ state, role, info, daoinfo, me }) {
   return errs;
 }
 
+/** The build `role` must be running (recorded at spawn: the spawn module, gov.code "" and
+ * version 0; expect-code records an upgrade the DAO installed), or null. */
+export const expectedBuild = (state, role) => state.expectedCode?.[role] || null;
+
+/** Why `role` is not running the recorded build (empty: it is). */
+export function buildErrors({ state, role, info }) {
+  const want = expectedBuild(state, role);
+  if (!want) return [`no audited build recorded for ${role} (spawn records it; expect-code after an upgrade)`];
+  const gov = info?.gov || {};
+  const errs = [];
+  if ((gov.code || '') !== want.code || Number(gov.version || 0) !== want.version) {
+    errs.push(`${role} runs code "${gov.code || ''}" v${gov.version || 0}, not the recorded build "${want.code}" v${want.version}`
+      + (gov.approved && gov.approved === want.code ? ' (a cold restore: resend the installed code, deploy/README.md)' : ''));
+  }
+  return errs;
+}
+
 /** Why Gov.Renounce-Wallet must not be sent to `role` (empty: go): one
- * way, so only once the protocol reads the recorded DAO as its owner. */
-export function renounceErrors({ state, role, info }) {
+ * way, so only once the protocol reads the recorded DAO as its owner, the
+ * DAO is a live stake-dao/1 on our token, nothing is queued or approved
+ * (the contract refuses those too), and it runs the recorded build. */
+export function renounceErrors({ state, role, info, daoinfo }) {
   if (!PROTOCOL_ROLES.includes(role)) return [`${role} is not a governed protocol (${PROTOCOL_ROLES.join(', ')})`];
   if (!info) return [`${role} ${state[role]} publishes no ${INFO_KEY[role]}`];
   if (!info.gov) return [`${role} publishes no gov: not a co-owned build`];
   if (!isPid(state.dao) || info.gov.dao !== state.dao) return [`${role} does not name the DAO ${state.dao}: set-dao ${role} first`];
   if (info.gov.wallet !== true) return [`${role} has no wallet owner left to renounce`];
-  return [];
+  const errs = [];
+  if (!Array.isArray(info.govPending)) errs.push(`${role} publishes no govPending`);
+  else if (info.govPending.length) {
+    errs.push(`${role} has ${info.govPending.length} pending action(s) (${info.govPending.map((p) => p.id).join(', ')}): apply or cancel them first`);
+  }
+  if ((info.gov.approved || '') !== '') errs.push(`${role} has code root ${info.gov.approved} approved: cancel it first (Gov.Cancel Gov-Id=code)`);
+  errs.push(...buildErrors({ state, role, info }));
+  if (!daoinfo) errs.push(`DAO ${state.dao} publishes no daoinfo: not a live DAO process`);
+  else if (daoinfo.Standard !== 'stake-dao/1' || daoinfo.Configured !== true || daoinfo.Token !== state.token
+      || daoinfo.Admin !== '') {
+    errs.push(`DAO ${state.dao} is not a configured stake-dao/1 on our token with no admin`);
+  }
+  return errs;
+}
+
+/** What `dao-watch` flags: every open proposal (and whether Labs, `me`, has voted on it) and every
+ * pending action on the protocols. Each { what, detail }. */
+export function watchAlerts({ proposals, stake, infos }) {
+  const out = [];
+  const votes = stake?.votes || {};
+  for (const p of Array.isArray(proposals) ? proposals : []) {
+    if (p.status !== 'active') continue;
+    out.push({ what: `proposal ${p.id} open${votes[p.id] ? ` (Labs voted ${votes[p.id]})` : ': Labs has NOT voted'}`,
+      detail: { title: p.title, endsAt: p.endsAt, action: p.action, yes: p.yes, no: p.no, veto: p.veto, quorum: p.quorum } });
+  }
+  for (const [role, info] of Object.entries(infos || {})) {
+    for (const g of info?.govPending || []) out.push({ what: `${role} pending ${g.id} ${g.verb} (${g.class})`, detail: g });
+  }
+  return out;
 }
 
 /** Why a transfer to the beacon (or the fast tier: role 'fast') would strand
@@ -427,6 +491,12 @@ export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fasti
     if (!want) continue;
     if (want.dao) c(`${role} owned by the DAO`, info?.gov?.dao === state.dao, info?.gov?.dao);
     if (want.walletRenounced) c(`${role} wallet renounced`, info?.gov?.wallet === false, info?.gov?.wallet);
+  }
+  // Code: each protocol runs the build recorded for it (a cold restore runs the spawn module).
+  for (const [role, info] of [['beacon', beaconinfo], ['fair', fairinfo], ['fast', fastinfo]]) {
+    if (!state[role] || !expectedBuild(state, role)) continue;
+    const errs = buildErrors({ state, role, info });
+    c(`${role} runs the recorded build`, errs.length === 0, errs.join('; ') || info?.gov?.code);
   }
   try { sameScheduler(state, ['token', 'dao', 'beacon', 'fair', 'fast'].filter((r) => state[r])); c('one scheduler', true, state.scheduler); }
   catch (e) { c('one scheduler', false, e.message); }
@@ -541,6 +611,10 @@ async function main(argv) {
     }
     state.processes[pid] = { role, scheduler, executionDevice, sourceSha256: rec.sourceSha256, at: new Date().toISOString() };
     state[role] = pid;
+    // The audited build: the spawn module (gov.code "" v0 until an upgrade installs).
+    if (PROTOCOL_ROLES.includes(role)) {
+      state.expectedCode = { ...state.expectedCode, [role]: { code: '', version: 0, sourceSha256: rec.sourceSha256 } };
+    }
     save();
     return pid;
   }
@@ -753,7 +827,8 @@ async function main(argv) {
       if (!flag('--confirm') && !DRY) throw new Error('Gov.Renounce-Wallet is one way: add --confirm');
       for (const role of roles) {
         if (!DRY) {
-          const errs = renounceErrors({ state, role, info: await key(state[role], INFO_KEY[role]) });
+          const [info, daoinfo] = await Promise.all([key(state[role], INFO_KEY[role]), key(state.dao, 'daoinfo')]);
+          const errs = renounceErrors({ state, role, info, daoinfo });
           if (errs.length) throw new Error(`renounce-wallet ${role} refused: ${errs.join('; ')}`);
         } else if ((state.owners?.[role]?.dao !== state.dao && !dryOwners[role]) || !PROTOCOL_ROLES.includes(role)) {
           throw new Error(`renounce-wallet ${role} refused: set-dao ${role} first`);
@@ -787,6 +862,25 @@ async function main(argv) {
       if (!PROTOCOL_ROLES.includes(role) || !id) throw new Error('gov-apply <beacon|fair|fast> <Gov-Id>');
       return send(state[role], 'Gov.Apply', { tags: { 'Gov-Id': String(id) } });
     },
+    // Labs must watch and vote on every proposal (PERMISSIONLESS.md "Who governs the DAO"):
+    // run this at least once per voting period (1 day), e.g. from cron.
+    async 'dao-watch'() {
+      const roles = PROTOCOL_ROLES.filter((r) => state[r]);
+      const [proposals, stake, ...infos] = await Promise.all([key(state.dao, 'proposals'),
+        key(state.dao, `stake-${state.deployer || me}`), ...roles.map((r) => key(state[r], INFO_KEY[r]))]);
+      const alerts = watchAlerts({ proposals, stake, infos: Object.fromEntries(roles.map((r, i) => [r, infos[i]])) });
+      for (const a of alerts) log({ op: 'watch', ...a });
+      if (!DRY && (alerts.length || !proposals)) process.exitCode = 1;
+      return alerts;
+    },
+    async 'expect-code'(role, root, version) {
+      if (!PROTOCOL_ROLES.includes(role) || !/^[0-9a-f]{64}$/.test(root || '') || !Number.isSafeInteger(Number(version))) {
+        throw new Error('expect-code <beacon|fair|fast> <64-hex root> <version>');
+      }
+      state.expectedCode = { ...state.expectedCode, [role]: { code: root, version: Number(version) } };
+      save();
+      log({ op: 'expect-code', role, code: root, version: Number(version) });
+    },
 
     // Fast tier: on-demand threshold BLS, paid per request; no heartbeat.
     async 'spawn-fast'() {
@@ -817,7 +911,11 @@ async function main(argv) {
       const vars = { BEACON: state.beacon, FAST: state.fast, DAO: state.dao, TOKEN: state.token, FAIR: state.fair,
         EFFECTIVE_AT: effectiveAt({ now, votingPeriodMs }),
         ...Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2))) };
-      const p = fillTemplate(readJson(file), vars);
+      const template = readJson(file);
+      if (!kv.some((a) => a.startsWith('EFFECTIVE_AT='))) {
+        vars.EFFECTIVE_AT = effectiveAt({ now, votingPeriodMs, floorMs: floorFor(template.execTags?.Action) });
+      }
+      const p = fillTemplate(template, vars);
       const errs = proposalErrors(p, { token: state.token, fast: state.fast, fair: state.fair, now, votingPeriodMs });
       if (errs.length) throw new Error(`proposal refused: ${errs.join('; ')}`);
       return send(state.dao, 'Propose', { tags: { Title: p.title, Body: p.body,
@@ -877,10 +975,6 @@ async function main(argv) {
       await v3['spawn-fair']();
       await v3['configure-fair']();
       await v3['fund-fair'](40); // a float of 10 requests at requestPrice 4
-      // Each launch validator gets validatorRng (100,000) and bonds all of it,
-      // 4 x stake, from day one: rank is capped bond, so a newcomer must bond
-      // as much to outrank them (PERMISSIONLESS.md P2). One transfer does both.
-      await v3['bond-for'](state.genesis.validatorRng, path.join(HERE, 'anyhonest-validators.json'));
       // The fast tier on the existing committee; the three rng-provider
       // daemons are repointed at it live (deploy/nodes.sh beacon <fast>).
       await v3['spawn-fast']();
@@ -892,6 +986,12 @@ async function main(argv) {
       // Launch: the DAO becomes the only owner of every protocol, and the
       // wallet renounces in the same step; read back gov.wallet = false.
       await v3['dao-handover']();
+      // Validators bond only once the wallet is renounced: nothing the wallet
+      // could still do touches a bond. Each launch validator gets validatorRng
+      // (100,000) and bonds all of it, 4 x stake, from day one: rank is capped
+      // bond, so a newcomer must bond as much to outrank them (PERMISSIONLESS.md
+      // P2). One transfer does both.
+      await v3['bond-for'](state.genesis.validatorRng, path.join(HERE, 'anyhonest-validators.json'));
       await v3['dao-propose'](path.join(HERE, 'proposals', '001-handover-proof.json'));
       log({ op: 'check', sameScheduler: sameScheduler(state, ['token', 'dao', 'beacon', 'fair', 'fast']), scheduler: state.scheduler });
     },

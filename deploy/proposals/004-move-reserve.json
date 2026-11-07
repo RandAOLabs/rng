@@ -1,6 +1,6 @@
 {
   "title": "Move the Foundation reserve to the successor",
-  "body": "Gov.Move-Reserve sends the whole Foundation reserve to the named successor as its reserve. Refused unless that process is the successor and has sent Successor-Ack since it was named (checked when it applies). It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
+  "body": "Gov.Move-Reserve sends the whole Foundation reserve to the named successor as its reserve. Refused unless that process is the successor and has sent Successor-Ack since it was named (checked when it applies). It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 7 days (the reserve floor) + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Move-Reserve",

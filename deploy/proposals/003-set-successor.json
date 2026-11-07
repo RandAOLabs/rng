@@ -1,6 +1,6 @@
 {
   "title": "Name the successor beacon",
-  "body": "Gov.Set-Successor replaces any earlier successor. Validators follow once the successor names this beacon as its predecessor (Successor-Ack). It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
+  "body": "Gov.Set-Successor replaces any earlier successor. Validators follow once the successor names this beacon as its predecessor (Successor-Ack). It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 7 days (the reserve floor) + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Set-Successor",
