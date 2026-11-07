@@ -1,0 +1,13 @@
+\section{RNG Economy}\label{sec:rng_economics}
+
+\subsection{Token Utility}\label{sec:token_utility}
+The \$RNG token is the utility token of the RandAO ecosystem. Every paid randomness request is paid in \$RNG, which establishes a continuous demand that grows with the protocol's adoption.
+
+\subsection{Prepaid Balances}\label{sec:balances}
+Applications fund a balance in the beacon process by transferring \$RNG to it. Each request debits the balance when it is made, so no token transfer happens per request and a request costs a single message. A request with too little balance is refused with an error stating the balance and the price; it is never silently served at a weaker tier.
+
+\subsection{Price Rule}\label{sec:price_rule}
+The price of a request is one \$RNG for each validator whose contribution served it, plus one \$RNG for the protocol. With three validators, a \texttt{timelock} request costs four \$RNG and a \texttt{quick} request with a threshold of two costs three. Fees accrue inside the beacon and are claimed in batches. A validator that withholds a reveal forfeits its fee for that round to the validator that cracked it.
+
+\subsection{Validators Without Staking}\label{sec:no_staking}
+The first version required providers to stake collateral. Collateral only secures a protocol when it is worth more than an attack would gain, and requiring real value from every operator limited who could run a node. The second version starts without staking: the any-honest guarantee does not depend on collateral, and misbehaviour is answered with lost fees, strikes and suspension. Staking can return when the validator set opens to outside operators.

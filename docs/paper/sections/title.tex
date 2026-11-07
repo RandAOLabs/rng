@@ -1,0 +1,74 @@
+% Define hexagon shape
+\newcommand{\hexagon}[1]{
+    \draw[black!10, line width=0.3pt] 
+    (0,0) -- (60:#1) -- (120:#1) -- (180:#1)
+    -- (240:#1) -- (300:#1) -- cycle;
+}
+
+% Custom title page
+\makeatletter
+\def\maketitle{
+    \begin{titlepage}
+        \begin{tikzpicture}[overlay, remember picture]
+            % Hexagonal background pattern
+            \foreach \i in {-400,-360,...,400} {
+                \foreach \j in {-600,-520,...,600} {
+                    \begin{scope}[shift={([xshift=\i pt,yshift=\j pt]current page.center)}]
+                        \hexagon{40pt}
+                    \end{scope}
+                }
+            }
+            \foreach \i in {-380,-340,...,380} {
+                \foreach \j in {-560,-480,...,560} {
+                    \begin{scope}[shift={([xshift=\i pt,yshift=\j pt]current page.center)}]
+                        \hexagon{40pt}
+                    \end{scope}
+                }
+            }
+            
+            % Center point for vertical alignment
+            \path (current page.center) ++(0,6cm) coordinate (title center);
+            
+            % Title and tagline group
+            \begin{scope}[local bounding box=title-group]
+                % Title
+                \node[inner sep=2pt, align=center, anchor=center] at (title center) (title) {
+                    \scalebox{4.5}{
+                        \textcolor{black}{\textbf{\textsf{RandAO}}}
+                    }
+                };
+                
+                % Decorative elements around title
+                \draw[line width=0.5pt] ([xshift=-3cm]title.west) -- ([xshift=-0.5cm]title.west);
+                \draw[line width=0.5pt] ([xshift=0.5cm]title.east) -- ([xshift=3cm]title.east);
+                
+                % Tagline
+                \node[below=0.8cm of title, font=\Large, align=center] (tagline) {
+                    \textcolor{black!70}{\textsf{Version 2 \textbar{} Any-Honest Time-Lock Randomness for AO \textbar{} \$RNG}}
+                };
+                
+                % Horizontal line under tagline
+                \draw[line width=1pt] 
+                    ([yshift=-0.75cm]tagline.south west) -- 
+                    ([yshift=-0.75cm]tagline.south east);
+            \end{scope}
+            
+            % Favicon image centered and positioned relative to page center
+            \path (current page.center) ++(0,-2cm) coordinate (favicon-pos);
+            \node[inner sep=0pt] at (favicon-pos) {
+                \includegraphics[width=5cm]{images/favicon.png}
+            };
+            
+            % Date at bottom
+            \node[align=center] at ([yshift=2cm]current page.south) {\large\textsf{\@date}};
+            
+            % Corner decorations
+            \foreach \corner in {north east, north west, south east, south west} {
+                \draw[line width=0.5pt] 
+                    ([xshift=-1cm, yshift=-1cm]current page.\corner) -- 
+                    ([xshift=1cm, yshift=1cm]current page.\corner);
+            }
+        \end{tikzpicture}
+    \end{titlepage}
+}
+\makeatother

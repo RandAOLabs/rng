@@ -1,0 +1,30 @@
+\section{Background}\label{sec:background}
+
+\subsection{Time-Lock Puzzles}\label{sec:timelock}
+Rivest, Shamir and Wagner introduced time-lock puzzles: values that take a fixed amount of \emph{sequential} computation to open~\cite{rivest1996timelock}. Given an RSA modulus $N = p \cdot q$, an input $x$ and a number of steps $T$, the puzzle's answer is
+\begin{equation}
+    y = x^{2^T} \bmod N .
+\end{equation}
+Anyone can find $y$ by squaring $x$ a total of $T$ times, one step after another; parallel hardware does not help. The puzzle's creator, who knows $p$ and $q$, has a shortcut: with $\varphi(N) = (p-1)(q-1)$,
+\begin{equation}
+    y = x^{\,2^T \bmod \varphi(N)} \bmod N ,
+\end{equation}
+which is a single modular exponentiation. Creating a puzzle is therefore fast, solving it without the trapdoor is slow, and the gap is set by $T$.
+
+\subsection{Verifiable Delay Functions}\label{sec:vdf}
+A Verifiable Delay Function (VDF) is a cryptographic primitive that requires a specified number of sequential steps to evaluate, yet produces a unique output that can be efficiently verified~\cite{boneh2018verifiable}. Two key properties make VDFs useful:
+\begin{itemize}
+    \item \textbf{Sequential Computation}: Evaluation cannot be significantly accelerated by parallel processing.
+    \item \textbf{Efficient Verification}: Checking a result is far cheaper than computing it.
+\end{itemize}
+Repeated squaring in an RSA group becomes a VDF when the evaluator also publishes a short proof. Wesolowski's construction~\cite{wesolowski2019efficient} uses a single group element: for a challenge prime $\ell$ derived by hashing the statement, the proof is $\pi = x^{\lfloor 2^T/\ell \rfloor} \bmod N$, and the verifier checks
+\begin{equation}
+    \pi^{\ell} \cdot x^{\,2^T \bmod \ell} \equiv y \pmod N ,
+\end{equation}
+which costs two exponentiations with small exponents. Our first version used Pietrzak's construction~\cite{pietrzak2019simple}, whose checkpoints we verified across a fleet of verifier processes; the second version needs proofs only in the rare case where a validator withholds.
+
+\subsection{AO}\label{sec:ao}
+AO introduces a novel approach to decentralized computing, establishing a smart contract platform that achieves unprecedented scalability through its unique architecture~\cite{williams2024ao}. Built on top of the Arweave network, AO distinguishes itself from traditional blockchain-based smart contract platforms through its actor-oriented design and message-passing paradigm. Processes communicate through messages rather than shared state, which allows computation to scale in parallel.
+
+\subsection{HyperBEAM and Devices}\label{sec:hyperbeam}
+HyperBEAM is the node implementation of AO. Its functionality is organised into \emph{devices}: modules that a node exposes over HTTP and that processes can call during their own computation. A device runs as native node code, so work that would be prohibitively slow in a process's Lua runtime, such as modular exponentiation over 2048-bit integers, costs milliseconds. Because a device used by a process must return the same answer on every node and every replay, RandAO's device is stateless and deterministic: every key is a pure function of its inputs.
