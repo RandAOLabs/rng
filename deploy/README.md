@@ -179,8 +179,9 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    `sequenced-v1` and checks `daoinfo` (configured, token, no admin).
 3. **Beacon v3 genesis.** `spawn-beacon`, then
    `genesis-configure deploy/v3-params.json`. This locks token, unit, self and
-   `predecessor = MZMoXv-2` and sends `Successor-Ack` to it (the v2 beacon has
-   no handler for it; that refusal is expected).
+   `predecessor = ""` (`v3-params.json`: a fresh deploy has no predecessor;
+   the v2 beacon `MZMoXv-2` is legacy, its reserve is in the old TEST-RNG and
+   it is retired, step 7).
 4. **250 M under DAO control.** `fund-reserve` (200 M) and `fund-treasury`
    (50 M) from Labs into the beacon. This is the DAO's share: the DAO process
    itself must never receive RNG, because stake-dao/1 can never send an action
@@ -188,7 +189,7 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    unspendable. The DAO controls both through `Gov.*`: the reserve pays
    heartbeat rounds (and moves only to a successor), the treasury is
    spendable by the DAO (`Gov.Treasury-Spend`, 24 h after the vote, at most
-   10 % of the treasury per 30 days with reserve funding), and can top up
+   10 % of the treasury in any rolling 30 days with reserve funding), and can top up
    the reserve (`Gov.Fund-Reserve`). Every `fund-*` refuses until
    `beaconinfo.token` is set (step 3): before genesis the beacon can only
    refund the Credit-Notice through its sender, and past 16 senders or 256
@@ -203,7 +204,9 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    `configure-fair` before the handover; after it the DAO changes both prices
    by proposal (`002-configure.json` and `015-fair-configure.json` with the
    same `EFFECTIVE_AT=`).
-5. **Validators bond and migrate.** Each launch validator receives 100,000 RNG
+5. **Validators bond and migrate, after step 9.** Bonding waits for
+   `dao-handover`: validators bond only once the wallet is renounced (`plan`
+   runs `bond-for` after it). Each launch validator receives 100,000 RNG
    and bonds all of it (4 x stake, the rank cap) in one transfer:
    `bond-for 100000 deploy/anyhonest-validators.json`. At the cap from day
    one, a newcomer must bond as much to outrank them (a quarter of the seats
@@ -212,8 +215,8 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    match the operators). Third parties run
    `node validator/anyhonest-validator.mjs init`, get RNG, then `bond` and
    `run`. The in-node devices need the v3-aware `rng-validator@1.0` (WP5)
-   build first. Check `status` and `test-subscription` before the handover
-   (step 9): there is no deployer soak after it.
+   build first. Check `status` and `test-subscription` once they run (after
+   step 9); a problem then is fixed by DAO proposal only.
    A later allocation for Paralith contracts' RNG is a plain `grant`, not
    part of launch.
 
@@ -247,7 +250,15 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    harmless re-set of `Request-Price`, applied on receipt), `dao-vote <id>
    Yes`. After the 1-day vote the DAO executes it; check the proposal is
    `executed` with no `Not authorised` refusal. Then `verify` (includes
-   "owned by the DAO" and "wallet renounced").
+   "owned by the DAO", "wallet renounced" and "runs the recorded build").
+   `dao-handover` refuses unless every protocol's `govPending` is empty,
+   nothing is approved, `gov.code`/`gov.version` are the build `spawn`
+   recorded, and the DAO is a configured `stake-dao/1` on our token. Then
+   step 5 (bonding). From now on run `dao-watch` at least once a day (cron):
+   it lists every open proposal, flags any Labs has not voted on, and every
+   pending action; it exits 1 when one needs a look. Labs votes on every
+   proposal while its stake decides (docs/PERMISSIONLESS.md "Who governs the
+   DAO").
 
 **Fast tier (step 8b, before the handover).** On-demand 2-of-3 threshold BLS on
 the existing committee; no heartbeat, rounds open only for paid requests.
@@ -274,7 +285,20 @@ with the exit hatch open meanwhile).
 **Verify after every step:** `node deploy/deploy.mjs status` (or `verify`,
 which exits 1 on any failed check: sealed token, DAO on RNG with no admin,
 beacon token/self/predecessor, health `ok`, reserve funded, owners (`gov`), fair
-bound, one scheduler). Validators: `anyhonest-validator.mjs status`.
+bound, one scheduler, and each protocol runs the recorded build:
+`gov.code`/`gov.version` equal `state.expectedCode`). After the DAO installs
+an upgrade, record it: `expect-code <beacon|fair|fast> <root> <version>`.
+Validators: `anyhonest-validator.mjs status`.
+
+**Cold restore (a rebuilt VM).** `GovState` comes back from the published
+info key, but installed code lived in the old heap: a rebuilt VM runs the
+**spawn module**. Its root comes back *approved* (`gov.approved = <root>`,
+`gov.code = ""`), and `verify` fails "runs the recorded build" with "a cold
+restore: resend the installed code". Recovery: resend the exact installed
+bytes (`Gov.Upgrade`, one message or the manifest and its parts; anyone may,
+paralith-mono `backend/native/gov-upgrade.mjs`). Until then the process runs
+the spawn code over the restored state. Keep every installed bundle (and its
+root) with the deployment state for this.
 
 **Rollback**
 - Before `dao-handover`: `gov Gov.Pause` stops the v3 heartbeat and new
@@ -284,7 +308,8 @@ bound, one scheduler). Validators: `anyhonest-validator.mjs status`.
 - After it: only the DAO. It pauses by proposal (`dao-propose
   deploy/proposals/009-pause.json`, 1-day vote, on receipt; the fast tier takes
   the same proposal with `execProcess` `$FAST`). The fix is a new beacon voted
-  in with `003-set-successor.json`, or new code (`010-approve-code.json`):
-  each one vote + 24 h, then `gov-apply`. There is no faster path.
+  in with `003-set-successor.json` (one vote + 7 days: it names where the
+  reserve may go), or new code (`010-approve-code.json`, one vote + 24 h),
+  then `gov-apply`. There is no faster path.
   Validators can `Pause`/`Exit` at any time and `Exit-Now` while a money/code
   action waits; governance can never take a bond.

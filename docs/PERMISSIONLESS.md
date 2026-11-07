@@ -41,7 +41,16 @@ transfers. In the same deploy step (`deploy.mjs dao-handover`, part of
 `plan`) it sends `Gov.Set-Dao` and then `Gov.Renounce-Wallet` to the beacon,
 fair play and the fast tier, and reads back that each one publishes
 `gov.dao = <RNG DAO>` and `gov.wallet = false`. After that the wallet has no
-powers. The RNG DAO is the only owner.
+powers. The RNG DAO is the only owner. The launch validators bond only after
+this step.
+
+Nothing the wallet set going outlives it. `Gov.Renounce-Wallet` is refused
+while `govPending` is not empty (a queued action, or a DAO code approval:
+apply or cancel it first), and it clears the wallet's own code approval, so
+no wallet-era root can install later. `dao-handover` also refuses unless
+every protocol's `govPending` is empty, nothing is approved, `gov.code` /
+`gov.version` are the build recorded at spawn, and the DAO publishes
+`daoinfo` as `stake-dao/1` on our token with no admin.
 
 ### Who governs the DAO
 
@@ -51,6 +60,19 @@ so Labs decides votes for as long as no coalition stakes more. The rest of
 Labs' allocation stays liquid. The plan is to sell it to the public over time
 or move it into the reserve or the treasury, so control spreads as RNG is
 sold. Labs can add stake if it needs to.
+
+What that means in numbers. A veto wins when NoWithVeto is above 33.34 % of
+all votes, so against Labs' 50 M voting NoWithVeto an outsider needs about
+100 M of active stake to pass anything. But quorum is 10 % of the stake: if
+Labs does not vote, a proposal needs only that much turnout, about 5.6 M RNG
+(~0.56 % of the supply) at launch, and can pass anything. **Labs must watch
+and vote on every proposal.** `deploy.mjs dao-watch` lists every open
+proposal (flagging any Labs has not voted on) and every pending action on
+the beacon, fair play and the fast tier, and exits 1 when one needs a look:
+run it at least once per voting period (from cron). Quorum stays 10 %:
+raising it would not remove the need to vote (any quorum below Labs' share
+still lets a small turnout pass while Labs is absent) and would make the
+DAO harder to run as stake spreads.
 
 DAO rules (`daoRules`, stake-dao/1): voting period 1 day (86,400,000 ms; a
 vote can raise it but never set it below 1 day), quorum 10 % of the stake,
@@ -64,16 +86,39 @@ proposer.
 Every DAO action may carry `Effective-At` (milliseconds, scheduler time).
 Actions that move money or code must carry one at least 24 hours
 (`Gov.EXIT_FLOOR_MS`, a constant in `vendor/gov.lua`: no vote can lower it)
-after the action arrives. Harmless actions apply on receipt, or wait for a
+after the action arrives; `Gov.Set-Successor` and `Gov.Move-Reserve`, which
+move (or name where to move) the 200 M Foundation reserve, at least 7 days
+(`Gov.RESERVE_FLOOR_MS`). Harmless actions apply on receipt, or wait for a
 later `Effective-At` if they name one.
+
+Every `Gov.*` needs the scheduler's timestamp: one without (or 0) is
+refused `No-Time`, one older than the last `Gov.*` seen `Time-Went-Back`.
+`Exit-Now` without a timestamp is refused too.
 
 | Process | Harmless: on receipt | Money/code: `Effective-At` >= receipt + 24 h |
 |---|---|---|
-| Beacon | `Gov.Configure` of `Request-Price`, `Subscription-Price`, `Subscription-Rounds`, `Abandon-After-Ms`, `Min-Commits`, `Max-Active`, `Max-Validators`, `Catch-Up-Ms`, `Rejoin-Base-Ms`, `Rejoin-Cap-Ms`, `Heartbeat`, `Fair-Window-Ms` (prices <= 1,000,000 RNG); `Gov.Pause`; `Gov.Resume`; `Gov.Cancel` | `Gov.Configure` that changes `Stake`, `Slash`, `Commit-Window-Ms`, `Reveal-Window-Ms`, `Crack-Bounty`, `Max-In-Flight`, `Cadence-Ms`, `Target-Interval-Ms`, `Round-Price` or `T` (or names `H`); `Gov.Set-Successor`; `Gov.Move-Reserve`; `Gov.Treasury-Spend`; `Gov.Fund-Reserve`; `Gov.Remove-Validator`; `Gov.Set-Dao`; `Gov.Approve-Code` |
+| Beacon | `Gov.Configure` of `Request-Price`, `Subscription-Price`, `Subscription-Rounds`, `Abandon-After-Ms`, `Catch-Up-Ms`, `Rejoin-Base-Ms`, `Rejoin-Cap-Ms`, `Heartbeat`, `Fair-Window-Ms` (prices <= 1,000,000 RNG), a higher `Max-Active` or `Max-Validators`, a lower `Min-Commits`; `Gov.Pause`; `Gov.Resume`; `Gov.Cancel` | `Gov.Configure` that changes `Stake`, `Slash`, `Commit-Window-Ms`, `Reveal-Window-Ms`, `Crack-Bounty`, `Max-In-Flight`, `Cadence-Ms`, `Target-Interval-Ms`, `Round-Price` or `T` (or names `H`), lowers `Max-Active` (never below 8) or `Max-Validators`, or raises `Min-Commits`; `Gov.Set-Successor` and `Gov.Move-Reserve` (7 days); `Gov.Treasury-Spend`; `Gov.Fund-Reserve`; `Gov.Remove-Validator`; `Gov.Set-Dao`; `Gov.Approve-Code` |
 | Fast tier | `Gov.Configure` of `Signer-Fee`, `Protocol-Fee` (<= 1,000,000 RNG each), `Abandon-After-Ms`; `Gov.Pause`; `Gov.Resume`; `Gov.Cancel` | `Gov.Configure` naming the committee (`Committee`, `Share-Public-Keys`, `Group-Key`, `Threshold`, `Verification`); `Gov.Claim-Protocol`; `Gov.Set-Dao`; `Gov.Approve-Code` |
 | Fair play | `Fair.Configure` of `Fair-Window-Ms`, `Keep`, `Max-Open`, `Min-Interval-Ms`, `Max-Games`, `Max-Per-Game`; `Gov.Cancel` | `Fair.Configure` that changes `Request-Price`, or names the beacon or token while unset; `Gov.Set-Dao`; `Gov.Approve-Code` |
 
 A value equal to the current one changes nothing and counts as harmless.
+Fewer seats per round concentrate who makes the randomness, so lowering
+`Max-Active` is money and it has a hard floor of 8: a quarter of the seats go
+to the longest-ready incumbents, so at least two are not for sale to the
+biggest bonds.
+
+Prices and fees are harmless because of **pay at deposit**: a prepaid
+balance (beacon requests and subscriptions, the fast tier, a game's fair-play
+balance) is held as batches at the prices in force when it was credited
+(`lib/rng.lua` purses, at most 8 price batches per account; a deposit at a
+ninth price is refunded). A request or session pays the price of the oldest
+batch that covers it, and the validators', signers' and treasury's shares
+come from that price, so a raise binds only later deposits and old credits
+keep their price forever. A remainder smaller than its batch's price stays
+as change, usable when the batch can cover something (a subscription) and
+always withdrawable. `Withdraw` returns the unused balance at face, newest
+batch first. Pay-and-request (one transfer) pays the price in force at that
+moment. An abandoned request comes back at the price it was paid at.
 `Gov.Renounce-Wallet` is the wallet's alone and only ever removes power.
 `Gov.Apply` is anyone's.
 
@@ -87,6 +132,12 @@ proposal, `Gov.Cancel Gov-Id=<id>`. An action not applied within 14 days after
 it was due lapses. `Effective-At` can be at most 90 days ahead, and at most 32
 actions wait at once.
 
+The treasury cap (spends plus reserve funding) is a rolling window: the
+outflows of the last 30 days plus the new one are at most 10 % of (the
+treasury now + those outflows), i.e. of the treasury before them; at most
+64 outflows are remembered (`beaconinfo.treasuryWindow`: `used`, `base`,
+`remaining`, `nextDropAt`).
+
 Code: `Gov.Approve-Code` records the code root and its `Effective-At`. Anyone
 may upload the matching code at once (`Gov.Upgrade`, one message or a
 manifest and parts), but it installs only at or after `Effective-At`. Parts
@@ -96,16 +147,23 @@ days after it was due.
 
 ### The exit hatch
 
-While any passed money/code action is pending (stored and not yet applied,
-cancelled or lapsed), `beaconinfo.hatch` (and `fairinfo.hatch`) is true and:
+From the receipt of a passed money/code action until its `Effective-At`
+plus one hour (`Gov.HATCH_GRACE_MS`), unless it is applied, cancelled or
+refused at `Gov.Apply` first, `beaconinfo.hatch` (and `fairinfo.hatch`) is
+true and:
 
 - A beacon validator may send `Exit-Now`. It is out of every round not yet
-  opened, its whole bond is refunded in the same message, and it is paid
-  nothing for the rounds it still owes. It is never slashed for them: there is
-  no bond left to take, and a missed duty finds no validator. Those rounds run
-  on by the usual rules: its output still counts if it reveals, it can be
-  cracked (the treasury pays the bounty), and a round that cannot finish is
-  abandoned and its requests refunded. Randomness stays any-honest.
+  opened, and its bond is refunded in the same message less one
+  `crackBounty` for each round it still owes (`beaconinfo.exitHolds`). Its
+  seat in those rounds earns nothing, whoever fills it. It is never slashed
+  for them. Those rounds run on by the usual rules: its output still counts
+  if it reveals, it can be cracked (the treasury pays the bounty and the
+  hold repays it), and a round that cannot finish is abandoned and its
+  requests refunded. Its own reveal or an abandon releases that round's
+  hold; once every owed round has settled the rest comes back in one
+  Transfer, and until then the address cannot bond again. So leaving and
+  cracking your own rounds earns nothing, and an honest exit gets the whole
+  bond back once its rounds settle. Randomness stays any-honest.
 - A fast-tier committee member may send `Exit-Now`: it leaves the committee
   and its earnings are paid at once. The fast tier holds no bonds. If fewer
   than `threshold` members remain, rounds are abandoned and refunded.
@@ -115,15 +173,15 @@ cancelled or lapsed), `beaconinfo.hatch` (and `fairinfo.hatch`) is true and:
 
 Only a passed DAO action opens the hatch. Nobody else can: a stranger's or
 another process's `Gov.*` is refused, and a harmless action waiting for a
-later `Effective-At` does not open it. It closes when nothing money/code is
-pending.
+later `Effective-At` does not open it. An action left unapplied does not
+hold it open past its `Effective-At` plus one hour.
 
 ### Treasury cap
 
 Treasury spends and reserve funding together take at most 10 % of the
-treasury per 30-day window (the window opens at the first outflow, on the
-treasury balance then; `beaconinfo.treasuryWindow`). The cap is checked when
-the action is proposed and again when it applies.
+treasury in any rolling 30 days (see "Effective-At" for the exact rule;
+`beaconinfo.treasuryWindow`). The cap is checked when the action is proposed
+and again when it applies.
 
 ### What this does not protect
 
@@ -135,6 +193,27 @@ the action is proposed and again when it applies.
   the 24 h floor plus the exit hatch, not the bounds.
 - Labs' stake decides votes at launch. The floor and the hatch are what a
   validator or payer relies on if they disagree with a vote.
+- A cold restore runs the spawn module, not installed code: resend the
+  installed code (deploy/README.md, "Cold restore"); `verify` flags it.
+
+### Future (v4)
+
+Not built; to ship later as an in-place upgrade (Gov.Approve-Code).
+
+- Validator fee marketplace: each validator sets its own fee; a beacon is a
+  chosen validator set and pays the sum of its members' fees plus the
+  protocol fee; a fee change takes effect only after notice.
+
+Needed changes for v4 (pricing game theory), doc only for now:
+
+1. A validator-set fee marketplace: per-validator fees, a beacon as a chosen
+   set, notice before a fee change, and deposit price locks per set.
+2. Credits locked forever at their purchase price underpay validators after
+   a price rise (stale cheap credits).
+3. The fast-tier committee may refuse rounds made only of cheap old credits;
+   today such a round is abandoned and refunded after 30 minutes.
+4. The reserve-funded heartbeat's economics once fees are set by a market.
+5. Labs' DAO majority and the quorum as stake spreads.
 
 ## Randomness tiers
 

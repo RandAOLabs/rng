@@ -31,13 +31,22 @@ jobs:
           node --check validator/anyhonest-cracker.mjs
       # The Lua suites run inside the AOS wasm module, which lives in the private
       # paralith-mono repo. PARALITH_MONO_TOKEN must be a read-only token for it.
-      - name: Fetch AOS wasm module
+      # The same checkout is PARALITH_MONO: the vendored sha256.lua check and the
+      # spawn-dao dry run (dao.lua and its bundler) run against it instead of skipping.
+      - name: Fetch paralith-mono (AOS wasm, gov/sha256/dao sources)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: CipherPlayLabs/paralith-mono
           token: ${{ secrets.PARALITH_MONO_TOKEN }}
           path: paralith-mono
-          sparse-checkout: backend/native/module
+          sparse-checkout: |
+            backend/native/module/
+            backend/native/battle-fleet/
+            backend/native/*.lua
+            backend/native/*.mjs
+            products/orderbook/contracts/
+            products/yap/contracts/
+            products/bridge/ao/
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Verify AOS wasm module
@@ -46,6 +55,7 @@ jobs:
         env:
           AOS_WASM: ${{ github.workspace }}/paralith-mono/backend/native/module/AOS.wasm
           AO_LOADER: ${{ github.workspace }}/node_modules/@permaweb/ao-loader/dist/index.cjs
+          PARALITH_MONO: ${{ github.workspace }}/paralith-mono
         run: npm run test:protocol && npm run test:node
 
   site:
