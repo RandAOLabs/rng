@@ -177,15 +177,34 @@ function Gov.walletOwner(base)
   return Gov.signerOf(type(p) == "table" and p or nil)
 end
 
+--- Does the message carry ANY push stamp (`from-process`, `From_Scheduler`,
+--- `frombase`, ...; case and `-`/`_` ignored)? A push is signed by the node
+--- that delivers it, so a stamped message is never that node wallet's own
+--- word (HYPERTOKEN_CRITIQUE item 6).
+local function pushed(msg)
+  if type(msg) ~= "table" then return false end
+  for k, v in pairs(msg) do
+    if type(k) == "string" and v ~= nil and v ~= "" then
+      local n = (k:lower():gsub("[-_]", ""))
+      if n ~= "from" and n:sub(1, 4) == "from" then return true end
+    end
+  end
+  return false
+end
+
 --- 'wallet', 'dao' or nil, for a message body.
 function Gov.ownerOf(base, msg)
   if type(msg) ~= "table" then return nil end
   local signer = Gov.signerOf(msg)
   if not signer then return nil end
   local from = msg["from-process"]
-  if from ~= nil and signer == Gov.scheduler(base) then
-    -- A scheduler-attested process delivery: only the DAO is an owner here.
-    if GovState.dao ~= "" and from == GovState.dao then return "dao" end
+  if pushed(msg) then
+    -- A process delivery. Only a scheduler-attested one from the DAO is an
+    -- owner; any other stamped message is nobody -- never the wallet that
+    -- signed it, which is just the node that relayed someone's push.
+    if from ~= nil and signer == Gov.scheduler(base) and GovState.dao ~= "" and from == GovState.dao then
+      return "dao"
+    end
     return nil
   end
   if GovState.wallet and signer == Gov.walletOwner(base) then return "wallet" end

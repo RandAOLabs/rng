@@ -1,3 +1,4 @@
 paralith-mono commit c4d8308
 files: backend/native/{json.lua,jsonenc.lua,hbclient.mjs}, packages/rune-ao/src/lib/slot-settle.mjs (import path adjusted)
 lua53b.lua: paralith-mono commit 4ff6353f, backend/native/lua53b.lua (the lua-patch@1.0 adapter; unchanged)
+gov.lua: paralith-mono branch feat/dao-coowner commit 42172c3b, backend/native/gov.lua (unchanged; a stamped push is nobody unless our scheduler attested it)

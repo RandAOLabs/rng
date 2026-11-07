@@ -181,8 +181,28 @@ local function walletTests()
   r = send(wallet(F.stranger, {
     Action = "Transfer", Recipient = F.recipient, Quantity = "1", ["from-process"] = F.user,
   }))
-  eq("wallet cannot forge a process payer", r.error, "Insufficient balance")
+  eq("wallet cannot forge a process payer", r.error, "Unsigned messages cannot transfer")
   eq("forged transfer leaves user balance", Balances[F.user], 999990)
+
+  -- A push relayed by a foreign node is signed by that node's wallet. If the
+  -- node wallet holds RNG, no process on that node may spend it, whatever the
+  -- stamp is called; the raw reply says nobody signed it.
+  local nodeWallet = F.user
+  local walletBefore, recipientBefore = Balances[nodeWallet], Balances[F.recipient]
+  for _, stamp in ipairs({ "from-process", "From_Process", "FromScheduler", "frombase" }) do
+    send(wallet(nodeWallet, { Action = "Transfer", Recipient = F.recipient, Quantity = "3", [stamp] = F.stranger }))
+    local raw = base.results and base.results.output and base.results.output.data
+    check("a " .. stamp .. " push signed by a holder's wallet is nobody (raw reply)",
+      type(raw) == "string" and raw:find('"error":"Unsigned messages cannot transfer"', 1, true) ~= nil, raw)
+  end
+  eq("relayed pushes leave the node wallet's balance", Balances[nodeWallet], walletBefore)
+  eq("relayed pushes credit nobody", Balances[F.recipient], recipientBefore)
+  -- The same wallet unstamped is itself.
+  send(wallet(nodeWallet, { Action = "Transfer", Recipient = F.recipient, Quantity = "3" }))
+  local raw = base.results.output.data
+  check("the unstamped wallet message transfers (raw reply)", raw:find('"Action":"Transfer-Success"', 1, true) ~= nil, raw)
+  send(wallet(F.recipient, { Action = "Transfer", Recipient = nodeWallet, Quantity = "3" }))
+  eq("balance restored", Balances[nodeWallet], walletBefore)
 
   r = send({ Action = "Transfer", Recipient = F.recipient, Quantity = "1", ["from-process"] = F.user })
   eq("unsigned transfer refused", r.error, "Unsigned messages cannot transfer")

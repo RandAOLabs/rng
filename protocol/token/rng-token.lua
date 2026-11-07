@@ -117,23 +117,6 @@ local function schedulerAddress(base)
   return nil
 end
 
---- A process can spend only its own account.
----
---- A signature from OUR OWN scheduler means "this is a delivery" and the
---- attested `from-process` is the actor. Any other signature is an ordinary
---- wallet message and wins outright, which keeps a forged `from-process` tag
---- inert.
-local function actor(msg, base)
-  local signed = provenSigner(msg)
-  local fromProcess = msg["from-process"] or msg.FromProcess
-  if signed then
-    local scheduler = schedulerAddress(base)
-    if fromProcess and scheduler and signed == scheduler then return fromProcess end
-    return signed
-  end
-  return nil
-end
-
 --- The attested process behind a scheduler-signed delivery, or nil for a
 --- wallet message. Same rule as rune.lua's `processSource`.
 local function processSource(msg, base)
@@ -141,6 +124,33 @@ local function processSource(msg, base)
   if type(source) ~= "string" or #source ~= 43 then return nil end
   local signed = provenSigner(msg)
   return signed ~= nil and signed == schedulerAddress(base) and source or nil
+end
+
+--- Does the message carry ANY origin stamp (`from-process`, `From_Scheduler`,
+--- `frombase`, ...; case and `-`/`_` folded, CLAUDE.md)? A push is signed by
+--- the node that delivers it, so a stamped message is never that node
+--- wallet's own word. Same rule as rune.lua's `hasOriginStamp`.
+local function hasOriginStamp(msg)
+  for key in pairs(msg) do
+    if type(key) == "string" then
+      local name = key:lower():gsub("[-_]", "")
+      if #name > 4 and name:sub(1, 4) == "from" then return true end
+    end
+  end
+  return false
+end
+
+--- A process can spend only its own account.
+---
+--- A delivery our own scheduler attested acts as its `from-process`. Any
+--- other stamped message is NOBODY: never the wallet that signed it, which is
+--- only the node that relayed someone's push (HYPERTOKEN_CRITIQUE item 6). An
+--- unstamped message acts as its signer. Same rule as rune.lua's `actor`.
+local function actor(msg, base)
+  local source = processSource(msg, base)
+  if source then return source end
+  if hasOriginStamp(msg) then return nil end
+  return provenSigner(msg)
 end
 
 --- A wallet or process address: exactly 43 base64url characters. Every holder
