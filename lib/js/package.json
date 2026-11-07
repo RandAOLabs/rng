@@ -1,0 +1,15 @@
+{
+  "name": "@randao/rng",
+  "version": "0.1.0",
+  "description": "RandAO RNG browser/Node client: fair play, pay-and-request, history lookups, derivation. No dependencies.",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "exports": {
+    ".": "./index.ts",
+    "./fair-client": "./fair-client.ts",
+    "./history": "./history.ts",
+    "./derive": "./derive.ts"
+  },
+  "files": ["*.ts"]
+}

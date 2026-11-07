@@ -3,12 +3,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto, { createHash } from 'node:crypto';
-import * as fair from '../lib/fair-client.ts';
-import * as history from '../lib/history.ts';
+import * as fair from '../../lib/js/fair-client.ts';
+import * as history from '../../lib/js/history.ts';
 import { beaconHealth } from '../components/health-banner.tsx';
 import { estimateEarnings } from '../components/validator-guide.tsx';
 import { describeAction, queueView, tally, tokens } from '../app/api/dao/model.ts';
-import { signDataItem as vendorSign } from '../../vendor/ans104.mjs';
+import { signDataItem as vendorSign } from '../../validator/vendor/ans104.mjs';
 
 // The runner's hashes (test/run-fair-tests.mjs), computed with node:crypto.
 const sha = (s) => createHash('sha256').update(s, 'latin1').digest('hex');

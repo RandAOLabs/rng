@@ -1,105 +1,64 @@
-# HyperBEAM RNG
+# RandAO RNG
 
-Verifiable randomness for AO, created and operated by **RNG Labs**, a product
-of **CipherPlay Inc.**
+Verifiable randomness for AO processes on HyperBEAM, created and operated by
+**RNG Labs**, a product of **CipherPlay Inc.** Live console:
+[randao.net](https://randao.net).
 
-## Protocol
+HyperBEAM sandboxes `math.random` (and `os.time`) because a seeded or
+clock-based draw forks state between nodes and replays. `rng.install(msg)`
+brings it back as a deterministic stream, and `rng.request` upgrades the same
+code to verifiable randomness when value is at stake. The node's `~rng@1.0`
+device verifies BLS signatures, time-lock reveals and cracks, and byte
+derivation.
 
-HyperBEAM RNG is a multi-surface randomness primitive for AO processes. It
-provides deterministic local streams, request-bound threshold BLS, and a
-continuous Any-Honest time-lock beacon. HyperBEAM's preloaded `~rng@1.0`
-device verifies BLS signatures, time-lock reveals and cracks, and deterministic
-byte derivation.
+## Tiers
 
-The threshold protocol is in [`v2/SPEC.md`](./v2/SPEC.md); the time-lock beacon,
-economics, subscriptions, validators, governance and fair play are in
-[`v2/ANY_HONEST.md`](./v2/ANY_HONEST.md).
+| Tier | Process | Safe unless | Price |
+|---|---|---|---|
+| Local | `lib/rng.lua` | always predictable to the sender | free |
+| Fast | `protocol/beacon/beacon.lua` (on-demand 2-of-3 threshold BLS) | 2 of 3 committee operators collude | 3 RNG |
+| Any-Honest | `protocol/beacon/anyhonest.lua` (time-lock commit/reveal) | every validator colludes | 4 RNG |
 
-Any-Honest v3 (branch `permissionless`, not yet deployed) is permissionless
-(anyone bonds and validates), governed by the RNG DAO, paid in a fixed-supply
-RNG token, and offers fair play. Design: [`v2/docs/PERMISSIONLESS.md`](./v2/docs/PERMISSIONLESS.md);
-launch runbook: [`v2/deploy/README.md`](./v2/deploy/README.md).
-
-## Components
-
-- `v2/lib/rng.lua`: deterministic local and beacon-backed Lua API;
-- `v2/beacon/beacon.lua`: prepaid, round-locked threshold beacon process;
-- `v2/beacon/anyhonest.lua`: Any-Honest beacon v3, permissionless and DAO-governed (2 rounds/s target);
-- `v2/fair/fair.lua`, `v2/lib/fair.lua`: fair play (player commit/reveal over a beacon value);
-- `v2/provider/`: 2-of-3 BLS committee daemon, joint Feldman DKG, the JS
-  Any-Honest validator and the cracker;
-- `v2/governance/proposals/`: RNG DAO proposal templates (Exec-Tags for `Gov.*`);
-- `v2/token/rng-token.lua`: fixed-supply RNG token (genesis allocation, sealed, `sequenced-v1`);
-- `v2/deploy/`: HyperBEAM testnet and provider operations;
-- `v2/console/`: live console, documentation, deterministic demo, and MCP
-  server; and
-- `v2/test/`: RNG, token, beacon, fair play, validator, DKG, BLS, and deploy coverage.
-
-## Use it
-
-Local deterministic randomness is free and needs no wallet or token:
+Fair play (`lib/fair.lua`, `protocol/fair/fair.lua`) adds the player's own
+committed secret on top of a beacon value. Product surfaces:
+[docs/PRODUCT.md](docs/PRODUCT.md).
 
 ```lua
 local rng = require("rng")
-
-rng.on("Loot-Roll", function(stream, ctx)
-  grantLoot(ctx.player, stream:int(1, 6))
-end)
-
-rng.request(msg, { on = "Loot-Roll", ctx = { player = msg.From } })
+rng.on("Loot-Roll", function(stream, ctx) grantLoot(ctx.player, stream:int(1, 6)) end)
+rng.request(msg, { on = "Loot-Roll", ctx = { player = msg.From } })            -- local
+rng.request(msg, { tier = "beacon", on = "Loot-Roll", ctx = { player = msg.From } }) -- fast
 ```
 
-For value-bearing actions, configure the beacon and request the `beacon` tier.
-The threshold testnet charges 3 TEST-RNG per request: one unit for each of two
-serving committee members and one protocol unit. An Any-Honest v3 request costs
-4 RNG and takes one message (a Transfer with `X-Request-Id`). v3 RNG has no
-faucet. Applications should prepay their process balance so end users do not
-need to manage RNG.
+## Repo map
 
-The live [RNG Labs Console](https://randao.net) shows the current committee,
-price, verification mode, and an independently verified round. It also offers
-a five-surface [`/try`](https://randao.net/try) console for local derivation,
-threshold requests, the continuous Any-Honest beacon, one-shot Any-Honest
-requests, and proof exploration. Live proofs and funding state are shown
-directly from the native testnet.
+| Path | What |
+|---|---|
+| `lib/` | consumer libraries: `rng.lua`, `fair.lua`; `lib/js/` is the JS client (`@randao/rng`: fair play, pay-and-request, history, derive) |
+| `protocol/` | AO processes (beacons, token, fair), their Lua vendor deps and Lua suites; `protocol/device/` holds the device notes |
+| `validator/` | fast-tier committee daemon, Any-Honest validator and cracker, Dockerfiles |
+| `site/` | randao.net console (vinext on workerd), its deploy config and tests |
+| `deploy/` | `deploy.mjs`, launch runbook, configs, snapshots, DAO proposal templates |
+| `docs/` | [SPEC](docs/SPEC.md) (threshold BLS), [ANY_HONEST](docs/ANY_HONEST.md), [PERMISSIONLESS](docs/PERMISSIONLESS.md) (v3 design), paper, soak |
 
-## Agent tools
-
-The console exposes an MCP 2026-07-28 endpoint at
-`https://randao.net/mcp` with these tools:
-
-- `rng_status`
-- `rng_verify_round`
-- `rng_anyhonest_status`
-- `rng_governance_status`
-- `rng_derive`
-- `rng_integration_guide`
-- `rng_request_plan`
-
-The initial agent surface is read-only except for pure deterministic
-derivation. It never accepts or stores wallet keys.
-
-## Development
+## Test
 
 ```bash
-cd v2
-npm ci
-npm test
+npm ci && (cd site && npm ci)
+npm test          # protocol Lua suites, validator + deploy node tests, site tests
 ```
 
-Live deployment commands require `HB_NODE`, `HB_WALLET`, and `SSH_KEY`; no
-production endpoint or credential is embedded in the source.
+The Lua suites run in the AOS wasm module from paralith-mono
+(`PARALITH_ROOT`, or `AOS_WASM` and `AO_LOADER`). Site checks:
+`cd site && npx tsc --noEmit && npm run lint && npm run build`.
 
-## Security model
+## Deploy
 
-- A request set locks before its first partial signature is published.
-- Any threshold of valid BLS shares produces the unique round signature.
-- Production mode verifies partials and the group signature through
-  HyperBEAM's `~rng@1.0` device.
-- The current testnet can use a weaker threshold wallet-attestation fallback.
-- Committee censorship and threshold compromise remain explicit trust risks.
-
-See [`v2/SPEC.md`](./v2/SPEC.md) for the complete guarantees and non-guarantees.
+`node deploy/deploy.mjs plan --dry-run` prints every spawn and message; the
+runbook is [deploy/README.md](deploy/README.md). Live commands need `HB_NODE`,
+`HB_WALLET` and `SSH_KEY`; no endpoint or credential is in the source. Images
+build from the repo root: `docker build -f validator/Dockerfile.anyhonest .`,
+`docker build -f site/Dockerfile .`.
 
 ## Ownership and licensing
 

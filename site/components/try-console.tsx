@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useLivePoll } from "../hooks/use-live-poll";
-import { findRequest, payAndRequestTags, type RequestRecord } from "../lib/fair-client";
+import { findRequest, payAndRequestTags, type RequestRecord } from "../../lib/js/fair-client";
 import { connectWallet, hasWallet, sendMessage } from "../lib/wallet";
 import { SiteFooter, SiteHeader } from "./site-header";
 

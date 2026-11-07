@@ -18,7 +18,7 @@
 // and the session is shown as a forfeit once its reveal window passes.
 
 import { useEffect, useRef, useState } from "react";
-import { FairClient, FairError, fairExpireTags, nextStep, verifySession, type FairSession, type SavedSession } from "../../lib/fair-client";
+import { FairClient, FairError, fairExpireTags, nextStep, verifySession, type FairSession, type SavedSession } from "../../../lib/js/fair-client";
 
 type Row = { session: FairSession; mine: boolean; local: SavedSession | null; step: string; check?: string };
 

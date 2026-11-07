@@ -8,10 +8,10 @@
 // to the fair process with a throwaway RSA key (kept in IndexedDB, D13),
 // waits until its session is
 // `reveal-due` (the beacon value is bound) and only then reveals s. The hashes
-// below must match lib/fair.lua byte for byte (vectors: test/run-fair-tests.mjs).
+// below must match lib/fair.lua byte for byte (vectors: protocol/test/run-fair-tests.mjs).
 //
 // No imports and only erasable TypeScript, so Node runs this file directly
-// (tests/console.test.mjs, examples/fair-demo/play.mjs).
+// (site/tests/console.test.mjs).
 
 const encoder = new TextEncoder();
 

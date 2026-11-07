@@ -1,5 +1,5 @@
 // history.ts: read a process's past from its per-slot results (deploy/README.md,
-// "History"); the console's port of provider/history.mjs.
+// "History"); the browser port of validator/history.mjs.
 //
 // The processes keep only a bounded recent window in state. Anything older is
 // readable at the slot that produced it (<pid>~process@1.0/compute&slot=<n>/<key>):
