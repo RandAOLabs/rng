@@ -103,6 +103,11 @@ local function freshState()
     rounds = {},          -- "r" -> { signature, value, signers }, the last ROUND_HISTORY
     history = {},         -- { round, slot[, "abandoned"] }, oldest first; published as `beaconhistory`
     balances = {},        -- address -> RNG
+    -- Pay at deposit: address -> purse (lib/rng.lua) of batches { n, price,
+    -- protocol }, the price and protocolFee in force when each was credited.
+    -- A request pays (and pays out) its batch's price; a fee or committee
+    -- change binds only later deposits.
+    purses = {},
     accrued = {},         -- signer address -> RNG earned, unclaimed
     protocolAccrued = 0,
     pending = {},         -- "r" -> list of { requester, requestId, charged, protocol, process }
@@ -352,6 +357,25 @@ local function transferOut(to, rngAmount, note) return transferAtoms(to, rngAmou
 
 local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
 
+--- Marks pay-and-request's own Request-Random (a key no tag can be).
+local PAY_NOW = {}
+local function nowPrices() return { price = price(), protocol = int(Beacon.protocolFee, 1) } end
+
+--- `addr`'s purse, matched to its balance (one from before purses joins at today's prices).
+local function purseOf(addr)
+  Beacon.purses = type(Beacon.purses) == "table" and Beacon.purses or {}
+  local p = rng.purseMatch(Beacon.purses[addr] or {}, int(Beacon.balances[addr], 0), nowPrices())
+  Beacon.purses[addr] = p
+  return p
+end
+
+--- Credit `n` RNG at `prices` (default: now); false when the purse is full.
+local function creditBalance(addr, n, prices)
+  if not rng.purseAdd(purseOf(addr), n, prices or nowPrices()) then return false end
+  add(Beacon.balances, addr, n)
+  return true
+end
+
 --- Requests that will never get a value: refunded exactly what each was
 --- charged (to its balance; Withdraw pays it out through the token's
 --- sequenced-v1 stream), processes told. Signers are paid nothing for it.
@@ -359,7 +383,10 @@ local function refundPending(r)
   local key = tostring(r)
   local list = Beacon.pending[key] or {}
   for i, p in ipairs(list) do
-    add(Beacon.balances, p.requester, int(p.charged, 0))
+    -- Back at the prices it was paid at (a full purse: back to the wallet).
+    if not creditBalance(p.requester, int(p.charged, 0), { price = int(p.charged, 0), protocol = int(p.protocol, 0) }) then
+      Notices["rng-refund-" .. key .. "-" .. i] = transferOut(p.requester, int(p.charged, 0), "RNG request refund")
+    end
     if p.process then
       Notices["rng-abandoned-" .. key .. "-" .. i] = { target = p.requester, Action = "RNG-Error",
         Data = encode({ error = "Round-Abandoned", requestId = p.requestId, round = r }) }
@@ -493,10 +520,11 @@ H["Request-Random"] = function(base, msg, from, now)
   -- scheduler; the same id in a new message within GUARD_MS is a duplicate.
   if not configured() then return fail(base, "Not-Configured", from, ctx) end
   if Beacon.paused then return fail(base, "Paused", from, ctx) end
-  local cost = price()
+  -- Paid at the price of the batch it comes from (pay at deposit).
   local bal = int(Beacon.balances[from], 0)
-  if bal < cost then
-    return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost })
+  local paid, cost = rng.purseTake(purseOf(from), function(b) return b.price end, msg[PAY_NOW] == true)
+  if not paid then
+    return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = price() })
   end
   Beacon.balances[from] = bal - cost
   -- The first partial closes a round before its value becomes knowable. Any
@@ -510,7 +538,7 @@ H["Request-Random"] = function(base, msg, from, now)
   local keyRound = tostring(r)
   local list = Beacon.pending[keyRound] or {}
   list[#list + 1] = { requester = from, requestId = requestId, charged = cost,
-    protocol = int(Beacon.protocolFee, 1), process = FromProcess or nil, at = now }
+    protocol = paid.protocol, process = FromProcess or nil, at = now }
   Beacon.pending[keyRound] = list
   Beacon.pendingCount = int(Beacon.pendingCount, 0) + 1
   return reply(base, { requestId = requestId, round = r, price = cost, balance = Beacon.balances[from] })
@@ -572,15 +600,23 @@ H["Credit-Notice"] = function(base, msg, from, now)
     -- round is in `seen`, its value derives from the round record.
     -- The token reference already makes this notice count once.
     if not isAoAddress(sender) then return fail(base, "Bad-Sender") end
-    add(Beacon.balances, sender, amount)
+    if not creditBalance(sender, amount) then
+      return reply(base, { error = "Too-Many-Price-Batches" }, { ["rng-refund"] = transferAtoms(sender, atoms, "RNG credit refund") })
+    end
     FromProcess = false
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"] }, sender, now)
+    -- It pays the price in force now: from the batch just credited.
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"], [PAY_NOW] = true },
+      sender, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, sender, int(Beacon.balances[sender], 0)
     return reply(base, out, withDust(res.results.outbox or {}))
   end
-  add(Beacon.balances, who, amount)
+  if not creditBalance(who, amount) then
+    local outbox = {}
+    if isAoAddress(sender) then outbox["rng-refund"] = transferAtoms(sender, atoms, "RNG credit refund") end
+    return reply(base, { error = "Too-Many-Price-Batches" }, outbox)
+  end
   return reply(base, { credited = amount, account = who, balance = Beacon.balances[who] }, withDust({}))
 end
 
@@ -593,6 +629,7 @@ H["Withdraw"] = function(base, msg, from)
     if not amount then return fail(base, "Bad-Quantity", from) end
   end
   if amount <= 0 or amount > bal then return fail(base, "Insufficient-Balance", from) end
+  rng.purseWithdraw(purseOf(from), amount)
   Beacon.balances[from] = bal - amount
   return reply(base, { withdrawn = amount }, { ["rng-withdraw"] = transferOut(from, amount, "RNG balance withdrawal") })
 end

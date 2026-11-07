@@ -109,6 +109,11 @@ local function freshState()
     pending = {},          -- "r" -> list of { requester, requestId, charged }
     rounds = {},           -- "r" -> finalized record
     balances = {}, accrued = {}, accruedAtoms = {}, protocolAccrued = 0,
+    -- Pay at deposit: address -> purse (lib/rng.lua), its balance as batches
+    -- { n, price, sub } at the requestPrice / subscriptionPrice in force when
+    -- each was credited. A request pays its batch's price, so a price change
+    -- binds only later deposits; a balance's sum is `balances`.
+    purses = {},
     foundationReserveAtoms = 0, treasuryAtoms = 0,
     subscriptions = {},
     -- address -> { rounds = { "r" -> RNG held }, release = RNG }: what Exit-Now
@@ -436,6 +441,31 @@ end
 
 local function add(map, key, n) map[key] = int(map[key], 0) + n end
 
+--- Marks pay-and-request's own Request-Random (a key no tag can be).
+local PAY_NOW = {}
+
+--- The prices a deposit made now buys at.
+local function nowPrices()
+  return { price = int(Timelock.params.requestPrice, 4), sub = int(Timelock.params.subscriptionPrice, 1) }
+end
+
+--- `addr`'s purse, matched to its balance (a balance from before purses
+--- joins at today's prices).
+local function purseOf(addr)
+  Timelock.purses = type(Timelock.purses) == "table" and Timelock.purses or {}
+  local p = rng.purseMatch(Timelock.purses[addr] or {}, int(Timelock.balances[addr], 0), nowPrices())
+  Timelock.purses[addr] = p
+  return p
+end
+
+--- Credit `n` RNG to `addr` at `prices` (default: now). False, and nothing
+--- credited, when its purse already holds PURSE_MAX batches at other prices.
+local function creditBalance(addr, n, prices)
+  if not rng.purseAdd(purseOf(addr), n, prices or nowPrices()) then return false end
+  add(Timelock.balances, addr, n)
+  return true
+end
+
 --- Every Transfer carries the next X-Transfer-Sequence (the token's
 --- sequenced-v1 stream for process senders); the counter never goes back.
 local function transferAtoms(to, atoms, note)
@@ -719,7 +749,11 @@ local function refundPending(r, now)
   local key = tostring(r)
   local refunded = {}
   for i, p in ipairs(Timelock.pending[key] or {}) do
-    add(Timelock.balances, p.requester, int(p.charged, 0))
+    -- Back at the prices it was paid at (a full purse: back to the wallet).
+    if not creditBalance(p.requester, int(p.charged, 0),
+        { price = int(p.price, int(p.charged, 0)), sub = int(p.sub, nowPrices().sub) }) then
+      Notices["rng-refund-" .. key .. "-" .. i] = transferOut(p.requester, int(p.charged, 0), "RNG request refund")
+    end
     refunded[#refunded + 1] = { requester = p.requester, requestId = p.requestId, charged = int(p.charged, 0) }
     if p.process then
       Notices["rng-abandoned-" .. key .. "-" .. i] = { target = p.requester, Action = "RNG-Error",
@@ -1036,15 +1070,22 @@ H["Credit-Notice"] = function(base, msg, from, now)
     -- The token reference already makes this notice count once.
     local payer = msg.Sender
     if not isAoAddress(payer) then return fail(base, "Bad-Sender") end
-    add(Timelock.balances, payer, amount)
+    if not creditBalance(payer, amount) then
+      return reply(base, { error = "Too-Many-Price-Batches" }, { ["rng-refund"] = transferAtoms(payer, atoms, "RNG credit refund") })
+    end
     FromProcess = false -- the payer may be a wallet: its value is in the round record
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"] }, payer, now)
+    -- It pays the price in force now: from the batch just credited.
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], [PAY_NOW] = true }, payer, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, payer, int(Timelock.balances[payer], 0)
     return reply(base, out, withDust(res.results.outbox or {}))
   end
-  add(Timelock.balances, who, amount)
+  if not creditBalance(who, amount) then
+    local outbox = {}
+    if isAoAddress(msg.Sender) then outbox["rng-refund"] = transferAtoms(msg.Sender, atoms, "RNG credit refund") end
+    return reply(base, { error = "Too-Many-Price-Batches" }, outbox)
+  end
   -- No RNG-Funded notice: `who` may be a wallet (replies go only to
   -- processes), and the balance is in the published state.
   return reply(base, { credited = amount, account = who, balance = Timelock.balances[who] }, withDust({}))
@@ -1059,6 +1100,7 @@ H["Withdraw"] = function(base, msg, from)
     if not amount then return fail(base, "Bad-Quantity", from) end
   end
   if amount <= 0 or amount > bal then return fail(base, "Insufficient-Balance", from) end
+  rng.purseWithdraw(purseOf(from), amount)
   Timelock.balances[from] = bal - amount
   return reply(base, { withdrawn = amount }, { ["rng-withdraw"] = transferOut(from, amount, "RNG balance withdrawal") })
 end
@@ -1079,9 +1121,10 @@ H["Request-Random"] = function(base, msg, from, now)
   if Timelock.params.h == "" then return fail(base, "Not-Configured", from, ctx) end
   if Timelock.paused then return fail(base, "Paused", from, ctx) end
   if #activeValidators() < int(Timelock.params.minCommits, 2) then return fail(base, "Too-Few-Validators", from, ctx) end
-  local cost = price()
+  -- Paid at the price of the batch it comes from (pay at deposit).
   local bal = int(Timelock.balances[from], 0)
-  if bal < cost then return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = cost }) end
+  local paid, cost = rng.purseTake(purseOf(from), function(b) return b.price end, msg[PAY_NOW] == true)
+  if not paid then return fail(base, "Insufficient-Balance", from, { requestId = requestId, balance = bal, price = price() }) end
   -- Bind to the round taking commits: no output is revealed before its
   -- commits close, so nobody can know its value yet.
   local r = current().round
@@ -1089,7 +1132,7 @@ H["Request-Random"] = function(base, msg, from, now)
   setSeen(tostring((now + GUARD_MS) // SEEN_BUCKET_MS), key, r)
   GuardsChanged = true
   local list = Timelock.pending[tostring(r)] or {}
-  list[#list + 1] = { requester = from, requestId = requestId, charged = cost, process = FromProcess or nil, at = now }
+  list[#list + 1] = { requester = from, requestId = requestId, charged = cost, sub = paid.sub, process = FromProcess or nil, at = now }
   Timelock.pending[tostring(r)] = list
   return reply(base, { requestId = requestId, round = r, price = cost, balance = Timelock.balances[from] })
 end
@@ -1115,10 +1158,10 @@ H["Subscribe"] = function(base, msg, from, now)
   local rounds = int(msg.Rounds, batchRounds)
   if rounds < 1 or rounds > 31536000 then return fail(base, "Bad-Rounds", from) end
   local batches = (rounds + batchRounds - 1) // batchRounds
-  local cost = batches * int(Timelock.params.subscriptionPrice, 1)
   local balance = int(Timelock.balances[from], 0)
-  if balance < cost then return fail(base, "Insufficient-Balance", from,
-    { subscriptionId = id, balance = balance, price = cost }) end
+  local paid, cost = rng.purseTake(purseOf(from), function(b) return batches * b.sub end)
+  if not paid then return fail(base, "Insufficient-Balance", from,
+    { subscriptionId = id, balance = balance, price = batches * int(Timelock.params.subscriptionPrice, 1) }) end
   local effectiveRound = current().round
   Timelock.balances[from] = balance - cost
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) + cost * int(Timelock.unit, 1)

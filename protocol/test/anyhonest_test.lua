@@ -1432,6 +1432,52 @@ function runTimelockTests()
   r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "nt-1" }))
   check("the same id in a new message within the window is a duplicate", r.duplicate == true
     and Timelock.balances[F.game] == charged, r.error)
+  -- Pay at deposit: a balance buys at the prices in force when it was
+  -- credited; a price change binds only later deposits.
+  local Q = string.rep("q", 43)
+  local function fundQ(rngAmt, ref) return send(delivery(F.token, { Action = "Credit-Notice", Sender = Q,
+    Quantity = tostring(rngAmt * U), Reference = ref })) end
+  local function reqQ(id) return send(wallet(Q, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = id })) end
+  fundQ(8, "t970")
+  r = dao({ Action = "Gov.Configure", ["Request-Price"] = "6" })
+  check("a price change is harmless: on receipt", r.ok == true and Timelock.params.requestPrice == 6, encode(r))
+  r = reqQ("q-1")
+  check("raise: credits bought before it still pay the old price", r.price == 4 and Timelock.balances[Q] == 4, encode(r))
+  fundQ(12, "t971")
+  check("a deposit after it buys at the new price: a second batch", #Timelock.purses[Q] == 2
+    and Timelock.purses[Q][2].price == 6, encode(Timelock.purses[Q]))
+  r = reqQ("q-2")
+  eq("the oldest batch pays first, at its price", r.price, 4)
+  r = reqQ("q-3")
+  check("then the newer one, at its price", r.price == 6 and Timelock.balances[Q] == 6, encode(r))
+  r = send(delivery(F.token, { Action = "Credit-Notice", Sender = Q, Quantity = tostring(6 * U),
+    ["X-Request-Id"] = "q-pay", Reference = "t972" }))
+  check("pay-and-request pays the price in force now", r.price == 6 and r.round ~= nil, encode(r))
+  dao({ Action = "Gov.Configure", ["Request-Price"] = "2" })
+  r = reqQ("q-4")
+  check("lower: credits bought at 6 still pay 6", r.price == 6 and Timelock.balances[Q] == 0, encode(r))
+  fundQ(3, "t973")
+  r, ob = send(wallet(Q, { Action = "Withdraw" }))
+  seqOf(ob)
+  check("withdraw returns the unused balance at face", r.withdrawn == 3 and #Timelock.purses[Q] == 0, encode(r))
+  -- Attack: no drain. Credits never pay less than they were bought at, and
+  -- every RNG charged is what the payer's batch held.
+  for i = 1, 8 do
+    dao({ Action = "Gov.Configure", ["Request-Price"] = tostring(10 + i) })
+    fundQ(10 + i, "t" .. (973 + i))
+  end
+  dao({ Action = "Gov.Configure", ["Request-Price"] = "19" })
+  r, ob = fundQ(50, "t990")
+  check("at most 8 price batches: a deposit at a ninth price goes back", r.error == "Too-Many-Price-Batches"
+    and ob["rng-refund"] and ob["rng-refund"].Quantity == string.format("%d", 50 * U) and Timelock.balances[Q] == 116, encode(r))
+  seqOf(ob)
+  local sum = 0
+  for _, b in ipairs(Timelock.purses[Q]) do sum = sum + b.n end
+  eq("the purse always sums to the balance", sum, Timelock.balances[Q])
+  r, ob = send(wallet(Q, { Action = "Withdraw" }))
+  seqOf(ob)
+  dao({ Action = "Gov.Configure", ["Request-Price"] = "4" })
+
   local maxSeen, accepted = 0, 0
   for i = 1, 100 do
     r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "g-" .. i }), 30000)

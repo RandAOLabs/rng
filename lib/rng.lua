@@ -328,4 +328,72 @@ function rng.history(list, entry, keep)
   return list
 end
 
+--- Purses: pay at deposit. A prepaid balance is held as a list, oldest
+--- first, of batches { n = amount, <price fields> }: what was credited and
+--- the prices in force when it was. A request pays the price of the batch it
+--- is paid from, so a price change binds only later deposits. A deposit at
+--- prices a batch already has joins it; at most PURSE_MAX batches.
+rng.PURSE_MAX = 8
+
+local function samePrices(b, prices)
+  for k, v in pairs(prices) do if b[k] ~= v then return false end end
+  return true
+end
+
+--- Add `n` at `prices`. False (nothing added) when the purse already holds
+--- PURSE_MAX batches at other prices.
+function rng.purseAdd(purse, n, prices)
+  if n <= 0 then return true end
+  for _, b in ipairs(purse) do
+    if samePrices(b, prices) then b.n = b.n + n; return true end
+  end
+  if #purse >= rng.PURSE_MAX then return false end
+  local b = { n = n }
+  for k, v in pairs(prices) do b[k] = v end
+  purse[#purse + 1] = b
+  return true
+end
+
+--- Pay `cost(batch)` from the oldest batch that holds it (`newest`: the
+--- newest first). Returns that batch's prices and the amount taken, or nil
+--- (nothing taken).
+function rng.purseTake(purse, cost, newest)
+  for j = 1, #purse do
+    local i = newest and #purse - j + 1 or j
+    local b = purse[i]
+    local c = cost(b)
+    if c <= b.n then
+      local prices = {}
+      for k, v in pairs(b) do if k ~= "n" then prices[k] = v end end
+      b.n = b.n - c
+      if b.n == 0 then table.remove(purse, i) end
+      return prices, c
+    end
+  end
+  return nil
+end
+
+--- Take `n` out (a withdrawal), newest batch first.
+function rng.purseWithdraw(purse, n)
+  while n > 0 and #purse > 0 do
+    local b = purse[#purse]
+    local c = math.min(b.n, n)
+    b.n, n = b.n - c, n - c
+    if b.n == 0 then purse[#purse] = nil end
+  end
+end
+
+--- Make the purse hold exactly `balance` (state from before purses, or a
+--- balance set directly): a shortfall joins at `prices` (the newest batch
+--- when full), an excess is withdrawn.
+function rng.purseMatch(purse, balance, prices)
+  local sum = 0
+  for _, b in ipairs(purse) do sum = sum + b.n end
+  if sum > balance then rng.purseWithdraw(purse, sum - balance)
+  elseif sum < balance and not rng.purseAdd(purse, balance - sum, prices) then
+    purse[#purse].n = purse[#purse].n + balance - sum
+  end
+  return purse
+end
+
 return rng

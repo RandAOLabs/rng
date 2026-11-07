@@ -93,7 +93,10 @@ function fair.new(opts)
     token = opts.token or "",       -- metered: the only process whose Credit-Notice credits
     price = opts.price or 0,        -- metered: atoms one beacon request costs (requestPrice * unit)
     unit = opts.unit or 1000000,    -- atoms per whole RNG: the beacon credits whole RNG only
-    accounts = {},   -- game -> { balance = free atoms, reserved = atoms, nonce = last Fair.Withdraw }
+    -- game -> { balance = free atoms, reserved = atoms, nonce = last Fair.Withdraw,
+    --          purse = batches { n, price } of `balance` at the price (atoms per
+    --          session) in force when each was credited: pay at deposit }
+    accounts = {},
     credited = {}, creditFloor = 0, -- token references (t<n>) already handled
     transferSeq = 0, -- X-Transfer-Sequence of this process's last Transfer; only ever increases
     surplus = 0,     -- charged atoms below one whole RNG, not yet sent to the beacon
@@ -141,12 +144,26 @@ local function transfer(st, to, atoms, note)
     ["X-Note"] = note, ["X-Transfer-Sequence"] = string.format("%d", st.transferSeq) }
 end
 
---- A reserve goes back to the game's free balance.
+--- A game's purse (lib/rng.lua), matched to its free balance.
+local function purseOf(st, a)
+  a.purse = rng.purseMatch(a.purse or {}, a.balance, { price = st.price or 0 })
+  return a.purse
+end
+
+--- Free atoms back to a game at `price` (a full purse: the newest batch).
+local function refill(st, a, atoms, price)
+  if atoms <= 0 then return end
+  local p = purseOf(st, a)
+  if not rng.purseAdd(p, atoms, { price = price }) then p[#p].n = p[#p].n + atoms end
+  a.balance = a.balance + atoms
+end
+
+--- A reserve goes back to the game's free balance, at the price it was held at.
 local function release(st, game, atoms)
   if (atoms or 0) <= 0 then return end
   local a = account(st, game)
   a.reserved = math.max(0, a.reserved - atoms)
-  a.balance = a.balance + atoms
+  refill(st, a, atoms, atoms)
 end
 
 local function batch(st, b)
@@ -257,21 +274,27 @@ function fair.open(st, p)
   end
   if existing then prune(st, p.game, existing, now) end
   -- Before the registry: an unfunded game evicts nobody.
+  -- Pay at deposit: a session costs the price its game's oldest batch was credited at.
   local a = st.metered and st.accounts and st.accounts[p.game]
-  if st.metered and (not a or a.balance < st.price) then
-    return nil, "Game-Unfunded", { balance = a and a.balance or 0, price = st.price }
+  local cost
+  if st.metered then
+    local paid
+    if a then paid, cost = rng.purseTake(purseOf(st, a), function(b) return b.price end) end
+    if not paid then return nil, "Game-Unfunded", { balance = a and a.balance or 0, price = st.price } end
+    a.balance = a.balance - cost -- taken now: a refusal below puts it back
   end
+  local function unpaid(...) if cost then refill(st, a, cost, cost) end return ... end
   local g = gameEntry(st, p.game, now)
-  if not g then return nil, "Fair-Full" end
+  if not g then return unpaid(nil, "Fair-Full") end
   g.last = now
   prune(st, p.game, g, now)
-  if g.live >= st.maxPerGame then return nil, "Game-Full" end
+  if g.live >= st.maxPerGame then return unpaid(nil, "Game-Full") end
   g.allow[sp] = now + GUARD_MS
   g.live = g.live + 1
   if st.metered then
-    a.balance, a.reserved = a.balance - st.price, a.reserved + st.price
+    a.reserved = a.reserved + cost
     g.held = g.held or {}
-    g.held[sp] = st.price
+    g.held[sp] = cost
   end
   touch(st)
   return { opened = true, game = p.game, session = p.session, player = p.player, expiresAt = g.allow[sp] }, {}
@@ -330,7 +353,7 @@ local function charge(st, o)
     local c = math.min(share + (i <= extra and 1 or 0), held)
     local a = account(st, s.game)
     a.reserved = math.max(0, a.reserved - held)
-    a.balance = a.balance + held - c
+    refill(st, a, held - c, held)
     s.charged, s.reserve = c, 0
     total = total + c
   end
@@ -503,6 +526,11 @@ function fair.credit(st, p)
       { ["fair-refund"] = transfer(st, p.sender, atoms, "fair: credit refund (no game, or below one request)") }
   end
   local a = account(st, game)
+  if not rng.purseAdd(purseOf(st, a), atoms, { price = st.price or 0 }) then
+    if not isAddress(p.sender) then return { credited = 0, stranded = atoms }, {} end
+    return { credited = 0, refunded = atoms, error = "Too-Many-Price-Batches" },
+      { ["fair-refund"] = transfer(st, p.sender, atoms, "fair: credit refund (too many price batches)") }
+  end
   a.balance = a.balance + atoms
   return { credited = atoms, game = game, balance = a.balance, reserved = a.reserved }, {}
 end
@@ -522,6 +550,7 @@ function fair.withdraw(st, p)
   if p.quantity ~= nil then amount = int(p.quantity); if not amount then return nil, "Bad-Quantity" end end
   if amount <= 0 or amount > bal then return nil, "Insufficient-Balance", { balance = bal } end
   touch(st)
+  rng.purseWithdraw(purseOf(st, a), amount)
   a.balance, a.nonce = bal - amount, nonce
   return { withdrawn = amount, balance = a.balance, reserved = a.reserved },
     { ["fair-withdraw"] = transfer(st, p.game, amount, "fair: game balance withdrawal") }

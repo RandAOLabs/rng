@@ -620,7 +620,10 @@ function runBeaconTests()
   r = send({ target = F.beacon, Action = "Request-Random", ["Request-Id"] = "ab-unsigned" })
   check("an unsigned request is refused uncharged", r.error == "Unsigned" and Beacon.balances[F.game] == bal0, r.error)
   r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-1" }))
-  check("bound to the open round", r.round == open and Beacon.balances[F.game] == bal0 - price, r.error)
+  -- Pay at deposit: the game's oldest credit pays the price it was bought at.
+  check("bound to the open round, at its batch's price", r.round == open and r.price <= price
+    and Beacon.balances[F.game] == bal0 - r.price, encode(r))
+  price = r.price
   eq("abandonAt published", info().abandonAt, clock + 1800000)
   tick(1700000)
   eq("not refunded before abandonAfterMs", Beacon.balances[F.game], bal0 - price)
@@ -711,6 +714,23 @@ function runBeaconTests()
   check("a pruned reference is still a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
   r = credit(F.game, U, "t1600")
   check("a kept reference is a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
+
+  -- Pay at deposit: credits pay (and pay out) the fees in force when bought.
+  local Q = string.rep("q", 43)
+  local p0, f0 = info().price.fast, Beacon.signerFee
+  credit(Q, 2 * p0 * U, "t2001")
+  credited = credited + 2 * p0
+  r = dao({ Action = "Gov.Configure", ["Signer-Fee"] = tostring(f0 + 5) })
+  check("a fee change is harmless: on receipt", r.ok == true and info().price.fast > p0, encode(r))
+  r = send(delivery(Q, { Action = "Request-Random", ["Request-Id"] = "q-1" }))
+  check("raise: credits bought before it pay the old price", r.price == p0 and Beacon.balances[Q] == p0, encode(r))
+  local qp = Beacon.pending[tostring(r.round)][#Beacon.pending[tostring(r.round)]]
+  check("and pay out the fee split of that price", qp.charged == p0 and qp.protocol == Beacon.protocolFee, encode(qp))
+  credit(Q, info().price.fast * U, "t2002")
+  credited = credited + info().price.fast
+  check("a deposit after it is a second batch at the new price", #Beacon.purses[Q] == 2
+    and Beacon.purses[Q][2].price == info().price.fast, encode(Beacon.purses[Q]))
+  dao({ Action = "Gov.Configure", ["Signer-Fee"] = tostring(f0) })
 
   -- Executed DAO proposals: the newest 256, older numeric ids below a floor.
   for i = 1, 300 do dao({ Action = "Gov.Resume", ["X-Dao-Proposal"] = tostring(1000 + i) }) end

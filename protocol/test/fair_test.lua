@@ -560,6 +560,24 @@ local function runFairTests()
   check("B evicts the idle A after its allowance lapsed", oc(st, B, "e1", 1000 + 600001, true) ~= nil and st.games[A] == nil)
   eq("A's balance survives eviction (reserve released)", st.accounts[A].balance, 25)
   check("and A opens again with it", oc(st, A, "e2", 1000 + 600001 * 2, true) ~= nil)
+  -- Pay at deposit: a game's balance opens sessions at the price in force
+  -- when it was credited; a price change binds only later credits.
+  st = fair.new({ metered = true, token = F.token, price = 10, unit = 1, beacon = F.beacon })
+  credit(st, A, 20)
+  st.price = 15 -- the DAO raised it (white box)
+  check("raise: a session from old credit reserves the old price", oc(st, A, "pd1", 1000, true) ~= nil
+    and st.accounts[A].reserved == 10 and st.accounts[A].balance == 10)
+  credit(st, A, 15)
+  check("a later credit is a batch at the new price", #st.accounts[A].purse == 2 and st.accounts[A].purse[2].price == 15)
+  st.price = 5 -- lowered
+  oc(st, A, "pd2", 1000, true)
+  eq("lower: old credit still reserves its own price", st.accounts[A].reserved, 20)
+  oc(st, A, "pd3", 1000, true)
+  eq("then the newer batch, at its price", st.accounts[A].reserved, 35)
+  eq("nothing left to open with", select(2, oc(st, A, "pd4", 1000, true)), "Game-Unfunded")
+  -- Lapsed reserves come back at the price they were held at, and withdraw at face.
+  d = fair.withdraw(st, { game = A, nonce = "1", now = 1000 + 600001 })
+  check("lapsed reserves back, withdrawable at face", d and d.withdrawn == 35 and #st.accounts[A].purse == 0, encode(d))
   -- Embedded (unmetered) mode needs no token or balance.
   st = fair.new({ beacon = F.beacon })
   check("embedded: no funding needed", fair.open(st, { game = F.game, session = "s", player = F.p1, now = 1000 }) ~= nil)
