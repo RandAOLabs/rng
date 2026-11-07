@@ -57,5 +57,5 @@ it is why the verifiable tiers exist.
 ## Links
 
 - Code, spec, paper: <https://github.com/RandAOLabs/rng>
-  ([SPEC.md](../SPEC.md), [paper/](../paper))
-- Device: [`device/`](../device)
+  ([SPEC.md](TIMELOCK.md), [paper/](paper))
+- Device: [`device/`](../protocol/device)

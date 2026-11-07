@@ -1,9 +1,9 @@
 // Emits time-lock interop vectors for HyperBEAM's timelock@1.0 device from the
-// reference implementation (provider/timelock.mjs), as an Erlang function body
+// reference implementation (validator/anyhonest.mjs), as an Erlang function body
 // for dev_timelock_test_vectors:timelock_vectors/0.
-//   node test/gen-timelock-vectors.mjs > vectors.erl.txt   (from the rng repo)
+//   node protocol/device/gen-timelock-vectors.mjs > vectors.erl.txt
 // Every expected answer is checked against the reference before it is written.
-import * as tl from '../provider/timelock.mjs';
+import * as tl from '../../validator/anyhonest.mjs';
 
 const T = 1024; // small; the device takes any t up to 2^32
 const big = (h) => BigInt('0x' + h);

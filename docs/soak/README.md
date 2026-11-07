@@ -1,5 +1,9 @@
 # Soak test
 
+> Imported from RandAOLabs/rng. It drives the rng-era processes (`beacon/beacon.lua`,
+> `beacon/timelock.lua`) and imports that repo's layout (`../provider`, `../vendor`); to rerun it,
+> check out `rng-old/main` (merged into this history). Not part of `npm test`.
+
 Many wallets and contracts use the beacon in different ways for days; a
 checker re-verifies everything and keeps a pass/fail report.
 

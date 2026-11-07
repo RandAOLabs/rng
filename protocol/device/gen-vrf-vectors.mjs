@@ -1,7 +1,7 @@
-// Emits BLS interop vectors for HyperBEAM's vrf@1.0 device from the beacon's own JS (provider/bls.mjs).
+// Emits BLS interop vectors for HyperBEAM's vrf@1.0 device from the beacon's own JS (validator/bls.mjs).
 // The device's eunit vectors (dev_vrf_test_vectors.erl) were generated with this script.
 import { dkgDeal, dkgFinish, partialSign, combine, verify, verifyPartial }
-  from '../provider/bls.mjs';
+  from '../../validator/bls.mjs';
 import { bls12_381 as bls } from '@noble/curves/bls12-381.js';
 
 const id = 'Xk3_9vQ2mZpL7aRtYw4Hn1cBfGdJs8uEoVq6iT0yK5A'; // 43 chars
@@ -16,7 +16,7 @@ const members = {};
 for (let j = 1; j <= n; j++) {
   const received = {};
   for (const d in deals) received[d] = deals[d].shares[j];
-  members[j] = dkgFinish(j, n, received, commitments);
+  members[j] = dkgFinish(j, n, t, received, commitments);
 }
 const groupKey = members[1].groupKey;
 const p1 = partialSign(members[1], msg), p3 = partialSign(members[3], msg);

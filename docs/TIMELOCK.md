@@ -1,5 +1,10 @@
 # RNG protocol specification (v2)
 
+> Imported from RandAOLabs/rng (its SPEC.md). The quick tier and admin parameters here are
+> superseded by [SPEC.md](SPEC.md) and [ANY_HONEST.md](ANY_HONEST.md); the time-lock puzzle
+> (2.3) and Wesolowski proof (2.5) still match `validator/anyhonest.mjs`; round and request
+> values (2.4) now use the `hyperbeam/rng/any-honest/v1/` domains.
+
 RNG is RandAO rebuilt on HyperBEAM: the original any-honest time-lock
 commit-reveal protocol, made fast and cheap by checking puzzles on the node
 (`timelock@1.0`), and bundled with lighter tiers in one library.
