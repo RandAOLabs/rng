@@ -87,6 +87,36 @@ local function restore(base)
   end
 end
 
+--- A message must be signed for THIS beacon: a member's Round or Partial, or
+--- the owner's Configure, signed for another beacon is refused, not replayed.
+-- BEGIN target door (game/kernel/door.lua; copies checked by target-door.test.mjs)
+function TargetRefusal(msg, req)
+  local c = type(msg) == "table" and (msg.commitments or msg.Commitments) or nil
+  if type(c) ~= "table" or next(c) == nil then return nil end
+  local algs = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+  local signatures, ids = {}, {}
+  for id, s in pairs(c) do
+    if type(s) == "table" and s.committer and algs[s.type or s.alg] then
+      signatures[#signatures + 1] = s
+      ids[#ids + 1] = id
+    end
+  end
+  if #signatures == 0 then return "Refused: not signed" end
+  local self = type(req) == "table" and req.process or nil
+  if type(self) ~= "string" or #self ~= 43 then return "Refused: this process id is unknown" end
+  if #signatures == 1 and ids[1] == self then return nil end
+  if msg.target ~= self then return "Refused: not signed for this process" end
+  for _, s in ipairs(signatures) do
+    local bound = false
+    for _, key in pairs(type(s.committed) == "table" and s.committed or {}) do
+      if key == "target" then bound = true end
+    end
+    if not bound then return "Refused: the signature does not commit target" end
+  end
+  return nil
+end
+-- END target door
+
 ---------------------------------------------------------------------------
 -- Identity (same rules as paralith-mono quote.lua / rune.lua)
 ---------------------------------------------------------------------------
@@ -520,9 +550,23 @@ local ENVELOPE = {
   epoch = true, accept = true, scheduler = true, subject = true,
   ["from-process"] = true, ["data-protocol"] = true, ["content-type"] = true,
   ["accept-bundle"] = true, ["random-seed"] = true, ["hashpath"] = true,
+  fromprocess = true, tags = true,
 }
 
-local function caseInsensitive(t)
+--- The message as handlers see it. Envelope fields (commitments,
+--- from-process) come only from the body the node verified; a `Tags` table
+--- adds tags but never replaces the body or an envelope field.
+local function caseInsensitive(raw)
+  local t, named = {}, {}
+  for k, v in pairs(raw) do if k ~= "Tags" then t[k] = v; named[tostring(k):lower()] = true end end
+  -- A tag never shadows a body field in another case: the node's body keys
+  -- are lowercase ("quantity"), and a "Quantity" tag would otherwise win.
+  if type(raw.Tags) == "table" then
+    for k, v in pairs(raw.Tags) do
+      local key = tostring(k):lower()
+      if not named[key] and not ENVELOPE[key] then t[k] = v; named[key] = true end
+    end
+  end
   local lower = {}
   for k, v in pairs(t) do
     local key = tostring(k):lower()
@@ -549,12 +593,15 @@ function compute(base, req, opts)
   restore(base)
   resolveOwner(base)
   local raw = (req and req.body) or {}
-  local msg = caseInsensitive(raw.Tags or raw)
+  local msg = caseInsensitive(type(raw) == "table" and raw or {})
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
   local handler = resolveHandler(msg.Action or "none")
   local result
-  if not handler then
+  local refused = TargetRefusal(raw, req)
+  if refused then
+    result = fail(base, refused)
+  elseif not handler then
     result = fail(base, "unknown action '" .. tostring(msg.Action) .. "'")
   else
     local ok, out = pcall(function() return handler(base, msg, actor(msg, base), now) end)

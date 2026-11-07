@@ -17,9 +17,11 @@ local base = {
 }
 local clock = 1700000000000
 
--- A wallet message, signed by `signer`.
+-- A wallet message, signed by `signer` for this beacon (the target door).
 local function wallet(signer, fields)
-  local body = { commitments = { c = { type = "rsa-pss-sha512", committer = signer },
+  local body = { target = F.beacon,
+                 commitments = { c = { type = "rsa-pss-sha512", committer = signer,
+                                       committed = { "target", "action", "data" } },
                                  h = { type = "hmac-sha256", committer = signer } } }
   for k, v in pairs(fields) do body[k] = v end
   return body
@@ -33,7 +35,7 @@ end
 
 local function send(body, advance)
   clock = clock + (advance or 1000)
-  base = compute(base, { body = body, timestamp = clock })
+  base = compute(base, { body = body, timestamp = clock, process = F.beacon })
   local out = base.results and base.results.output and base.results.output.data
   local ok, decoded = pcall(json.decode, out or "")
   return ok and decoded or {}, base.results.outbox or {}
@@ -71,9 +73,39 @@ function runBeaconTests()
     ["from-process"] = F.token })
   eq("unsigned from-process credits nothing", Beacon.balances[F.stranger], nil)
   local ambiguous = wallet(F.owner, { Action = "Configure", Data = F.config })
-  ambiguous.commitments.other = { type = "rsa-pss-sha512", committer = F.stranger }
+  ambiguous.commitments.other = { type = "rsa-pss-sha512", committer = F.stranger, committed = { "target" } }
   r = send(ambiguous)
   eq("multiple signer identities are refused", r.error, "Not authorised")
+
+  -- A body-supplied Tags table cannot carry envelope fields: commitments and
+  -- from-process come only from the body the node verified.
+  local cadence = Beacon.cadenceMs
+  r = send(wallet(F.stranger, { Tags = { Action = "Configure", Data = encode({ cadenceMs = 1 }),
+    commitments = { c = { type = "rsa-pss-sha512", committer = F.owner, committed = { "target" } } } } }))
+  eq("owner forged through Tags refused", r.error, "Not authorised")
+  eq("forged owner changed nothing", Beacon.cadenceMs, cadence)
+  send(wallet(F.stranger, { Tags = { Action = "Credit-Notice", Sender = F.stranger, Quantity = tostring(99 * U),
+    Reference = "forged-tags", ["from-process"] = F.token,
+    commitments = { c = { type = "rsa-pss-sha512", committer = F.sched, committed = { "target" } } } } }))
+  eq("from-process forged through Tags credits nothing", Beacon.balances[F.stranger], nil)
+  send(wallet(F.stranger, { Action = "Credit-Notice", Sender = F.stranger, Quantity = tostring(99 * U),
+    Reference = "forged-tags-2", Tags = { FromProcess = F.token, ["From-Process"] = F.token } }))
+  eq("from-process forged through Tags in any case credits nothing", Beacon.balances[F.stranger], nil)
+  r = send(wallet(F.stranger, { action = "Get-Info", Tags = { Action = "Claim-Protocol" } }))
+  eq("a Tags key never overrides a body key in another case", r.error, nil)
+  r = send(wallet(F.stranger, { Action = "Get-Info", Tags = "x" }))
+  eq("string Tags handled", r.error, nil)
+
+  -- The target door: only messages signed for this beacon.
+  local elsewhere = wallet(F.owner, { Action = "Configure", Data = encode({ cadenceMs = 1 }) })
+  elsewhere.target = string.rep("o", 43)
+  r = send(elsewhere)
+  eq("message signed for another process refused", r.error, "Refused: not signed for this process")
+  local loose = wallet(F.owner, { Action = "Configure", Data = encode({ cadenceMs = 1 }) })
+  loose.commitments.c.committed = { "action", "data" }
+  r = send(loose)
+  eq("signature not committing target refused", r.error, "Refused: the signature does not commit target")
+  eq("door refusals changed nothing", Beacon.cadenceMs, cadence)
 
   -- Requests.
   _, ob = send(wallet(F.stranger, { Action = "Request-Random", Tier = "beacon", ["Request-Id"] = "x1" }))

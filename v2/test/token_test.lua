@@ -73,6 +73,25 @@ function runTokenTests()
   check("creator allocation supports one billion six-decimal RNG",
     r.Action == "Mint-Success" and r.Quantity == "1000000000000000")
 
+  -- A body-supplied Tags table cannot carry envelope fields: commitments and
+  -- from-process come only from the body the node verified.
+  r = send(wallet(F.stranger, { Tags = {
+    Action = "Admin.Mint", Recipient = F.stranger, Quantity = "5",
+    commitments = { c = { type = "rsa-pss-sha512", committer = F.owner } },
+  } }))
+  eq("owner forged through Tags cannot mint", r.error, "Not authorised")
+  eq("forged mint credits nothing", Balances[F.stranger], nil)
+  r = send(wallet(F.stranger, { Tags = {
+    Action = "Transfer", Recipient = F.recipient, Quantity = "1", ["from-process"] = F.process,
+    commitments = { c = { type = "rsa-pss-sha512", committer = F.sched } },
+  } }))
+  eq("from-process forged through Tags cannot spend", r.error, "Insufficient balance")
+  eq("forged transfer leaves the process balance", Balances[F.process], 25)
+  r = send(wallet(F.stranger, { action = "Balance", Tags = { Action = "Admin.Mint" } }))
+  check("a Tags key never overrides a body key in another case", r.error == nil, r.error)
+  r = send(wallet(F.stranger, { Action = "Balance", Tags = "x" }))
+  check("string Tags handled", r.error == nil, r.error)
+
   local outbox
   r, outbox = send(delivery(F.process, {
     Action = "Transfer", Recipient = F.recipient, Quantity = "10", ["X-For"] = F.user,

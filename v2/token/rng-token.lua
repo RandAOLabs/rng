@@ -447,9 +447,23 @@ local ENVELOPE = {
   epoch = true, accept = true, scheduler = true, subject = true,
   ["from-process"] = true, ["data-protocol"] = true, ["content-type"] = true,
   ["accept-bundle"] = true, ["random-seed"] = true, ["hashpath"] = true,
+  fromprocess = true, tags = true,
 }
 
-local function caseInsensitive(t)
+--- The message as handlers see it. Envelope fields (commitments,
+--- from-process) come only from the body the node verified; a `Tags` table
+--- adds tags but never replaces the body or an envelope field.
+local function caseInsensitive(raw)
+  local t, named = {}, {}
+  for k, v in pairs(raw) do if k ~= "Tags" then t[k] = v; named[tostring(k):lower()] = true end end
+  -- A tag never shadows a body field in another case: the node's body keys
+  -- are lowercase ("quantity"), and a "Quantity" tag would otherwise win.
+  if type(raw.Tags) == "table" then
+    for k, v in pairs(raw.Tags) do
+      local key = tostring(k):lower()
+      if not named[key] and not ENVELOPE[key] then t[k] = v; named[key] = true end
+    end
+  end
   local lower = {}
   for k, v in pairs(t) do
     local key = tostring(k):lower()
@@ -493,7 +507,7 @@ function compute(base, req, opts)
   local beforeTransferSeq = int(TransferSeq, 0)
   local beforeFaucetCalls = int(FaucetCalls, 0)
   local raw = (req and req.body) or {}
-  local msg = caseInsensitive(raw.Tags or raw)
+  local msg = caseInsensitive(type(raw) == "table" and raw or {})
   local action = msg.Action or msg.action or "none"
   local handler = resolveHandler(action)
   local result
