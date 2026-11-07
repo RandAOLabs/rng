@@ -16,19 +16,24 @@
 //   bond-for <rng> <address...|validators.json>  Transfer X-Bond X-For each validator
 //   gov <Gov.Action> [Tag=Value ...]        any wallet-path Gov.* on the beacon (Pause, Resume, Set-Successor, ...)
 //   resend-ack                              Resend-Successor-Ack to the predecessor
-// Owners (vendor/gov.lua: the launch wallet and the DAO, equal; every action on receipt, no queue):
+// Owners (vendor/gov.lua). The launch wallet bootstraps; at launch the DAO becomes the ONLY owner.
+// The DAO's money/code actions carry Effective-At >= receipt + 24 h (dao-propose fills $EFFECTIVE_AT)
+// and anyone applies them once due (gov-apply); harmless ones apply on receipt:
+//   dao-handover [beacon|fair|fast ...] --confirm   set-dao then renounce-wallet on each (default: every
+//                                           deployed protocol), then reads back gov.dao = DAO, gov.wallet = false.
 //   set-dao [beacon|fair|fast ...]          Gov.Set-Dao naming the recorded DAO (default: every deployed
 //                                           protocol). Refused unless the DAO is a live stake-dao/1 on our
 //                                           token with no admin, on our scheduler; reads gov.dao back.
 //   renounce-wallet <beacon|fair|fast ...> --confirm   Gov.Renounce-Wallet (one way). Refused unless the
 //                                           protocol already reads the recorded DAO as owner; reads back.
+//   gov-apply <beacon|fair|fast> <Gov-Id>   Gov.Apply: anyone runs a pending DAO action once it is due
 // Fast tier (on-demand 2-of-3 threshold BLS, beacon/beacon.lua; not a heartbeat):
 //   spawn-fast                              the fast-tier process (lua@5.3a)
 //   genesis-configure-fast [committee.json] deployer Gov.Configure: v3 token, the existing committee
 //                                           (deploy/committee.json), fees; locks token/unit/self
 //   fund-fast <rng> [for]                   a fast-tier balance (X-For)
 //   gov-fast <Gov.Action> [Tag=Value ...]   any wallet-path Gov.* on the fast tier
-//   dao-stake <rng> | dao-propose <template.json> [KEY=VALUE ...] | dao-vote <id> <Yes|No|NoWithVeto|Abstain>
+//   dao-stake [rng] (default: Labs' launch stake) | dao-propose <template.json> [KEY=VALUE ...] | dao-vote <id> <Yes|No|NoWithVeto|Abstain>
 //   status | verify                         read and check token, DAO, beacon, fair (verify exits 1 on a failure)
 //   test-subscription                       authenticated-push acceptance test against the v3 beacon
 //   plan <allocations.json> [params.json]   the whole v3 sequence, dry-run only
@@ -139,6 +144,7 @@ export function badParams(p) {
   need(p.maxValidators >= p.maxActive && p.maxValidators <= 1024, 'maxActive <= maxValidators <= 1024');
   need(p.heartbeat === 0 || p.heartbeat === 1, 'heartbeat 0 or 1');
   need(p.roundPrice >= 1 && p.requestPrice >= 1 && p.subscriptionPrice >= 1 && p.crackBounty >= 1, 'prices and bounty >= 1');
+  need(p.roundPrice <= 1e6 && p.requestPrice <= 1e6 && p.subscriptionPrice <= 1e6, 'prices <= 1,000,000 RNG');
   need(p.subscriptionRounds >= 1 && p.subscriptionRounds <= 31536000, 'subscriptionRounds in [1, 31536000]');
   need(p.cadenceMs >= 0 && p.cadenceMs <= 60000 && p.targetIntervalMs >= 0 && p.targetIntervalMs <= 600000
     && p.maxInFlight >= 1 && p.maxInFlight <= 8 && p.catchUpMs >= 0, 'rhythm parameters (cadence <= 60 s, interval <= 10 min, maxInFlight <= 8)');
@@ -161,7 +167,14 @@ export function genesisConfig({ beacon, token, params, hTable }) {
   return { self: beacon, token, unit: UNIT, predecessor, ...p, h: puzzle.h, hProof: puzzle.hProof };
 }
 
-/** The RNG DAO's definition (DAO.md rules; PERMISSIONLESS.md "YapDAO instance"). */
+/** gov.lua's floor: a DAO money/code action takes effect no sooner than this after it arrives. */
+export const EXIT_FLOOR_MS = DAY;
+/** RNG Labs' stake in the DAO at launch, whole RNG (RNG_LABS_STAKE overrides). Labs controls
+ * votes only while no coalition stakes more (PERMISSIONLESS.md "Who governs"). */
+export const LABS_STAKE_RNG = 50_000_000;
+
+/** The RNG DAO's definition (DAO.md rules; PERMISSIONLESS.md "YapDAO instance"). Voting-Period
+ * is 1 day, the floor stake-dao/1 lets a vote go to (it can be raised later, never below 1 day). */
 export function daoRules({ token, ticker = 'RNG' }) {
   return {
     'Dao-Name': ticker.startsWith('TEST-') ? 'TEST-RNG DAO' : 'RNG DAO',
@@ -170,7 +183,7 @@ export function daoRules({ token, ticker = 'RNG' }) {
     'Dao-Denomination': '6',
     'Proposal-Threshold': String(25_000 * UNIT),
     'Proposal-Deposit': String(5_000 * UNIT),
-    'Voting-Period': String(7 * DAY),
+    'Voting-Period': String(DAY),
     'Quorum-Bps': '1000',
     'Pass-Bps': '5000',
     'Veto-Bps': '3334',
@@ -206,28 +219,53 @@ const EXEC_RESERVED = new Set(['target', 'fromprocess', 'from', 'owner', 'signat
 // alone; Gov.Upgrade carries code in Data, which a proposal cannot: anyone
 // uploads the approved code instead).
 const OWNER_TAGS = { 'Gov.Set-Dao': ['Dao'], 'Gov.Approve-Code': ['Code-Root'] };
-// Every action applies on receipt: there is no queue, Gov.Apply or Gov.Cancel.
+// Every verb may carry Effective-At; the money/code ones must (MONEY_*), and the DAO may cancel a
+// pending one (Gov.Cancel). Gov.Apply is anyone's, never a proposal.
 const GOV_TAGS = {
   'Gov.Configure': null, // checked against CONFIGURE_TAGS
   'Gov.Set-Successor': ['Successor'], 'Gov.Move-Reserve': ['Successor'], 'Gov.Treasury-Spend': ['Recipient', 'Quantity'],
   'Gov.Fund-Reserve': ['Quantity'], 'Gov.Remove-Validator': ['Validator'], 'Gov.Pause': [], 'Gov.Resume': [],
-  ...OWNER_TAGS,
+  'Gov.Cancel': ['Gov-Id'], ...OWNER_TAGS,
 };
 // The fast tier's Gov.* (beacon/beacon.lua).
 const FAST_GOV_TAGS = {
   'Gov.Configure': ['Signer-Fee', 'Protocol-Fee', 'Abandon-After-Ms', 'Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'],
-  'Gov.Claim-Protocol': ['Recipient'], 'Gov.Pause': [], 'Gov.Resume': [], ...OWNER_TAGS,
+  'Gov.Claim-Protocol': ['Recipient'], 'Gov.Pause': [], 'Gov.Resume': [], 'Gov.Cancel': ['Gov-Id'], ...OWNER_TAGS,
 };
 // Fair play (fair/fair.lua): Fair.Configure by tag.
 const FAIR_GOV_TAGS = {
   'Fair.Configure': ['Beacon', 'Token', 'Request-Price', 'Fair-Window-Ms', 'Keep', 'Max-Open', 'Min-Interval-Ms',
     'Max-Games', 'Max-Per-Game'],
-  ...OWNER_TAGS,
+  'Gov.Cancel': ['Gov-Id'], ...OWNER_TAGS,
+};
+// What a proposal must give Effective-At for (the contracts' govClass; a Configure counts by the
+// tags it names, which is conservative: a value equal to the current one is harmless there).
+const MONEY_VERBS = ['Gov.Set-Successor', 'Gov.Move-Reserve', 'Gov.Treasury-Spend', 'Gov.Fund-Reserve',
+  'Gov.Remove-Validator', 'Gov.Set-Dao', 'Gov.Approve-Code', 'Gov.Claim-Protocol'];
+const MONEY_TAGS = {
+  beacon: ['Stake', 'Slash', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Crack-Bounty', 'Max-In-Flight', 'Cadence-Ms',
+    'Target-Interval-Ms', 'Round-Price', 'T', 'H', 'H-Proof'].map(word),
+  'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'].map(word),
+  fair: ['Request-Price', 'Beacon', 'Token'].map(word),
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
   'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',
   'Rejoin-Base-Ms', 'Rejoin-Cap-Ms', 'Heartbeat', 'Round-Price', 'Request-Price', 'Subscription-Price',
   'Subscription-Rounds', 'Crack-Bounty', 'Fair-Window-Ms'].map(word);
+
+/** The Effective-At a proposal made at `now` names: the end of its vote, plus the 24 h floor, plus
+ * `marginMs` for the vote to close and the DAO to deliver it. */
+export function effectiveAt({ now = Date.now(), votingPeriodMs = DAY, marginMs = DAY } = {}) {
+  return String(now + votingPeriodMs + EXIT_FLOOR_MS + marginMs);
+}
+
+/** Whether a (filled) proposal is a money/code action that must carry Effective-At. */
+export function isMoneyProposal(p, target) {
+  const tags = p.execTags || {};
+  if (MONEY_VERBS.includes(tags.Action)) return true;
+  const money = new Set(MONEY_TAGS[target] || []);
+  return Object.keys(tags).some((k) => money.has(word(k)));
+}
 
 /** Fill a proposal template's $BEACON/$FAST/$DAO/$TOKEN/$FAIR/$KEY placeholders. */
 export function fillTemplate(template, vars) {
@@ -242,7 +280,7 @@ export function fillTemplate(template, vars) {
 /** Errors a (filled) proposal would hit at the DAO's Propose, or at the beacon
  * (or the fast tier or fair play, when `fast` / `fair` names it and the
  * proposal targets it). */
-export function proposalErrors(p, { token, fast, fair } = {}) {
+export function proposalErrors(p, { token, fast, fair, now, votingPeriodMs = DAY } = {}) {
   const errs = [];
   if (typeof p.title !== 'string' || !p.title || p.title.length > 120) errs.push('title must be 1-120 characters');
   if (typeof p.body !== 'string' || p.body.length > 4000) errs.push('body must be at most 4000 characters');
@@ -267,9 +305,18 @@ export function proposalErrors(p, { token, fast, fair } = {}) {
   const table = { 'fast-tier': FAST_GOV_TAGS, fair: FAIR_GOV_TAGS, beacon: GOV_TAGS }[target];
   if (!(action in table)) errs.push(`Action ${action} is not a ${target} action the DAO may send`);
   else {
-    const allowed = new Set(['action', ...(table[action] || CONFIGURE_TAGS).map(word)]);
+    const allowed = new Set(['action', 'effectiveat', ...(table[action] || CONFIGURE_TAGS).map(word)]);
     for (const name of names) if (!allowed.has(word(name))) errs.push(`${action} does not read tag ${name}`);
     if (action === 'Gov.Configure' && names.length > 15) errs.push('Gov.Configure takes at most 14 parameters');
+    const eaName = names.find((n) => word(n) === 'effectiveat');
+    const ea = eaName && tags[eaName];
+    if (ea !== undefined && !/^\d{1,15}$/.test(ea)) errs.push('Effective-At must be whole milliseconds');
+    if (isMoneyProposal(p, target)) {
+      if (ea === undefined) errs.push(`${action} moves money or code: it needs Effective-At (>= the vote's end + 24 h)`);
+      else if (now !== undefined && /^\d+$/.test(ea) && Number(ea) < now + votingPeriodMs + EXIT_FLOOR_MS) {
+        errs.push(`Effective-At ${ea} is before the vote can end plus 24 h (${now + votingPeriodMs + EXIT_FLOOR_MS})`);
+      }
+    }
   }
   return errs;
 }
@@ -378,7 +425,7 @@ export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fasti
   for (const [role, info] of [['beacon', beaconinfo], ['fair', fairinfo], ['fast', fastinfo]]) {
     const want = state[role] && state.owners?.[role];
     if (!want) continue;
-    if (want.dao) c(`${role} co-owned by the DAO`, info?.gov?.dao === state.dao, info?.gov?.dao);
+    if (want.dao) c(`${role} owned by the DAO`, info?.gov?.dao === state.dao, info?.gov?.dao);
     if (want.walletRenounced) c(`${role} wallet renounced`, info?.gov?.wallet === false, info?.gov?.wallet);
   }
   try { sameScheduler(state, ['token', 'dao', 'beacon', 'fair', 'fast'].filter((r) => state[r])); c('one scheduler', true, state.scheduler); }
@@ -534,6 +581,7 @@ async function main(argv) {
   const readJson = (file) => JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
   const loadParams = (file) => readJson(file || path.join(HERE, 'v3-params.json'));
 
+  const dryOwners = {}; // dry run: protocols set-dao named in this run
   const v3 = {
     async 'spawn-token'(file) {
       if (state.token && !flag('--replace')) throw new Error(`token already deployed (${state.token})`);
@@ -693,7 +741,9 @@ async function main(argv) {
           const back = (await key(state[role], INFO_KEY[role]))?.gov;
           if (back?.dao !== state.dao) throw new Error(`set-dao ${role}: reads back ${JSON.stringify(back)}; reply ${r.output}`);
         }
-        state.owners = { ...state.owners, [role]: { ...state.owners?.[role], dao: state.dao } };
+        // A dry run records nothing, except that dao-handover may renounce right after it.
+        if (DRY) dryOwners[role] = true;
+        else state.owners = { ...state.owners, [role]: { ...state.owners?.[role], dao: state.dao } };
         save();
       }
     },
@@ -705,7 +755,7 @@ async function main(argv) {
         if (!DRY) {
           const errs = renounceErrors({ state, role, info: await key(state[role], INFO_KEY[role]) });
           if (errs.length) throw new Error(`renounce-wallet ${role} refused: ${errs.join('; ')}`);
-        } else if (state.owners?.[role]?.dao !== state.dao || !PROTOCOL_ROLES.includes(role)) {
+        } else if ((state.owners?.[role]?.dao !== state.dao && !dryOwners[role]) || !PROTOCOL_ROLES.includes(role)) {
           throw new Error(`renounce-wallet ${role} refused: set-dao ${role} first`);
         }
         const r = await send(state[role], 'Gov.Renounce-Wallet');
@@ -716,6 +766,26 @@ async function main(argv) {
         state.owners = { ...state.owners, [role]: { ...state.owners?.[role], walletRenounced: true } };
         save();
       }
+    },
+
+    // Launch: the DAO becomes the only owner of each protocol in one step, and the wallet's powers
+    // end. Reads back that every protocol names the DAO and has no wallet owner left.
+    async 'dao-handover'(...roles) {
+      if (!flag('--confirm') && !DRY) throw new Error('dao-handover renounces the wallet for good: add --confirm');
+      const list = roles.length ? roles : PROTOCOL_ROLES.filter((r) => state[r]);
+      await v3['set-dao'](...list);
+      await v3['renounce-wallet'](...list);
+      for (const role of list) {
+        const back = DRY ? { dao: state.dao, wallet: false } : (await key(state[role], INFO_KEY[role]))?.gov;
+        if (back?.dao !== state.dao || back?.wallet !== false) {
+          throw new Error(`dao-handover ${role}: owners read back ${JSON.stringify(back)}`);
+        }
+        log({ op: 'check', role, owners: { dao: back.dao, wallet: back.wallet } });
+      }
+    },
+    async 'gov-apply'(role, id) {
+      if (!PROTOCOL_ROLES.includes(role) || !id) throw new Error('gov-apply <beacon|fair|fast> <Gov-Id>');
+      return send(state[role], 'Gov.Apply', { tags: { 'Gov-Id': String(id) } });
     },
 
     // Fast tier: on-demand threshold BLS, paid per request; no heartbeat.
@@ -739,12 +809,16 @@ async function main(argv) {
       return send(state.fast, action, { tags });
     },
 
-    'dao-stake': (rng) => transfer(state.dao, rng),
+    // Staking is a plain Transfer to the DAO. Default: RNG Labs' launch stake.
+    'dao-stake': (rng) => transfer(state.dao, rng ?? (process.env.RNG_LABS_STAKE || LABS_STAKE_RNG)),
     async 'dao-propose'(file, ...kv) {
+      const now = Date.now();
+      const votingPeriodMs = Number(state.daoRules?.['Voting-Period'] || DAY);
       const vars = { BEACON: state.beacon, FAST: state.fast, DAO: state.dao, TOKEN: state.token, FAIR: state.fair,
+        EFFECTIVE_AT: effectiveAt({ now, votingPeriodMs }),
         ...Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2))) };
       const p = fillTemplate(readJson(file), vars);
-      const errs = proposalErrors(p, { token: state.token, fast: state.fast, fair: state.fair });
+      const errs = proposalErrors(p, { token: state.token, fast: state.fast, fair: state.fair, now, votingPeriodMs });
       if (errs.length) throw new Error(`proposal refused: ${errs.join('; ')}`);
       return send(state.dao, 'Propose', { tags: { Title: p.title, Body: p.body,
         'Exec-Process': p.execProcess, 'Exec-Tags': JSON.stringify(p.execTags) } });
@@ -812,9 +886,12 @@ async function main(argv) {
       await v3['spawn-fast']();
       await v3['genesis-configure-fast']();
       // A fresh deploy has no predecessor beacon (v3-params.json predecessor "").
-      // The RNG DAO co-owns every protocol; the wallet keeps its seat until
-      // renounce-wallet, which a fresh deploy does not send.
-      await v3['set-dao']();
+      // RNG Labs stakes its launch stake (LABS_STAKE_RNG, or RNG_LABS_STAKE):
+      // the majority of the stake at launch, said openly in PERMISSIONLESS.md.
+      await v3['dao-stake']();
+      // Launch: the DAO becomes the only owner of every protocol, and the
+      // wallet renounces in the same step; read back gov.wallet = false.
+      await v3['dao-handover']();
       await v3['dao-propose'](path.join(HERE, 'proposals', '001-handover-proof.json'));
       log({ op: 'check', sameScheduler: sameScheduler(state, ['token', 'dao', 'beacon', 'fair', 'fast']), scheduler: state.scheduler });
     },

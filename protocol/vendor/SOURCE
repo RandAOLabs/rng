@@ -1,3 +1,4 @@
 paralith-mono commit c4d8308
 files: backend/native/{json.lua,jsonenc.lua,hbclient.mjs}, packages/rune-ao/src/lib/slot-settle.mjs (import path adjusted)
 lua53b.lua: paralith-mono commit 4ff6353f, backend/native/lua53b.lua (the lua-patch@1.0 adapter; unchanged)
+gov.lua, sha256.lua: paralith-mono backend/native (sha256.lua unchanged). gov.lua is extended here: Effective-At, a 24 h EXIT_FLOOR_MS constant, the pending queue helpers and the exit hatch (Gov.when, Gov.schedule, Gov.due, Gov.prune, Gov.hatchOpen, Gov.pendingView); a DAO code approval installs only from its Effective-At.

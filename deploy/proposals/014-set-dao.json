@@ -1,9 +1,10 @@
 {
   "title": "Hand the DAO seat to a new DAO",
-  "body": "Gov.Set-Dao names another DAO process as owner in place of this one, on receipt. TARGET is the beacon, fair or fast process: one proposal per process.",
+  "body": "Gov.Set-Dao names another DAO process as owner in place of this one. TARGET is the beacon, fair or fast process: one proposal per process. It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
   "execProcess": "$TARGET",
   "execTags": {
     "Action": "Gov.Set-Dao",
-    "Dao": "$NEW_DAO"
+    "Dao": "$NEW_DAO",
+    "Effective-At": "$EFFECTIVE_AT"
   }
 }

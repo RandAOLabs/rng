@@ -1,12 +1,13 @@
 {
   "title": "Replace the fast-tier committee",
-  "body": "Replaces the fast-tier committee on receipt. Needs a new DKG ceremony first: Committee is a JSON list of member wallets, Share-Public-Keys a JSON list in the same order, Group-Key the new group key, Threshold at least 2. Old members keep their earned fees.",
+  "body": "Replaces the fast-tier committee. Needs a new DKG ceremony first: Committee is a JSON list of member wallets, Share-Public-Keys a JSON list in the same order, Group-Key the new group key, Threshold at least 2. Old members keep their earned fees. It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
   "execProcess": "$FAST",
   "execTags": {
     "Action": "Gov.Configure",
     "Committee": "$COMMITTEE",
     "Share-Public-Keys": "$SHARE_KEYS",
     "Group-Key": "$GROUP_KEY",
-    "Threshold": "2"
+    "Threshold": "2",
+    "Effective-At": "$EFFECTIVE_AT"
   }
 }

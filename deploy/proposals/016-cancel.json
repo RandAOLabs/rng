@@ -1,0 +1,9 @@
+{
+  "title": "Cancel a pending governance action",
+  "body": "Gov.Cancel drops one pending action (the id published in govPending) at once, before its Effective-At; Gov-Id \"code\" drops a pending code approval. Harmless: it applies on receipt. TARGET is the beacon, fair or fast process.",
+  "execProcess": "$TARGET",
+  "execTags": {
+    "Action": "Gov.Cancel",
+    "Gov-Id": "$GOV_ID"
+  }
+}

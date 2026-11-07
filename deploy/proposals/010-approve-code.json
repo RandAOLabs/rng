@@ -1,9 +1,10 @@
 {
   "title": "Approve new protocol code",
-  "body": "Gov.Approve-Code approves one code root (docs: paralith-mono gov.lua). Once it passes anyone uploads the matching code with Gov.Upgrade (one message, or a manifest and parts), and it is installed; the approval is spent by any install. TARGET is the beacon, fair or fast process.",
+  "body": "Gov.Approve-Code approves one code root (vendor/gov.lua). Anyone may upload the matching code with Gov.Upgrade (one message, or a manifest and parts) at once, but it installs only at or after Effective-At; the approval is spent by the install and lapses 14 days after it was due. TARGET is the beacon, fair or fast process. It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
   "execProcess": "$TARGET",
   "execTags": {
     "Action": "Gov.Approve-Code",
-    "Code-Root": "$CODE_ROOT"
+    "Code-Root": "$CODE_ROOT",
+    "Effective-At": "$EFFECTIVE_AT"
   }
 }

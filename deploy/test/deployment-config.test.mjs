@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   loadAllocations, genesisPrelude, badParams, genesisConfig, daoRules, sameScheduler,
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, setDaoErrors, renounceErrors, fundError,
+  effectiveAt, isMoneyProposal, LABS_STAKE_RNG,
   fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources,
 } from '../deploy.mjs';
 
@@ -135,7 +136,7 @@ test('RNG DAO rules follow the spec', () => {
   assert.equal(r['Dao-Ticker'], 'RNG');
   assert.equal(r['Proposal-Threshold'], String(25_000e6));
   assert.equal(r['Proposal-Deposit'], String(5_000e6));
-  assert.equal(r['Voting-Period'], String(7 * 86400000));
+  assert.equal(r['Voting-Period'], String(86400000), 'one day: the floor stake-dao/1 allows');
   assert.equal(r['Unstake-Delay'], String(14 * 86400000));
   assert.deepEqual([r['Quorum-Bps'], r['Pass-Bps'], r['Veto-Bps'], r['Max-Active-Proposals']], ['1000', '5000', '3334', '20']);
   assert.ok(Number(r['Max-Proposals-Per-Proposer']) <= Number(r['Max-Active-Proposals']));
@@ -162,14 +163,16 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
   const committee = readJson('deploy/committee.json');
   const vars = { BEACON: pid('beacon'), FAST: pid('fast'), DAO: pid('dao'), TOKEN: pid('token'), SUCCESSOR: pid('next'),
     RECIPIENT: pid('who'), VALIDATOR: pid('val'), QUANTITY: '1000000', FAIR: pid('fair'), TARGET: pid('beacon'),
-    NEW_DAO: pid('dao2'), CODE_ROOT: 'a'.repeat(64),
+    NEW_DAO: pid('dao2'), CODE_ROOT: 'a'.repeat(64), GOV_ID: '3', EFFECTIVE_AT: effectiveAt({ now: 1e12 }),
     COMMITTEE: JSON.stringify(committee.members.slice(0, 2)), SHARE_KEYS: JSON.stringify(committee.sharePublicKeys.slice(0, 2)),
     GROUP_KEY: committee.groupKey };
   assert.ok(!files.some((f) => /guardian/i.test(f)), 'no guardian template');
   for (const f of files) {
     const p = fillTemplate(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')), vars);
-    assert.deepEqual(proposalErrors(p, { token: vars.TOKEN, fast: vars.FAST, fair: vars.FAIR }), [], f);
-    assert.doesNotMatch(JSON.stringify(p), /Gov\.(Apply|Cancel|Handover)|queue|timelock/i, `${f} describes the old queue`);
+    assert.deepEqual(proposalErrors(p, { token: vars.TOKEN, fast: vars.FAST, fair: vars.FAIR, now: 1e12 }), [], f);
+    assert.doesNotMatch(JSON.stringify(p), /Gov\.Handover|on receipt, up to/i, `${f} describes the old design`);
+    const target = p.execProcess === vars.FAST ? 'fast-tier' : p.execProcess === vars.FAIR ? 'fair' : 'beacon';
+    assert.equal('Effective-At' in p.execTags, isMoneyProposal(p, target), `${f}: Effective-At exactly on money/code`);
     assert.doesNotMatch(JSON.stringify(p), /guardian/i, `${f} mentions a guardian`);
     assert.doesNotMatch(JSON.stringify(p), /\$[A-Z]/, `${f} has an unfilled placeholder`);
   }
@@ -183,12 +186,29 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
   assert.match(bad({ Action: 'Gov.Configure', 'Reveal-Window-Ms': 'a'.repeat(513) }).join(), /<= 512/);
   assert.match(bad({ Action: 'Gov.Configure', Bogus: '1' }).join(), /does not read/);
   assert.match(bad({ Action: 'Admin.Add-Validator' }).join(), /not a beacon action/);
-  for (const gone of ['Gov.Handover', 'Gov.Apply', 'Gov.Cancel']) {
+  // Gov.Apply is anyone's message, never a proposal; Gov.Cancel is the DAO's.
+  for (const gone of ['Gov.Handover', 'Gov.Apply']) {
     assert.match(bad({ Action: gone, Governor: pid('x') }).join(), /not a beacon action/, gone);
   }
+  assert.deepEqual(bad({ Action: 'Gov.Cancel', 'Gov-Id': '3' }), []);
+  // Money and code need Effective-At, at least the vote's end + 24 h.
+  const EA = { 'Effective-At': effectiveAt({ now: 1e12 }) };
+  for (const tags of [{ Action: 'Gov.Treasury-Spend', Recipient: pid('who'), Quantity: '1' }, { Action: 'Gov.Fund-Reserve', Quantity: '1' },
+    { Action: 'Gov.Set-Successor', Successor: pid('n') }, { Action: 'Gov.Move-Reserve', Successor: pid('n') },
+    { Action: 'Gov.Remove-Validator', Validator: pid('v') }, { Action: 'Gov.Configure', Slash: '1200' },
+    { Action: 'Gov.Configure', 'Reveal-Window-Ms': '20000' }, { Action: 'Gov.Set-Dao', Dao: pid('dao2') },
+    { Action: 'Gov.Approve-Code', 'Code-Root': 'a'.repeat(64) }]) {
+    assert.match(bad(tags).join(), /needs Effective-At/, tags.Action);
+    assert.deepEqual(proposalErrors({ ...ok, execTags: { ...tags, ...EA } }, { token: pid('token'), now: 1e12 }), [], tags.Action);
+    const early = { 'Effective-At': String(1e12 + 2 * 86400000 - 1) };
+    assert.match(proposalErrors({ ...ok, execTags: { ...tags, ...early } }, { token: pid('token'), now: 1e12 }).join(),
+      /before the vote can end plus 24 h/, tags.Action);
+  }
+  assert.deepEqual(bad({ Action: 'Gov.Configure', 'Request-Price': '5' }), [], 'prices are harmless');
+  assert.match(bad({ Action: 'Gov.Pause', 'Effective-At': 'soon' }).join(), /whole milliseconds/);
   // gov.lua's verbs: Set-Dao and Approve-Code by vote; Renounce-Wallet is the wallet's alone.
-  assert.deepEqual(bad({ Action: 'Gov.Set-Dao', Dao: pid('dao2') }), []);
-  assert.deepEqual(bad({ Action: 'Gov.Approve-Code', 'Code-Root': 'a'.repeat(64) }), []);
+  assert.deepEqual(bad({ Action: 'Gov.Set-Dao', Dao: pid('dao2'), ...EA }), []);
+  assert.deepEqual(bad({ Action: 'Gov.Approve-Code', 'Code-Root': 'a'.repeat(64), ...EA }), []);
   assert.match(bad({ Action: 'Gov.Renounce-Wallet' }).join(), /not a beacon action/);
   assert.match(bad({ Action: 'Gov.Upgrade' }).join(), /not a beacon action/);
   assert.match(bad({ Action: 'Gov.Set-Dao', Governor: pid('x') }).join(), /does not read tag Governor/);
@@ -197,15 +217,18 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
   // The fast tier has its own Gov.* table.
   const fast = (execTags) => proposalErrors({ ...ok, execProcess: pid('fast'), execTags }, { token: pid('token'), fast: pid('fast') });
   assert.deepEqual(fast({ Action: 'Gov.Configure', 'Signer-Fee': '2' }), []);
-  assert.deepEqual(fast({ Action: 'Gov.Claim-Protocol', Recipient: pid('who') }), []);
+  assert.match(fast({ Action: 'Gov.Claim-Protocol', Recipient: pid('who') }).join(), /needs Effective-At/);
+  assert.deepEqual(fast({ Action: 'Gov.Claim-Protocol', Recipient: pid('who'), ...EA }), []);
+  assert.match(fast({ Action: 'Gov.Configure', Threshold: '2' }).join(), /needs Effective-At/);
   assert.match(fast({ Action: 'Gov.Configure', 'Reveal-Window-Ms': '1' }).join(), /does not read/);
   assert.match(fast({ Action: 'Gov.Treasury-Spend', Recipient: pid('who'), Quantity: '1' }).join(), /not a fast-tier action/);
-  assert.deepEqual(fast({ Action: 'Gov.Set-Dao', Dao: pid('dao2') }), []);
+  assert.deepEqual(fast({ Action: 'Gov.Set-Dao', Dao: pid('dao2'), ...EA }), []);
   assert.match(bad({ Action: 'Gov.Claim-Protocol', Recipient: pid('who') }).join(), /not a beacon action/);
   // Fair play: Fair.Configure by tag, and the owner verbs.
   const fair = (execTags) => proposalErrors({ ...ok, execProcess: pid('fair'), execTags }, { token: pid('token'), fair: pid('fair') });
   assert.deepEqual(fair({ Action: 'Fair.Configure', Keep: '4', 'Max-Open': '9' }), []);
-  assert.deepEqual(fair({ Action: 'Gov.Approve-Code', 'Code-Root': 'b'.repeat(64) }), []);
+  assert.deepEqual(fair({ Action: 'Gov.Approve-Code', 'Code-Root': 'b'.repeat(64), ...EA }), []);
+  assert.match(fair({ Action: 'Fair.Configure', 'Request-Price': '5' }).join(), /needs Effective-At/);
   assert.match(fair({ Action: 'Fair.Configure', Data: '{}' }).join(), /reserved/);
   assert.match(fair({ Action: 'Gov.Pause' }).join(), /not a fair action/);
   const many = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`T${i}`, '1']));
@@ -228,10 +251,10 @@ test('checkV3 passes on a healthy deployment and flags each problem', () => {
   assert.deepEqual(checkV3({ state: s, ...good }).filter((c) => !c.ok), []);
   const failing = (patch) => checkV3({ state: s, ...good, ...patch }).filter((c) => !c.ok).map((c) => c.check);
   assert.deepEqual(failing({ tokeninfo: { ...good.tokeninfo, Sealed: 'false' } }), ['token sealed']);
-  assert.deepEqual(failing({ beaconinfo: { ...good.beaconinfo, gov: gov('', true) } }), ['beacon co-owned by the DAO']);
-  assert.deepEqual(failing({ beaconinfo: { ...good.beaconinfo, gov: undefined } }), ['beacon co-owned by the DAO']);
+  assert.deepEqual(failing({ beaconinfo: { ...good.beaconinfo, gov: gov('', true) } }), ['beacon owned by the DAO']);
+  assert.deepEqual(failing({ beaconinfo: { ...good.beaconinfo, gov: undefined } }), ['beacon owned by the DAO']);
   assert.deepEqual(failing({ fairinfo: { ...good.fairinfo, gov: gov(pid('d'), true) } }), ['fair wallet renounced']);
-  assert.deepEqual(failing({ fairinfo: { ...good.fairinfo, gov: gov(pid('x'), false) } }), ['fair co-owned by the DAO']);
+  assert.deepEqual(failing({ fairinfo: { ...good.fairinfo, gov: gov(pid('x'), false) } }), ['fair owned by the DAO']);
   assert.deepEqual(failing({ beaconinfo: { ...good.beaconinfo, predecessor: pid('old') } }), ['beacon predecessor']);
   assert.deepEqual(failing({ beaconinfo: { ...good.beaconinfo, foundationReserveAtoms: '0' } }), ['beacon reserve funded']);
   assert.deepEqual(failing({ daoinfo: { ...good.daoinfo, Token: pid('x') } }), ['dao configured on RNG']);
@@ -273,20 +296,32 @@ test('dry-run plan prints the whole v3 sequence and sends nothing', () => {
   const daoControl = transfers.filter((l) => l.tags['X-Foundation'] || l.tags['X-Treasury'])
     .reduce((n, l) => n + BigInt(l.tags.Quantity), 0n);
   assert.equal(daoControl, 250_000_000_000_000n);
-  assert.ok(transfers.every((l) => l.tags.Recipient !== dao), 'no RNG to the DAO process: it can never spend its staked token');
+  // The one transfer to the DAO is RNG Labs' stake (a plain Transfer is a stake): 50,000,000 RNG by default.
+  const stakes = transfers.filter((l) => l.tags.Recipient === dao);
+  assert.deepEqual(stakes.map((l) => l.tags), [{ Recipient: dao, Quantity: String(LABS_STAKE_RNG * 1e6) }]);
+  assert.equal(LABS_STAKE_RNG, 50_000_000);
   const bonds = transfers.filter((l) => l.tags['X-Bond']);
   assert.deepEqual(bonds.map((l) => l.tags['X-For']), readJson('deploy/anyhonest-validators.json'));
   assert.ok(bonds.every((l) => l.tags.Quantity === '100000000000'), 'operators bond 4 x stake');
   assert.deepEqual(sends[at('Fair.Configure')].data.beacon, beacon);
   assert.equal(sends[at('Fair.Configure')].data.token, token);
   assert.equal(sends[at('Fair.Configure')].data.requestPrice, readJson('deploy/v3-params.json').requestPrice);
-  // The RNG DAO co-owns every protocol; nothing is handed over and the wallet keeps its seat.
+  // Launch: the DAO becomes the only owner of every protocol and the wallet renounces in the same
+  // step (after the stake), then each protocol is read back with gov.wallet false.
   const setDao = sends.filter((l) => l.action === 'Gov.Set-Dao');
   assert.deepEqual(setDao.map((l) => l.target), [beacon, fair, fast]);
   assert.ok(setDao.every((l) => JSON.stringify(l.tags) === JSON.stringify({ Dao: dao })), 'Dao tag only');
   assert.ok(at('Gov.Configure') < at('Gov.Set-Dao'));
-  for (const gone of ['Gov.Handover', 'Gov.Renounce-Wallet', 'Gov.Apply', 'Gov.Cancel']) assert.equal(at(gone), -1, gone);
-  // The fast tier: genesis on the existing committee and the v3 token, then co-owned by the DAO.
+  const renounce = sends.filter((l) => l.action === 'Gov.Renounce-Wallet');
+  assert.deepEqual(renounce.map((l) => l.target), [beacon, fair, fast]);
+  assert.ok(sends.indexOf(setDao[2]) < sends.indexOf(renounce[0]), 'set-dao on all, then renounce');
+  assert.ok(sends.indexOf(stakes[0]) < sends.indexOf(setDao[0]), 'Labs stakes before the handover');
+  const owners = lines.filter((l) => l.op === 'check' && l.owners);
+  assert.deepEqual(owners.map((l) => [l.role, l.owners.dao, l.owners.wallet]),
+    [['beacon', dao, false], ['fair', dao, false], ['fast', dao, false]]);
+  assert.ok(lines.indexOf(owners[2]) < lines.findIndex((l) => l.action === 'Propose'), 'verified before the first proposal');
+  for (const gone of ['Gov.Handover', 'Gov.Apply', 'Gov.Cancel']) assert.equal(at(gone), -1, gone);
+  // The fast tier: genesis on the existing committee and the v3 token, then owned by the DAO alone.
   const fastCfg = sends.find((l) => l.target === fast && l.action === 'Gov.Configure');
   const committee = readJson('deploy/committee.json');
   assert.deepEqual([fastCfg.data.self, fastCfg.data.token, fastCfg.data.threshold, fastCfg.data.groupKey],
@@ -436,10 +471,12 @@ test('the deployer allocation gives the whole supply to the deployer, ticker RNG
   }
 });
 
-test('vendored gov.lua and sha256.lua are paralith-mono\'s, byte for byte', (t) => {
+// gov.lua is paralith-mono's plus Effective-At, the pending queue and the exit hatch
+// (protocol/vendor/SOURCE); sha256.lua is unchanged.
+test('vendored sha256.lua is paralith-mono\'s, byte for byte', (t) => {
   const pm = process.env.PARALITH_MONO;
   if (!pm || !fs.existsSync(path.join(pm, 'backend/native/gov.lua'))) return t.skip('PARALITH_MONO not set');
-  for (const f of ['gov.lua', 'sha256.lua']) {
+  for (const f of ['sha256.lua']) {
     const norm = (s) => s.replace(/\r\n/g, '\n');
     assert.equal(norm(fs.readFileSync(path.join(ROOT, 'protocol/vendor', f), 'utf8')),
       norm(fs.readFileSync(path.join(pm, 'backend/native', f), 'utf8')), `protocol/vendor/${f} differs from ${pm}`);
@@ -455,7 +492,8 @@ test('every protocol bundle carries gov.lua ahead of the contract, and the beaco
     const contract = { anyHonest: 'function compute(base, req)', fair: 'function compute(base, req)',
       fast: 'function compute(base, req, opts)' }[name];
     assert.ok(src.indexOf(contract) > gov, `${name}: gov.lua before the contract`);
-    assert.doesNotMatch(src, /GOV_DELAY_MS|Gov\.Apply"|Gov\.Handover"|govQueue/, `${name}: no queue left`);
+    assert.doesNotMatch(src, /GOV_DELAY_MS|Gov\.Handover"/, `${name}: no old queue left`);
+    assert.match(src, /Gov\.EXIT_FLOOR_MS = DAY_MS/, `${name}: the 24 h floor is a constant`);
   }
 });
 
@@ -472,12 +510,17 @@ test('fund-* refuses a beacon that has not run genesis-configure', () => {
   assert.match(fundError({ state: s, beaconinfo: null }), /strand/);
 });
 
-test('no governance queue or timelock is left in any protocol', () => {
+test('every protocol schedules the DAO\'s money and code through gov.lua\'s floor', () => {
   for (const f of ['protocol/beacon/anyhonest.lua', 'protocol/beacon/beacon.lua', 'protocol/fair/fair.lua']) {
     const lua = fs.readFileSync(path.join(ROOT, f), 'utf8');
-    assert.doesNotMatch(lua, /GOV_DELAY_MS|GOV_EXPIRE_MS|SPEND_WINDOW_MS|TIMELOCKED_PARAMS|enqueue\(|H\["Gov\.(Apply|Cancel|Handover)"\]/, f);
+    assert.doesNotMatch(lua, /GOV_DELAY_MS|TIMELOCKED_PARAMS|H\["Gov\.Handover"\]/, f);
     assert.match(lua, /Gov\.ownerOf\(base/, `${f} takes its owners from gov.lua`);
+    assert.match(lua, /Gov\.when\(/, `${f} checks Effective-At with gov.lua`);
+    assert.match(lua, /Gov\.hatchOpen\(/, `${f} publishes the exit hatch`);
   }
+  const gov = fs.readFileSync(path.join(ROOT, 'protocol/vendor/gov.lua'), 'utf8');
+  assert.match(gov, /^Gov\.EXIT_FLOOR_MS = DAY_MS$/m, 'the floor is a literal constant');
+  assert.match(fs.readFileSync(path.join(ROOT, 'protocol/beacon/anyhonest.lua'), 'utf8'), /SPEND_WINDOW_MS = 30 \* DAY_MS/);
   const move = readJson('deploy/proposals/004-move-reserve.json');
   assert.equal(move.execTags.Successor, '$SUCCESSOR', 'Move-Reserve names its successor');
 });
@@ -507,6 +550,8 @@ out[#out + 1] = send("${pid('stranger')}", { Action = "Gov.Set-Dao", Dao = "${DA
 out[#out + 1] = send("${OWNER}", { Action = "Gov.Renounce-Wallet" })
 out[#out + 1] = send("${OWNER}", { Action = "Gov.Set-Dao", Dao = "${DAO}" })
 out[#out + 1] = send("${SCHED}", { Action = "Gov.Approve-Code", ["Code-Root"] = string.rep("c", 64) }, "${DAO}")
+out[#out + 1] = send("${SCHED}", { Action = "Gov.Approve-Code", ["Code-Root"] = string.rep("c", 64),
+  ["Effective-At"] = "1700086400005" }, "${DAO}")
 out[#out + 1] = send("${OWNER}", { Action = "Gov.Renounce-Wallet" })
 out[#out + 1] = send("${OWNER}", { Action = "Gov.Set-Dao", Dao = "${OWNER}" })
 return table.concat(out, "\\n")`;
@@ -514,7 +559,8 @@ return table.concat(out, "\\n")`;
     '{"error":"Not authorised","ok":false}',
     '{"error":"Set a DAO first","ok":false}',
     `{"dao":"${DAO}","ok":true}`,
-    `{"approved":"${'c'.repeat(64)}","ok":true}`,
+    '{"error":"Effective-At-Required","ok":false}',
+    `{"approved":"${'c'.repeat(64)}","effectiveAt":1700086400005,"ok":true}`,
     '{"ok":true,"wallet":false}',
     '{"error":"Not authorised","ok":false}',
   ].join('\n');
