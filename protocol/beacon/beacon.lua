@@ -41,13 +41,15 @@
 -- "device", one post carrying a valid group signature is enough.
 --
 -- Governance mirrors anyhonest.lua and paralith-mono's gov.lua (vendor/gov.lua,
--- bundled ahead of this file): two equal owners, the launch wallet until it
--- sends Gov.Renounce-Wallet and the DAO named by Gov.Set-Dao (a from-process
--- our scheduler attests). Every owner action takes effect on receipt: there
--- is no queue and no timelock. Governance sets fees and the committee, can
--- pause new requests, spends the protocol's fee share, and approves code
--- (Gov.Approve-Code, Gov.Upgrade); it cannot mint, or move a balance or a
--- member's earnings. A committee change means a new DKG ceremony.
+-- bundled ahead of this file). The launch wallet bootstraps (spawn, genesis
+-- Configure), names the DAO (Gov.Set-Dao) and renounces (Gov.Renounce-Wallet);
+-- from then on the DAO, a from-process our scheduler attests, is the only
+-- owner. Its money and code actions (the committee, the protocol's fee
+-- share, code, the DAO seat) wait for an Effective-At at least 24 h after
+-- they arrive (Gov.Apply), and while one waits the exit hatch is open: a
+-- member may leave at once (Exit-Now). Fees, pause and resume apply on
+-- receipt. Governance cannot mint, or move a balance or a member's earnings.
+-- A committee change means a new DKG ceremony.
 
 local json = require(".json")
 
@@ -76,7 +78,7 @@ local MAX_FEE = 1000000 -- RNG per signer or protocol share of one request
 
 --- gov.lua's owner record (GovState) at spawn: the wallet on, no DAO.
 local function freshOwners(wallet)
-  return { dao = "", wallet = wallet, approved = "", code = { sha = "", version = 0 } }
+  return { dao = "", wallet = wallet, approved = "", approvedAt = 0, code = { sha = "", version = 0 } }
 end
 
 -- All state lives in one table, published whole as `beaconstate` after every
@@ -119,7 +121,8 @@ local function freshState()
     owners = freshOwners(true),
     -- executed: "dao|X-Dao-Proposal" -> true, the last EXECUTED_KEEP
     -- (executedOrder); executedFloor: the highest numeric proposal pruned.
-    gov = { executed = {}, executedOrder = {}, executedFloor = 0 },
+    -- pending: id -> the DAO's actions waiting for their Effective-At.
+    gov = { executed = {}, executedOrder = {}, executedFloor = 0, pending = {}, nextId = 1 },
     paused = false,
     transferSeq = 0,      -- X-Transfer-Sequence of the last token Transfer; only ever increases
   }
@@ -169,9 +172,10 @@ local function bindOwners(reloaded)
   if type(o) ~= "table" then o = freshOwners(false); Beacon.owners = o end
   if type(o.code) ~= "table" then o.code = { sha = "", version = 0 } end
   if reloaded and (o.code.sha or "") ~= "" then
-    if (o.approved or "") == "" then o.approved = o.code.sha end
+    if (o.approved or "") == "" then o.approved, o.approvedAt = o.code.sha, 0 end
     o.code = { sha = "", version = int(o.code.version, 0) }
   end
+  o.approvedAt = int(o.approvedAt, 0)
   GovState = o
 end
 
@@ -306,6 +310,8 @@ local Notices = {}
 local HistoryNew, Finalized, Abandoned = {}, nil, nil
 --- The slot being computed (the node's assignment), or nil when unknown.
 local Slot = nil
+--- This message's scheduler time.
+local Now = 0
 
 local function dataOf(msg)
   local d = msg.Data or msg.data
@@ -411,10 +417,14 @@ local function info()
     price = { fast = p, beacon = p }, signerFee = int(Beacon.signerFee, 1), protocolFee = int(Beacon.protocolFee, 1),
     token = Beacon.token, unit = int(Beacon.unit, 1), self = Beacon.self,
     protocolAccrued = int(Beacon.protocolAccrued, 0), verification = Beacon.verification,
-    -- gov.lua's owners: { dao, wallet, approved, code, version }.
+    -- gov.lua's owners: { dao, wallet, approved, approvedAt, code, version }.
     gov = Gov.info(), paused = Beacon.paused == true, transferSeq = int(Beacon.transferSeq, 0),
+    -- The DAO's actions waiting for their Effective-At; while a money or
+    -- code one waits, the exit hatch is open (Exit-Now).
+    govPending = Gov.pendingView(Gov.queueOf(Beacon.gov), Now), hatch = Gov.hatchOpen(Gov.queueOf(Beacon.gov), Now),
+    exitFloorMs = Gov.EXIT_FLOOR_MS,
     abandonAfterMs = int(Beacon.abandonAfterMs, 1800000), abandonAt = abandonAt(nextRound),
-    features = { "on-demand", "pay-and-request", "gov", "abandon" },
+    features = { "on-demand", "pay-and-request", "gov", "abandon", "effective-at", "exit-hatch" },
   }
 end
 
@@ -598,7 +608,11 @@ local function finalize(base, r, sig, signers, now)
   Beacon.partials = { round = 0, by = {} }
 
   local byRequester, order, served, requests = {}, {}, 0, {}
-  local n = #signers
+  -- Only members still on the committee are paid: one that left by the exit
+  -- hatch is paid nothing for the round it was in (its share goes to the rest).
+  local paid = {}
+  for _, s in ipairs(signers) do if Beacon.committee[s] then paid[#paid + 1] = s end end
+  local n = #paid
   for _, p in ipairs(Beacon.pending[key] or {}) do
     requests[#requests + 1] = { requester = p.requester, requestId = p.requestId,
       value = rng.hex(rng.sha256("hyperbeam/rng/v1/request|" .. value .. "|" .. p.requestId)) }
@@ -617,7 +631,7 @@ local function finalize(base, r, sig, signers, now)
     -- the protocol), whatever the fees or the threshold are now.
     local charged, protocol = int(p.charged, 0), int(p.protocol, 0)
     local each = n > 0 and (charged - protocol) // n or 0
-    for _, s in ipairs(signers) do add(Beacon.accrued, s, each) end
+    for _, s in ipairs(paid) do add(Beacon.accrued, s, each) end
     Beacon.protocolAccrued = int(Beacon.protocolAccrued, 0) + charged - each * n
     served = served + 1
   end
@@ -737,6 +751,24 @@ H["Claim"] = function(base, msg, from)
   if amount <= 0 then return fail(base, "Nothing-To-Claim") end
   Beacon.accrued[from] = 0
   return reply(base, { claimed = amount }, { ["rng-claim"] = transferOut(from, amount, "RNG fast-tier signer fees") })
+end
+
+--- The exit hatch: while a passed money or code action waits for its
+--- Effective-At, a member leaves the committee at once, with its earnings.
+--- The fast tier holds no bond. Rounds it would have signed need the others:
+--- with fewer than `threshold` left they are abandoned and refunded by the
+--- usual rule.
+H["Exit-Now"] = function(base, msg, from, now)
+  local member = provenSigner(msg)
+  if not member or FromProcess or not Beacon.committee[member] then return fail(base, "Not a committee member") end
+  if not Gov.hatchOpen(Gov.queueOf(Beacon.gov), now) then return fail(base, "Hatch-Closed") end
+  Beacon.committee[member], Beacon.sharePublicKeys[member] = nil, nil
+  local amount, outbox = int(Beacon.accrued[member], 0), {}
+  if amount > 0 then
+    Beacon.accrued[member] = 0
+    outbox["rng-claim"] = transferOut(member, amount, "RNG fast-tier signer fees: exit hatch")
+  end
+  return reply(base, { exited = true, claimed = amount, committee = count(Beacon.committee) }, outbox)
 end
 
 H["Get-Info"] = function(base) return reply(base, info()) end
@@ -990,11 +1022,124 @@ Gov.reply = function(base, t)
   base.results.outbox = {}
 end
 
+--- MONEY/CODE: the committee (who signs, and so who can predict a value),
+--- the protocol's fee share, the DAO seat, and code (gov.lua's). They wait
+--- for an Effective-At >= receipt + Gov.EXIT_FLOOR_MS. Fees (bounded by
+--- MAX_FEE), abandonAfterMs, Pause and Resume are harmless: on receipt.
+local MONEY_VERBS = { ["Gov.Claim-Protocol"] = true, ["Gov.Set-Dao"] = true }
+local SCHEDULED = { ["Gov.Configure"] = true, ["Gov.Pause"] = true, ["Gov.Resume"] = true,
+  ["Gov.Claim-Protocol"] = true, ["Gov.Set-Dao"] = true }
+local COMMITTEE_ARGS = { "committee", "sharePublicKeys", "groupKey", "threshold", "verification" }
+
+local function govClass(verb, msg)
+  if MONEY_VERBS[verb] then return "money" end
+  if verb ~= "Gov.Configure" then return "harmless" end
+  if Beacon.token == "" then return "money" end
+  local arg = govArgs(msg)
+  for _, k in ipairs(COMMITTEE_ARGS) do if arg(k) ~= nil then return "money" end end
+  return "harmless"
+end
+
+local function govQueue() return Gov.queueOf(Beacon.gov) end
+
+local function applyVerb(base, verb, msg, from, now)
+  if verb == "Gov.Set-Dao" then
+    local dao = govArgs(msg)("dao")
+    if not isAoAddress(dao) then return fail(base, "Dao must be a 43-character process id") end
+    GovState.dao = dao
+    return reply(base, { ok = true, dao = dao })
+  end
+  return H[verb](base, msg, from, now)
+end
+
+local function replyData(res)
+  local ok, v = pcall(json.decode, res and res.results and res.results.output and res.results.output.data or "")
+  return ok and type(v) == "table" and v or {}
+end
+
+local MAX_ARGS_BYTES = 4096
+local ENVELOPE, caseInsensitive -- set with the entry point, below
+local function argsOf(msg)
+  local args, bytes, names = {}, 0, {}
+  for k, v in pairs(msg) do
+    local key = tostring(k):lower()
+    if type(v) == "string" and not ENVELOPE[key] and key ~= "data" and key ~= "effective-at"
+       and key ~= "x-dao-proposal" then
+      args[k], bytes = v, bytes + #tostring(k) + #v
+      names[#names + 1] = k
+    end
+  end
+  table.sort(names)
+  local parts = {}
+  for _, k in ipairs(names) do if tostring(k):lower() ~= "action" then parts[#parts + 1] = k .. "=" .. args[k] end end
+  return args, bytes, table.concat(parts, " "):sub(1, 256)
+end
+
+--- A DAO message for a SCHEDULED verb (anyhonest.lua's rule): harmless with
+--- no later Effective-At applies now; otherwise it is checked on a copy of
+--- the state, then its Effective-At, then stored for Gov.Apply.
+local function propose(base, verb, msg, from, now)
+  local class = govClass(verb, msg)
+  local v = msg["Effective-At"]
+  if class == "harmless" and (v == nil or int(v, 0) <= now) then return applyVerb(base, verb, msg, from, now) end
+  local real = Beacon
+  Beacon = deepCopy(real)
+  GovState = Beacon.owners
+  local ok, res = pcall(applyVerb, base, verb, msg, from, now)
+  Beacon, GovState = real, real.owners
+  if not ok then error(res, 0) end
+  local out = replyData(res)
+  if out.error then return fail(base, out.error) end
+  local at, why = Gov.when(msg, class, now)
+  if not at then
+    return reply(base, { error = why, class = class, earliest = class == "money" and now + Gov.EXIT_FLOOR_MS or nil })
+  end
+  local args, bytes, summary = argsOf(msg)
+  if bytes > MAX_ARGS_BYTES then return fail(base, "Too-Large") end
+  local e, err = Gov.schedule(govQueue(), { verb = verb, class = class, effectiveAt = at, args = args,
+    summary = verb .. (summary ~= "" and (" " .. summary) or "") }, now)
+  if not e then return fail(base, err) end
+  return reply(base, { pending = { id = e.id, verb = verb, class = class, effectiveAt = at } })
+end
+
+--- Anyone: applies a pending action once due (bounds checked again now). A
+--- refusal leaves it pending; a lapsed one is dropped.
+H["Gov.Apply"] = function(base, msg, from, now)
+  local q = govQueue()
+  local e, key = Gov.due(q, govArgs(msg)("govId"), now)
+  if not e then return fail(base, key) end
+  local saved = Who
+  Who = "dao"
+  local ok, res = pcall(applyVerb, base, e.verb, caseInsensitive(e.args), nil, now)
+  Who = saved
+  if not ok then error(res, 0) end
+  local out = replyData(res)
+  if out.error then return reply(base, { error = out.error, govId = e.id, verb = e.verb }) end
+  q.pending[key] = nil
+  out.applied, out.verb = e.id, e.verb
+  return reply(base, out, res.results.outbox)
+end
+
+--- An owner drops a pending action at once (Gov-Id "code": the code approval).
+H["Gov.Cancel"] = function(base, msg)
+  if not govOnly() then return fail(base, "Not authorised") end
+  local id = govArgs(msg)("govId")
+  if tostring(id):lower() == "code" then
+    if not Gov.cancelCode() then return fail(base, "Unknown-Gov-Id") end
+    return reply(base, { cancelled = "code" })
+  end
+  local n = int(id, nil)
+  local key = n and string.format("%d", n) or ""
+  if not govQueue().pending[key] then return fail(base, "Unknown-Gov-Id") end
+  govQueue().pending[key] = nil
+  return reply(base, { cancelled = n })
+end
+
 ---------------------------------------------------------------------------
 -- Entry point
 ---------------------------------------------------------------------------
 
-local ENVELOPE = {
+ENVELOPE = {
   target = true, id = true, owner = true, signature = true, anchor = true,
   commitments = true, from = true, type = true, variant = true,
   path = true, method = true, slot = true, device = true, nonce = true,
@@ -1007,7 +1152,7 @@ local ENVELOPE = {
 --- The message as handlers see it. Envelope fields (commitments,
 --- from-process) come only from the body the node verified; a `Tags` table
 --- adds tags but never replaces the body or an envelope field.
-local function caseInsensitive(raw)
+function caseInsensitive(raw)
   local t, named = {}, {}
   for k, v in pairs(raw) do if k ~= "Tags" then t[k] = v; named[tostring(k):lower()] = true end end
   -- A tag never shadows a body field in another case: the node's body keys
@@ -1029,7 +1174,17 @@ local function caseInsensitive(raw)
   })
 end
 
-local ACTION_ALIASES = nil
+local ACTION_ALIASES, VERB_NAMES = nil, nil
+--- The handler's own name for an action, in any spelling.
+local function verbName(action)
+  if H[action] then return action end
+  if VERB_NAMES == nil then
+    VERB_NAMES = {}
+    for name in pairs(H) do VERB_NAMES[norm(name)] = name end
+  end
+  return VERB_NAMES[norm(action)]
+end
+
 local function resolveHandler(action)
   if H[action] then return H[action] end
   if ACTION_ALIASES == nil then
@@ -1050,6 +1205,7 @@ function compute(base, req, opts)
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
   Slot = int(req and (req.slot or (type(req.body) == "table" and req.body.slot)), nil)
+  Now = now
   Notices, HistoryNew, Finalized, Abandoned = {}, {}, nil, nil
   local handler = resolveHandler(msg.Action or "none")
   local result
@@ -1072,6 +1228,9 @@ function compute(base, req, opts)
         end
       end
       advance(now)
+      Gov.prune(govQueue(), now)
+      local verb = verbName(msg.Action or "none")
+      if isGovernor() and SCHEDULED[verb] then return propose(base, verb, msg, from, now) end
       return handler(base, msg, from, now)
     end)
     if not ok then

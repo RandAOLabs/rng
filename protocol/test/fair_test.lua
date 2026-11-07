@@ -602,10 +602,15 @@ local function runFairTests()
   local again = fair.credit(st, { from = F.token, fromProcess = true, sender = F.payer, quantity = "5", reference = "t1", forGame = G })
   check("a pruned reference is still a duplicate", again and again.duplicate == true and st.accounts[G].balance == balBefore)
 
-  -- Owners (vendor/gov.lua): the launch wallet and the DAO Gov.Set-Dao
-  -- names, equal, every action on receipt. Raw reply text asserted.
+  -- Owners (vendor/gov.lua): the launch wallet bootstraps and renounces;
+  -- the DAO's money actions (requestPrice, the DAO seat, code) wait for
+  -- Effective-At >= receipt + 24 h. Raw reply text asserted.
   local function out() return base.results.output.data end
   local function finfo() return json.decode(base.fairinfo) end
+  local FLOOR = 86400000
+  local function at(extra) return string.format("%d", clock + 100 + FLOOR + (extra or 0)) end
+  local function apply(id) return send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(id) })) end
+  local function due(id) Fair.gov.pending[tostring(id)].effectiveAt = clock end
   send(delivery(F.dao, { Action = "Fair.Configure", Keep = "4" }))
   eq("no DAO yet: a DAO delivery is nobody", out(), '{"error":"Not authorised"}')
   send(wallet(F.stranger, { Action = "Gov.Set-Dao", Dao = F.dao }))
@@ -621,7 +626,7 @@ local function runFairTests()
   eq("the wallet sets the DAO", out(), '{"dao":"' .. F.dao .. '","ok":true}')
   check("an owner change is published at once", base.fairrev ~= revGov
     and json.decode(base.fairstate).owners.dao == F.dao, base.fairrev)
-  check("fairinfo publishes the owners", base.fairinfo:find('"gov":{"approved":"","code":"","dao":"' .. F.dao
+  check("fairinfo publishes the owners", base.fairinfo:find('"gov":{"approved":"","approvedAt":0,"code":"","dao":"' .. F.dao
     .. '","version":0,"wallet":true}', 1, true) ~= nil, base.fairinfo:match('"gov":%b{}'))
   send(wallet(F.owner, { Action = "gov.set_dao", dao = F.dao }))
   eq("verb and tag names fold case, - and _", out(), '{"dao":"' .. F.dao .. '","ok":true}')
@@ -647,13 +652,50 @@ local function runFairTests()
   eq("a stranger cannot configure", send(wallet(F.stranger, { Action = "Fair.Configure", Keep = "4" })).error, "Not authorised")
   eq("the DAO's address as a wallet is nobody", send(wallet(F.dao, { Action = "Fair.Configure", Keep = "4" })).error,
     "Not authorised")
+  -- requestPrice is money: it waits the floor.
+  local price0 = Fair.state.price
+  r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5" }))
+  check("a requestPrice change without Effective-At is refused", r.error == "Effective-At-Required" and Fair.state.price == price0, out())
+  eq("short of the floor", send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5",
+    ["Effective-At"] = at(-1) })).error, "Effective-At-Too-Soon")
+  eq("bounds checked on proposal", send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "0",
+    ["Effective-At"] = at() })).error, "Bad-Parameter")
+  r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5", ["Effective-At"] = at() }))
+  local pid1 = r.pending and r.pending.id
+  check("pending and published", pid1 and Fair.state.price == price0 and finfo().govPending[1].id == pid1
+    and finfo().hatch == true and json.decode(base.fairstate).gov.pending[tostring(pid1)] ~= nil, out())
+  eq("apply before due refused", apply(pid1).error, "Too-Early")
+  local gw = Fair.state.accounts[F.game] and Fair.state.accounts[F.game].balance or 0
+  if gw > 0 then
+    r = send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "900", Quantity = "1" }))
+    check("a game withdraws its free balance while it waits", r.withdrawn == 1, out())
+  end
+  due(pid1)
+  r = apply(pid1)
+  check("anyone applies it once due; the hatch closes", r.applied == pid1 and Fair.state.price == 5 * Fair.state.unit
+    and finfo().hatch == false and #finfo().govPending == 0, out())
+  check("the same price again is harmless", send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5" })).ok == true)
+  r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "6", ["Effective-At"] = at() }))
+  eq("the DAO cancels", send(delivery(F.dao, { Action = "Gov.Cancel", ["Gov-Id"] = tostring(r.pending.id) })).cancelled, r.pending.id)
+  eq("a stranger cannot cancel", send(wallet(F.stranger, { Action = "Gov.Cancel", ["Gov-Id"] = "1" })).error, "Not authorised")
+  r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "6", ["Effective-At"] = at() }))
+  Fair.gov.pending[tostring(r.pending.id)].effectiveAt = clock - 14 * 86400000 - 1
+  send(wallet(F.stranger, { Action = "Get-Info" }))
+  check("a lapsed entry is dropped", #finfo().govPending == 0 and apply(r.pending.id).error == "Unknown-Gov-Id")
+  eq("the DAO's Set-Dao waits", send(delivery(F.dao, { Action = "Gov.Set-Dao", Dao = F.other })).error, "Effective-At-Required")
 
   -- Code: approved by an owner, uploaded by anyone; the state carries over.
   local code = "local prev = compute\nFairUpgrade = 1\nfunction compute(b, r) return prev(b, r) end"
   send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code }))
   eq("unapproved code is refused", out(), '{"error":"No approved code","ok":false}')
   send(delivery(F.dao, { Action = "Gov.Approve-Code", ["Code-Root"] = Gov.rootOf(code) }))
-  eq("the DAO approves a root", out(), '{"approved":"' .. Gov.rootOf(code) .. '","ok":true}')
+  eq("the DAO's approval needs Effective-At", out(), '{"error":"Effective-At-Required","ok":false}')
+  local codeAt = at()
+  send(delivery(F.dao, { Action = "Gov.Approve-Code", ["Code-Root"] = Gov.rootOf(code), ["Effective-At"] = codeAt }))
+  eq("the DAO approves a root", out(), '{"approved":"' .. Gov.rootOf(code) .. '","effectiveAt":' .. codeAt .. ',"ok":true}')
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code }))
+  eq("not before its Effective-At", out(), '{"effectiveAt":' .. codeAt .. ',"error":"Not-Yet-Effective","ok":false}')
+  GovState.approvedAt = clock -- white box: now due
   send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code }))
   eq("anyone uploads the approved code", out(), '{"installed":"' .. Gov.rootOf(code) .. '","ok":true,"version":1}')
   check("the new code runs on the same state", FairUpgrade == 1 and Fair.state.keep == 3 and finfo().gov.version == 1)
@@ -665,6 +707,15 @@ local function runFairTests()
   eq("the wallet renounces", out(), '{"ok":true,"wallet":false}')
   eq("the wallet is out", configure({ keep = 4 }).error, "Not authorised")
   check("the DAO still configures", send(delivery(F.dao, { Action = "Fair.Configure", Keep = "4" })).ok == true)
+  eq("the renounced wallet cannot cancel", send(wallet(F.owner, { Action = "Gov.Cancel", ["Gov-Id"] = "code" })).error, "Not authorised")
+  r = send(delivery(F.dao, { Action = "Gov.Set-Dao", Dao = F.other, ["Effective-At"] = at() }))
+  due(r.pending.id)
+  r = apply(r.pending.id)
+  check("the DAO's Set-Dao applies once due", r.dao == F.other and finfo().gov.dao == F.other, out())
+  r = send(delivery(F.other, { Action = "Gov.Set-Dao", Dao = F.dao, ["Effective-At"] = at() }))
+  due(r.pending.id)
+  apply(r.pending.id)
+  eq("and back", finfo().gov.dao, F.dao)
 
   -- A cold VM: the owners come back from fairstate; never a renounced wallet.
   Fair = { rev = 0, owner = "", state = fair.new() }

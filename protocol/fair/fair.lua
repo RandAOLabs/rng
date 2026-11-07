@@ -19,13 +19,20 @@
 --   Fair.Withdraw { Nonce [, Quantity] }                  the game: its free balance back (atoms);
 --                                                         Nonce strictly increasing per game
 --   Fair.Configure { Beacon, Token, Request-Price, Fair-Window-Ms, Keep,  an owner (the wallet
---                    Max-Open, Min-Interval-Ms, Max-Games, Max-Per-Game }  or the DAO), at once;
+--                    Max-Open, Min-Interval-Ms, Max-Games, Max-Per-Game }  or the DAO);
 --     as tags (any spelling of case, - and _), or in Data (JSON) from the
 --     wallet only. beacon and token are fixed once set; requestPrice is the
---     beacon's (whole RNG) and must follow a governance change of it.
+--     beacon's (whole RNG) and must follow a governance change of it (the DAO
+--     gives both the same Effective-At). From the DAO, a change of
+--     requestPrice, or naming the beacon or token, is money: it waits for
+--     Effective-At >= receipt + 24 h (Gov.Apply); the rest applies at once.
 --   Gov.Set-Dao / Gov.Renounce-Wallet / Gov.Approve-Code / Gov.Upgrade
---     vendor/gov.lua: two equal owners, the launch wallet until it renounces
---     and the DAO Gov.Set-Dao names (a from-process our scheduler attests).
+--     vendor/gov.lua. The launch wallet bootstraps and renounces; then the
+--     DAO (a from-process our scheduler attests) is the only owner. Its
+--     Gov.Set-Dao and Gov.Approve-Code wait for Effective-At like money.
+--   Gov.Apply { Gov-Id } (anyone, once due) / Gov.Cancel { Gov-Id } (an owner)
+--     Games withdraw their free balance at any time (Fair.Withdraw), so the
+--     exit hatch here is that and nothing more.
 --   Get-Info                                              anyone; also sends a due request
 -- Sends: Request-Random -> beacon (from this process's beacon balance, a float
 --        topped up from the games' payment after every bound batch),
@@ -44,10 +51,12 @@ local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
 --- gov.lua's owner record (GovState) at spawn: the wallet on, no DAO.
 local function freshOwners(wallet)
-  return { dao = "", wallet = wallet, approved = "", code = { sha = "", version = 0 } }
+  return { dao = "", wallet = wallet, approved = "", approvedAt = 0, code = { sha = "", version = 0 } }
 end
 
-Fair = Fair or { rev = 0, owner = "", owners = freshOwners(true), state = fair.new({ metered = true }) }
+-- gov: the DAO's actions waiting for their Effective-At (vendor/gov.lua QUEUE HELPERS).
+Fair = Fair or { rev = 0, owner = "", owners = freshOwners(true), gov = { pending = {}, nextId = 1 },
+  state = fair.new({ metered = true }) }
 
 local function deepCopy(v)
   if type(v) ~= "table" then return v end
@@ -71,7 +80,8 @@ local function restore(base)
     for k, v in pairs(deflate(saved.state or {})) do st[k] = v end
     -- A published state without owners has none: never re-arm the wallet.
     local owners = type(saved.owners) == "table" and deflate(saved.owners) or freshOwners(false)
-    Fair = { rev = math.tointeger(saved.rev) or 0, owner = saved.owner or "", owners = owners, state = st }
+    local gov = type(saved.gov) == "table" and deflate(saved.gov) or { pending = {}, nextId = 1 }
+    Fair = { rev = math.tointeger(saved.rev) or 0, owner = saved.owner or "", owners = owners, gov = gov, state = st }
     return true
   end
   return false
@@ -86,17 +96,21 @@ local function bindOwners(reloaded)
   if type(o) ~= "table" then o = freshOwners(false); Fair.owners = o end
   if type(o.code) ~= "table" then o.code = { sha = "", version = 0 } end
   if reloaded and (o.code.sha or "") ~= "" then
-    if (o.approved or "") == "" then o.approved = o.code.sha end
+    if (o.approved or "") == "" then o.approved, o.approvedAt = o.code.sha, 0 end
     o.code = { sha = "", version = math.tointeger(o.code.version) or 0 }
   end
+  o.approvedAt = math.tointeger(o.approvedAt) or 0
   GovState = o
 end
 
---- The owner record as one string, to tell whether a message changed it.
+--- The owner record and the pending queue as one string, to tell whether a
+--- message changed either.
 local function ownersKey()
-  local o = Fair.owners
-  return table.concat({ tostring(o.dao), tostring(o.wallet), tostring(o.approved),
-    tostring(o.code.sha), tostring(o.code.version) }, "|")
+  local o, g = Fair.owners, Fair.gov or {}
+  local n = 0
+  for _ in pairs(type(g.pending) == "table" and g.pending or {}) do n = n + 1 end
+  return table.concat({ tostring(o.dao), tostring(o.wallet), tostring(o.approved), tostring(o.approvedAt),
+    tostring(o.code.sha), tostring(o.code.version), tostring(g.nextId), tostring(n) }, "|")
 end
 
 --- A message must be signed for THIS process, so a commit or reveal signed
@@ -289,6 +303,92 @@ local function configure(raw, who)
     maxPerGame = st.maxPerGame }, {}
 end
 
+--- Money: requestPrice (what every session reserves from a game) changed,
+--- or the beacon or token named while unset. Gov.Set-Dao is money too.
+local function fairClass(verb, raw)
+  if verb == "gov.setdao" then return "money" end
+  local d = configArgs(raw, "dao")
+  if not d then return "harmless" end -- refused on the dry run
+  local st = Fair.state
+  if d.requestPrice ~= nil and math.tointeger(d.requestPrice) ~= (st.price or 0) // math.max(1, st.unit or 1) then
+    return "money"
+  end
+  if (d.beacon ~= nil and st.beacon == "") or (d.token ~= nil and st.token == "") then return "money" end
+  return "harmless"
+end
+
+local function applyFair(verb, raw)
+  if verb == "gov.setdao" then
+    local dao = raw.Dao or raw.dao
+    if type(dao) ~= "string" or #dao ~= 43 or not dao:match("^[%w_%-]+$") then
+      return nil, "Dao must be a 43-character process id"
+    end
+    GovState.dao = dao
+    return { ok = true, dao = dao }, {}
+  end
+  return configure(raw, "dao")
+end
+
+local NOT_ARGS = { commitments = true, ["from-process"] = true, target = true, data = true, tags = true,
+  ["effective-at"] = true, ["x-dao-proposal"] = true, id = true, slot = true, timestamp = true }
+
+--- The DAO's Fair.Configure or Gov.Set-Dao: harmless with no later
+--- Effective-At applies now; otherwise a dry run on a copy, then its
+--- Effective-At, then stored for Gov.Apply.
+local function propose(verb, raw, now)
+  local class = fairClass(verb, raw)
+  local v = raw["Effective-At"] or raw["effective-at"]
+  local later = v ~= nil and (math.tointeger(tonumber(v)) or 0) > now
+  if class == "harmless" and not later then return applyFair(verb, raw) end
+  local realSt, realOwners = Fair.state, GovState
+  Fair.state, GovState = deepCopy(realSt), deepCopy(realOwners)
+  local ok, d, why = pcall(applyFair, verb, raw)
+  Fair.state, GovState = realSt, realOwners
+  if not ok then error(d, 0) end
+  if d == nil then return nil, why end
+  local at, err = Gov.when(raw, class, now)
+  if not at then return nil, err, { class = class, earliest = class == "money" and now + Gov.EXIT_FLOOR_MS or nil } end
+  local args, parts = {}, {}
+  for k, x in pairs(raw) do
+    if type(k) == "string" and type(x) == "string" and not NOT_ARGS[k:lower()] then
+      args[k] = x
+      if k:lower() ~= "action" then parts[#parts + 1] = k .. "=" .. x end
+    end
+  end
+  table.sort(parts)
+  local e, serr = Gov.schedule(Gov.queueOf(Fair.gov), { verb = verb, class = class, effectiveAt = at, args = args,
+    summary = (verb == "gov.setdao" and "Gov.Set-Dao " or "Fair.Configure ") .. table.concat(parts, " "):sub(1, 256) }, now)
+  if not e then return nil, serr end
+  return { pending = { id = e.id, verb = verb == "gov.setdao" and "Gov.Set-Dao" or "Fair.Configure", class = class,
+    effectiveAt = at } }, {}
+end
+
+local function govApply(raw, now)
+  local q = Gov.queueOf(Fair.gov)
+  local e, key = Gov.due(q, raw["Gov-Id"] or raw["gov-id"], now)
+  if not e then return nil, key end
+  local d, why = applyFair(e.verb, e.args)
+  if d == nil then return nil, why, { govId = e.id } end
+  q.pending[key] = nil
+  d.applied = e.id
+  return d, {}
+end
+
+local function govCancel(raw, who)
+  if who == nil then return nil, "Not authorised" end
+  local id = raw["Gov-Id"] or raw["gov-id"]
+  if tostring(id):lower() == "code" then
+    if not Gov.cancelCode() then return nil, "Unknown-Gov-Id" end
+    return { cancelled = "code" }, {}
+  end
+  local n = math.tointeger(tonumber(id))
+  local key = n and string.format("%d", n) or ""
+  local q = Gov.queueOf(Fair.gov)
+  if not q.pending[key] then return nil, "Unknown-Gov-Id" end
+  q.pending[key] = nil
+  return { cancelled = n }, {}
+end
+
 --- The game registry as JSON objects (empty `allow` maps stay objects).
 local function gamesState(games)
   local out = {}
@@ -316,9 +416,31 @@ function compute(base, req)
   local changesBefore = st.changes or 0
   local refused = TargetRefusal(raw, req)
   local result
+  Fair.gov = type(Fair.gov) == "table" and Fair.gov or {}
+  Gov.prune(Gov.queueOf(Fair.gov), now)
+  local who = not refused and Gov.ownerOf(base, raw) or nil
+  local verb = norm(action)
   if refused then
     result = reply(base, { error = refused })
-  elseif GOV_VERBS[norm(action)] then
+  elseif (who == "dao" and (verb == "fair.configure" or verb == "gov.setdao")) or verb == "gov.apply" or verb == "gov.cancel" then
+    local saved, savedOwners = deepCopy(st), deepCopy(GovState)
+    local ok, data, outbox, extra = pcall(function()
+      if verb == "gov.apply" then return govApply(raw, now) end
+      if verb == "gov.cancel" then return govCancel(raw, who) end
+      return propose(verb, raw, now)
+    end)
+    if not ok then
+      Fair.state, st = saved, saved
+      for k, v in pairs(savedOwners) do GovState[k] = v end
+      result = reply(base, { error = tostring(data) })
+    elseif data == nil then
+      local e = { error = outbox }
+      for k, v in pairs(type(extra) == "table" and extra or {}) do e[k] = v end
+      result = reply(base, e)
+    else
+      result = reply(base, data, outbox)
+    end
+  elseif GOV_VERBS[verb] then
     Gov.handle(base, req)
     base.results.outbox = {}
     result = base
@@ -356,7 +478,8 @@ function compute(base, req)
   if (st.changes or 0) == changesBefore and base.fairstate ~= nil then return result end
   Fair.rev = Fair.rev + 1
   result.fairrev = string.format("%d", Fair.rev)
-  result.fairstate = encode({ rev = Fair.rev, owner = Fair.owner, owners = Fair.owners, state = {
+  result.fairstate = encode({ rev = Fair.rev, owner = Fair.owner, owners = Fair.owners,
+    gov = { pending = jsonObject(Fair.gov.pending or {}), nextId = Fair.gov.nextId or 1 }, state = {
     beacon = st.beacon, windowMs = st.windowMs, keep = st.keep, maxOpen = st.maxOpen,
     sessions = jsonObject(st.sessions), byGame = jsonObject(st.byGame), done = jsonObject(st.done),
     open = st.open, next = st.next, batches = jsonObject(st.batches), bound = st.bound,
@@ -375,7 +498,8 @@ function compute(base, req)
     minIntervalMs = st.minIntervalMs, maxGames = st.maxGames, maxPerGame = st.maxPerGame, games = st.gameCount,
     token = st.token, requestPriceAtoms = st.price, transferSeq = st.transferSeq,
     requestAfter = st.lastRequestAt and (st.lastRequestAt + st.minIntervalMs) or 0,
-    -- gov.lua's owners: { dao, wallet, approved, code, version }.
-    gov = Gov.info() })
+    -- gov.lua's owners: { dao, wallet, approved, approvedAt, code, version }.
+    gov = Gov.info(), govPending = Gov.pendingView(Gov.queueOf(Fair.gov), now),
+    hatch = Gov.hatchOpen(Gov.queueOf(Fair.gov), now), exitFloorMs = Gov.EXIT_FLOOR_MS })
   return result
 end

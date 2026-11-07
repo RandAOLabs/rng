@@ -128,6 +128,8 @@ for (const n of ['q1c', 'q2c', 'q3c', 'q4c', 'o1a', 'o1b', 'o1c', 'o2a', 'o2b', 
   'o4a', 'o4b', 'o5a', 'o5b']) puzzle(n, F.h2);
 // v3: request-driven rounds served by c and d.
 for (const n of ['d1c', 'd1d', 'd2c', 'd2d']) puzzle(n, F.h2);
+// The exit hatch: rounds a validator owes when it leaves.
+for (const n of ['x1c', 'x1d', 'x2d']) puzzle(n, F.h2);
 answer('verify-reveal', { c: P.r1a.c, alpha: P.r1b.alpha, h: F.h }); // wrong secret
 // Round 2: c withholds, a stranger cracks it with N - y; round 3: a cracks c.
 F.crack2 = crack(P.r2c.c, T, big(P.r2c.y) === modPow(big(P.r2c.c), 1n << BigInt(T)));

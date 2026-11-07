@@ -6,8 +6,11 @@
 ---     sends Gov.Renounce-Wallet;
 ---   * the DAO: a process (`GovState.dao`, "" until Gov.Set-Dao), whose passed
 ---     proposal arrives as a push from that process, signed by THIS process's
----     scheduler. A passed proposal is one tags-only message and takes effect
----     on receipt.
+---     scheduler. A passed proposal is one tags-only message. The DAO's
+---     code approval carries `Effective-At` (ms, scheduler time) at least
+---     Gov.EXIT_FLOOR_MS after receipt, and the code installs only from then
+---     on (EFFECTIVE-AT below). The contract schedules the DAO's other money
+---     and code verbs (its Gov.Set-Dao included) with the QUEUE HELPERS.
 --- Identity comes only from the raw body's `commitments`: exactly one RSA-PSS
 --- committer (algorithm read from `type` OR `alg`), no other non-hmac
 --- committer beside it. Never a tag, never an hmac.
@@ -16,7 +19,8 @@
 ---   Gov.Set-Dao        Dao=<43-char pid>       owner (wallet or DAO)
 ---   Gov.Renounce-Wallet                        wallet only, one way; refused
 ---                                              while no DAO is set
----   Gov.Approve-Code   Code-Root=<64 hex>      owner; latest approval wins
+---   Gov.Approve-Code   Code-Root=<64 hex>      owner; latest approval wins;
+---                      Effective-At=<ms>       the DAO's: >= receipt + EXIT_FLOOR_MS
 ---   Gov.Upgrade        Data=<code>             one message, see below
 ---   Gov.Upgrade        Part=0 Data=<manifest>  starts a chunked upload
 ---   Gov.Upgrade        Part=i Data=<part i>    i = 1..n, any order
@@ -87,6 +91,23 @@
 ---                                      every spawn-time or runtime-sealed
 ---                                      config a bundle assigns outright
 ---
+--- EFFECTIVE-AT. A DAO approval records the root and `approvedAt` (its
+--- Effective-At). Parts may be uploaded at once, but nothing installs before
+--- approvedAt: the last part (or a one-message upload) that arrives early is
+--- answered Not-Yet-Effective, the parts are kept, and once due any part or
+--- the manifest sent again installs it. An approval not installed within
+--- Gov.PENDING_EXPIRE_MS after approvedAt lapses. The wallet's approvals
+--- (bootstrap only) have approvedAt 0: at once. EXIT_FLOOR_MS is a constant
+--- of this file: no vote lowers it, and only new code (which itself waits
+--- the floor) could.
+---
+--- QUEUE HELPERS (Gov.when, Gov.schedule, Gov.due, Gov.prune, Gov.hatchOpen,
+--- Gov.pendingView) keep a contract's pending DAO actions in a table it owns
+--- ({ pending = { [id] = entry }, nextId }); an entry is { id, verb, class
+--- ("money" or "harmless"), effectiveAt, proposedAt, args, summary }. A
+--- pending "money" entry, or a pending DAO code approval, opens the exit
+--- hatch (Gov.hatchOpen): the contract then lets validators leave at once.
+---
 --- COLD RESTORE. `GovState` lives only in the VM. A contract's restore path
 --- calls `Gov.restore(published, field[, rebuilt])` with its own info key (raw
 --- or decoded) and the name `Gov.info()` sits under in it, so a rebuilt VM gets
@@ -102,10 +123,17 @@
 -- its 200-local limit. Only the globals `Gov` and `GovState` leave this block.
 do
 Gov = {}
-GovState = GovState or { dao = "", wallet = true, approved = "", code = { sha = "", version = 0 } }
+GovState = GovState or { dao = "", wallet = true, approved = "", approvedAt = 0, code = { sha = "", version = 0 } }
 
 Gov.PART_MAX = 16 * 1024
 Gov.MAX_CODE = 2 * 1024 * 1024
+local DAY_MS = 86400000
+--- A DAO money or code action takes effect no sooner than this after it
+--- arrives. A constant: no vote can lower it.
+Gov.EXIT_FLOOR_MS = DAY_MS
+Gov.PENDING_EXPIRE_MS = 14 * DAY_MS -- a pending action not applied this long after it is due lapses
+Gov.MAX_AHEAD_MS = 90 * DAY_MS      -- Effective-At at most this far ahead
+Gov.MAX_PENDING = 32                -- pending actions held at once
 
 local SIG = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
@@ -199,8 +227,118 @@ end
 function Gov.info()
   return {
     dao = GovState.dao, wallet = GovState.wallet == true, approved = GovState.approved,
-    code = GovState.code.sha, version = GovState.code.version,
+    approvedAt = int(GovState.approvedAt) or 0, code = GovState.code.sha, version = GovState.code.version,
   }
+end
+
+---------------------------------------------------------------------------
+-- Effective-At and the pending queue
+---------------------------------------------------------------------------
+
+--- When a DAO action of `class` ("money" or "harmless") arriving at `now`
+--- takes effect: its Effective-At, or now. Money needs Effective-At >= now +
+--- EXIT_FLOOR_MS. Returns the time, or nil and why.
+function Gov.when(msg, class, now)
+  local v = tag(msg, "Effective-At")
+  local at = nil
+  if v ~= nil then
+    at = int(v)
+    if not at then return nil, "Effective-At must be whole milliseconds" end
+  end
+  if class == "money" then
+    if at == nil then return nil, "Effective-At-Required" end
+    if at < now + Gov.EXIT_FLOOR_MS then return nil, "Effective-At-Too-Soon" end
+  end
+  if at and at > now + Gov.MAX_AHEAD_MS then return nil, "Effective-At-Too-Far" end
+  if at == nil or at < now then at = now end
+  return at
+end
+
+function Gov.queueOf(t)
+  t.pending = type(t.pending) == "table" and t.pending or {}
+  t.nextId = int(t.nextId) or 1
+  return t
+end
+
+--- Drop pending entries PENDING_EXPIRE_MS past due, and a DAO code approval
+--- likewise. True when anything lapsed.
+function Gov.prune(q, now)
+  local gone = {}
+  for id, e in pairs(q.pending) do
+    if now > (int(e.effectiveAt) or 0) + Gov.PENDING_EXPIRE_MS then gone[#gone + 1] = id end
+  end
+  for _, id in ipairs(gone) do q.pending[id] = nil end
+  local at = int(GovState.approvedAt) or 0
+  if GovState.approved ~= "" and at > 0 and now > at + Gov.PENDING_EXPIRE_MS then
+    GovState.approved, GovState.approvedAt, GovUpload = "", 0, nil
+    gone[#gone + 1] = "code"
+  end
+  return #gone > 0
+end
+
+--- Store an entry; returns it (with its id) or nil and why.
+function Gov.schedule(q, e, now)
+  Gov.prune(q, now)
+  local n = 0
+  for _ in pairs(q.pending) do n = n + 1 end
+  if n >= Gov.MAX_PENDING then return nil, "Too-Many-Pending" end
+  e.id, e.proposedAt = q.nextId, now
+  q.nextId = q.nextId + 1
+  q.pending[string.format("%d", e.id)] = e
+  return e
+end
+
+--- The entry `id` and its key when it may apply now, else nil and why (a
+--- lapsed one is dropped).
+function Gov.due(q, id, now)
+  local n = int(id)
+  local key = n and string.format("%d", n) or nil
+  local e = key and q.pending[key] or nil
+  if not e then return nil, "Unknown-Gov-Id" end
+  if now < (int(e.effectiveAt) or 0) then return nil, "Too-Early" end
+  if now > (int(e.effectiveAt) or 0) + Gov.PENDING_EXPIRE_MS then q.pending[key] = nil; return nil, "Expired" end
+  return e, key
+end
+
+--- A DAO code approval not yet installed and not lapsed.
+function Gov.codePending(now)
+  local at = int(GovState.approvedAt) or 0
+  return GovState.approved ~= "" and at > 0 and GovState.approved ~= GovState.code.sha
+    and now <= at + Gov.PENDING_EXPIRE_MS
+end
+
+--- Drop the code approval (Gov.Cancel Gov-Id=code). True when there was one.
+function Gov.cancelCode()
+  if GovState.approved == "" then return false end
+  GovState.approved, GovState.approvedAt, GovUpload = "", 0, nil
+  return true
+end
+
+--- The exit hatch: open while a passed money or code action is pending.
+function Gov.hatchOpen(q, now)
+  for _, e in pairs(q.pending) do
+    if e.class == "money" and now <= (int(e.effectiveAt) or 0) + Gov.PENDING_EXPIRE_MS then return true end
+  end
+  return Gov.codePending(now)
+end
+
+--- Published as `govPending`: id, verb, class, effectiveAt, expiresAt, summary.
+function Gov.pendingView(q, now)
+  local out = {}
+  for _, e in pairs(q.pending) do
+    local at = int(e.effectiveAt) or 0
+    if now <= at + Gov.PENDING_EXPIRE_MS then
+      out[#out + 1] = { id = e.id, verb = e.verb, class = e.class, effectiveAt = at,
+        expiresAt = at + Gov.PENDING_EXPIRE_MS, summary = e.summary }
+    end
+  end
+  table.sort(out, function(a, b) return (int(a.id) or 0) < (int(b.id) or 0) end)
+  if Gov.codePending(now) then
+    local at = int(GovState.approvedAt) or 0
+    out[#out + 1] = { id = "code", verb = "Gov.Approve-Code", class = "money", effectiveAt = at,
+      expiresAt = at + Gov.PENDING_EXPIRE_MS, summary = "Code-Root=" .. GovState.approved }
+  end
+  return out
 end
 
 local function isHex64(v)
@@ -232,7 +370,8 @@ function Gov.restore(published, field, rebuilt)
   if approved == "" and isHex64(info.code) then approved = info.code end
   GovState = {
     dao = validId(info.dao) and info.dao or "", wallet = s.wallet and info.wallet ~= false,
-    approved = approved, code = { sha = "", version = int(info.version) or 0 }, checked = true,
+    approved = approved, approvedAt = approved == info.approved and int(info.approvedAt) or 0,
+    code = { sha = "", version = int(info.version) or 0 }, checked = true,
   }
 end
 
@@ -313,12 +452,33 @@ end
 local function installRoot(code, root)
   local ok, err = Gov.install(code, root)
   if not ok then return { ok = false, error = err, root = root } end
-  GovState.approved = ""; GovUpload = nil
+  GovState.approved, GovState.approvedAt = "", 0; GovUpload = nil
   return { ok = true, installed = root, version = GovState.code.version }
 end
 
+--- nil when the approved root may install at `now`, else the refusal (a DAO
+--- approval waits for its Effective-At).
+local function early(now)
+  local at = int(GovState.approvedAt) or 0
+  if at > 0 and now < at then return { ok = false, error = "Not-Yet-Effective", effectiveAt = at } end
+  if at > 0 and now > at + Gov.PENDING_EXPIRE_MS then
+    GovState.approved, GovState.approvedAt, GovUpload = "", 0, nil
+    return { ok = false, error = "Approval-Expired" }
+  end
+  return nil
+end
+
+--- A complete upload installs once due; until then its parts are kept.
+local function finish(u, now)
+  local wait = early(now)
+  if wait then wait.parts, wait.have = u.n, u.have; return wait end
+  GovUpload = nil
+  local out = installRoot(table.concat(u.parts), u.root)
+  return out, out.ok
+end
+
 --- Returns the reply and whether owners/code changed.
-local function upgrade(base, msg, who)
+local function upgrade(base, msg, who, now)
   if not Gov.signerOf(msg) then return { ok = false, error = "Not signed" } end
   local data = msg.data or msg.Data or msg.body
   if type(data) ~= "string" or data == "" then return { ok = false, error = "No code" } end
@@ -334,6 +494,10 @@ local function upgrade(base, msg, who)
     if root == GovState.code.sha then return current(root) end
     if who ~= "wallet" and root ~= approved then
       return { ok = false, error = "Code does not match the approved root", root = root }
+    end
+    if who ~= "wallet" then
+      local wait = early(now)
+      if wait then return wait end
     end
     local out = installRoot(data, root)
     return out, out.ok
@@ -362,6 +526,7 @@ local function upgrade(base, msg, who)
     if root == GovState.code.sha then return current(root) end
     local u = GovUpload
     if root == approved and type(u) == "table" and u.root == root then
+      if u.have == u.n then return finish(u, now) end
       return { ok = true, part = 0, parts = u.n, have = u.have, root = root }
     end
     local changed = false
@@ -369,7 +534,10 @@ local function upgrade(base, msg, who)
       if who == nil then
         return { ok = false, error = "Manifest does not match the approved root", root = root }
       end
-      GovState.approved, changed = root, true
+      local at, err = 0, nil
+      if who == "dao" then at, err = Gov.when(msg, "money", now) end
+      if not at then return { ok = false, error = err } end
+      GovState.approved, GovState.approvedAt, changed = root, at, true
     end
     GovUpload = { root = root, hashes = hashes, n = #hashes, parts = {}, have = 0 }
     return { ok = true, part = 0, parts = #hashes, have = 0, root = root,
@@ -381,7 +549,10 @@ local function upgrade(base, msg, who)
     return { ok = false, error = "No upload in progress; send the manifest as Part=0" }
   end
   if part < 1 or part > u.n then return { ok = false, error = "Part must be 0.." .. u.n } end
-  if u.parts[part] then return { ok = true, part = part, parts = u.n, have = u.have } end
+  if u.parts[part] then
+    if u.have == u.n then return finish(u, now) end
+    return { ok = true, part = part, parts = u.n, have = u.have }
+  end
   if #data > Gov.PART_MAX then return { ok = false, error = "Part too large" } end
   local sha = Sha256.hex(data)
   if sha ~= u.hashes[part] then
@@ -389,9 +560,7 @@ local function upgrade(base, msg, who)
   end
   u.parts[part], u.have = data, u.have + 1
   if u.have < u.n then return { ok = true, part = part, parts = u.n, have = u.have } end
-  GovUpload = nil
-  local out = installRoot(table.concat(u.parts), u.root)
-  return out, out.ok
+  return finish(u, now)
 end
 
 --- Handle a Gov.* message. True when it was one (the reply is set).
@@ -402,6 +571,7 @@ function Gov.handle(base, req)
   if type(action) ~= "string" or string.sub(key(action), 1, 4) ~= "gov." then return false end
   action = key(action)
   local who = Gov.ownerOf(base, msg)
+  local now = int(req.timestamp or req.Timestamp) or 0
   -- An install re-runs this file, so `Gov` is then a new table. Its hooks
   -- are the new code's when that code set them at load, and otherwise (a
   -- contract that binds them per slot) the old code's finish the slot.
@@ -411,6 +581,8 @@ function Gov.handle(base, req)
     local dao = tag(msg, "Dao")
     if not who then out = { ok = false, error = "Not authorised" }
     elseif not validId(dao) then out = { ok = false, error = "Dao must be a 43-character process id" }
+    -- The DAO's own Set-Dao is a control change: the contract schedules it.
+    elseif who == "dao" then out = { ok = false, error = "Effective-At-Required" }
     else GovState.dao = dao; out = { ok = true, dao = dao } end
     dirty = out.ok
   elseif action == "gov.renouncewallet" then
@@ -424,12 +596,18 @@ function Gov.handle(base, req)
     elseif not isHex64(root) then
       out = { ok = false, error = "Code-Root must be 64 lowercase hex" }
     else
-      if root ~= GovState.approved then GovUpload = nil end
-      GovState.approved = root; out = { ok = true, approved = root }
+      local at, err = 0, nil
+      if who == "dao" then at, err = Gov.when(msg, "money", now) end
+      if not at then out = { ok = false, error = err }
+      else
+        if root ~= GovState.approved then GovUpload = nil end
+        GovState.approved, GovState.approvedAt = root, at
+        out = { ok = true, approved = root, effectiveAt = at > 0 and at or nil }
+      end
     end
     dirty = out.ok
   elseif action == "gov.upgrade" then
-    out, dirty = upgrade(base, msg, who)
+    out, dirty = upgrade(base, msg, who, now)
   else
     out = { ok = false, error = "Unknown Gov action" }
   end

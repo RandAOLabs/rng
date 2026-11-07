@@ -312,11 +312,24 @@ function runBeaconTests()
   eq("device mode does not pay the submitting non-participant", Beacon.accrued[F.members[3]], 2)
   ao = savedAo
 
-  -- Owners (vendor/gov.lua): the launch wallet and the DAO Gov.Set-Dao names,
-  -- equal, every action on receipt; the wallet until Gov.Renounce-Wallet.
+  -- Owners (vendor/gov.lua): the launch wallet bootstraps and renounces; the
+  -- DAO's money and code actions wait for Effective-At >= receipt + 24 h
+  -- and open the exit hatch; fees, pause and resume apply at once.
   -- Replies are asserted as the raw text the node returns.
   local function out() return base.results.output.data end
   local function govInfo() return info().gov end
+  local FLOOR = 86400000
+  local function at(extra) return string.format("%d", clock + 1000 + FLOOR + (extra or 0)) end
+  local function apply(id) return send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(id) })) end
+  -- White box: made due by moving its Effective-At to now.
+  local function due(id) Beacon.gov.pending[tostring(id)].effectiveAt = clock end
+  local function enact(fields, pid)
+    fields["Effective-At"] = fields["Effective-At"] or at()
+    local res, o = send(delivery(pid or F.dao, fields))
+    if not res.pending then return res, o end
+    due(res.pending.id)
+    return apply(res.pending.id)
+  end
   dao({ Action = "Gov.Pause" })
   eq("no DAO yet: a DAO delivery is nobody", out(), '{"error":"Not authorised"}')
   send(wallet(F.stranger, { Action = "Gov.Set-Dao", Dao = F.dao }))
@@ -340,10 +353,11 @@ function runBeaconTests()
   check("refusals named no DAO", govInfo().dao == "" and govInfo().wallet == true)
   send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.dao }))
   eq("the wallet sets the DAO", out(), '{"dao":"' .. F.dao .. '","ok":true}')
-  check("beaconinfo publishes the owners", base.beaconinfo:find('"gov":{"approved":"","code":"","dao":"' .. F.dao
+  check("beaconinfo publishes the owners", base.beaconinfo:find('"gov":{"approved":"","approvedAt":0,"code":"","dao":"' .. F.dao
     .. '","version":0,"wallet":true}', 1, true) ~= nil, base.beaconinfo:match('"gov":%b{}'))
-  check("no governor or queue is published", info().governor == nil and info().govQueue == nil)
-  for _, gone in ipairs({ "Gov.Handover", "Gov.Apply", "Gov.Cancel", "Gov.Fund", "Gov.Mint" }) do
+  check("no governor; an empty queue and a shut hatch are published", info().governor == nil
+    and #info().govPending == 0 and info().hatch == false and info().exitFloorMs == FLOOR)
+  for _, gone in ipairs({ "Gov.Handover", "Gov.Fund", "Gov.Mint" }) do
     send(wallet(F.owner, { Action = gone, Governor = F.dao, ["Gov-Id"] = "1" }))
     eq(gone .. " does not exist", out(), '{"error":"unknown action \'' .. gone .. '\'"}')
   end
@@ -354,7 +368,7 @@ function runBeaconTests()
   eq("one tag spelled twice with two values is no tag", out(), '{"error":"Dao must be a 43-character process id","ok":false}')
   eq("the DAO is unchanged", govInfo().dao, F.dao)
 
-  -- Both owners act, at once.
+  -- Fees are harmless: on receipt. The committee and the fee share are money.
   eq("the DAO's address as a wallet is nobody", send(wallet(F.dao, { Action = "Gov.Pause" })).error, "Not authorised")
   eq("a wallet forging the DAO's from-process is nobody",
     send(wallet(F.stranger, { Action = "Gov.Pause", ["from-process"] = F.dao })).error, "Not authorised")
@@ -366,12 +380,47 @@ function runBeaconTests()
   r = deployer({ ["Signer-Fee"] = "3" })
   check("the wallet still governs beside the DAO", r.ok == true and r.signerFee == 3, r.error)
   dao({ Action = "Gov.Configure", ["Signer-Fee"] = "2" })
-  r = dao({ Action = "Gov.Configure", Committee = encode({ F.members[1], F.members[2] }), Threshold = "2",
-    ["Group-Key"] = F.groupKey2, ["Share-Public-Keys"] = encode({ F.sharePublicKeys[1], F.sharePublicKeys[2] }) })
-  check("a new committee applies at once", r.ok == true and r.queued == nil and #info().committee == 2
-    and info().groupKey == F.groupKey2 and Beacon.committee[F.members[3]] == nil, r.error)
-  eq("a removed member keeps its earnings", Beacon.accrued[F.members[3]], 2)
-  eq("committee bounds", dao({ Action = "Gov.Configure", Threshold = "3" }).error, "Invalid-Threshold")
+  local newCommittee = { Action = "Gov.Configure", Committee = encode({ F.members[1], F.members[2] }), Threshold = "2",
+    ["Group-Key"] = F.groupKey2, ["Share-Public-Keys"] = encode({ F.sharePublicKeys[1], F.sharePublicKeys[2] }) }
+  eq("committee bounds checked on proposal", dao({ Action = "Gov.Configure", Threshold = "4" }).error, "Invalid-Threshold")
+  eq("Exit-Now with the hatch shut", send(wallet(F.members[3], { Action = "Exit-Now" })).error, "Hatch-Closed")
+  r = dao(newCommittee)
+  check("a committee change without Effective-At is refused", r.error == "Effective-At-Required" and #info().committee == 3, encode(r))
+  newCommittee["Effective-At"] = at(-1)
+  eq("a committee change short of the floor is refused", dao(newCommittee).error, "Effective-At-Too-Soon")
+  newCommittee["Effective-At"] = at()
+  r = dao(newCommittee)
+  local cid = r.pending and r.pending.id
+  check("pending: the committee unchanged, published, the hatch open", cid and #info().committee == 3
+    and info().govPending[1].id == cid and info().govPending[1].class == "money" and info().hatch == true, encode(r))
+  eq("apply before due refused", apply(cid).error, "Too-Early")
+  -- The exit hatch: member 3 leaves at once, with its earnings.
+  eq("a stranger is no member", send(wallet(F.stranger, { Action = "Exit-Now" })).error, "Not a committee member")
+  r, ob = send(wallet(F.members[3], { Action = "Exit-Now" }))
+  paidOut = paidOut + 2
+  check("hatch exit: out of the committee, earnings paid at once", r.exited == true and r.claimed == 2
+    and ob["rng-claim"] and ob["rng-claim"].Recipient == F.members[3] and ob["rng-claim"].Quantity == string.format("%d", 2 * U)
+    and Beacon.committee[F.members[3]] == nil and Beacon.accrued[F.members[3]] == 0 and #info().committee == 2, encode(r))
+  due(cid)
+  r = apply(cid)
+  check("once due anyone applies the new committee; the hatch closes", r.applied == cid and #info().committee == 2
+    and info().groupKey == F.groupKey2 and info().hatch == false, encode(r))
+  r = dao({ Action = "Gov.Configure", ["Protocol-Fee"] = "2", ["Effective-At"] = string.format("%d", clock + 5000) })
+  check("a later harmless change waits but opens no hatch", r.pending and r.pending.class == "harmless" and info().hatch == false, encode(r))
+  dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(r.pending.id) })
+  eq("cancelled", #info().govPending, 0)
+  eq("a stranger cannot cancel", send(wallet(F.stranger, { Action = "Gov.Cancel", ["Gov-Id"] = "1" })).error, "Not authorised")
+  for _, f in ipairs({ { Action = "Gov.Configure", Threshold = "2" }, { Action = "Gov.Claim-Protocol", Recipient = F.owner },
+                       { Action = "Gov.Set-Dao", Dao = F.stranger } }) do
+    local r1 = dao(f)
+    f["Effective-At"] = at(-1)
+    local r2 = dao(f)
+    check(f.Action .. ": refused without Effective-At or short of the floor", r1.error == "Effective-At-Required"
+      and r2.error == "Effective-At-Too-Soon", encode({ r1, r2 }))
+  end
+  -- Threshold 1 of 2 is refused by the bounds anyway: checked first.
+  eq("one key alone is never a quorum", dao({ Action = "Gov.Configure", Threshold = "1", ["Effective-At"] = at() }).error, "Invalid-Threshold")
+  check("nothing pending", #info().govPending == 0 and govInfo().dao == F.dao)
   for _, gone in ipairs({ "Configure", "Claim-Protocol", "Admin.Mint", "Mint", "Faucet", "Gov.Clear-Guardian" }) do
     eq(gone .. " does not exist", dao({ Action = gone }).error, "unknown action '" .. gone .. "'")
   end
@@ -398,18 +447,19 @@ function runBeaconTests()
   check("withdraw pays the wallet back", ob["rng-withdraw"] and ob["rng-withdraw"].Recipient == F.wallet
     and ob["rng-withdraw"].Quantity == string.format("%d", 6 * U), r.error)
 
-  -- The protocol's share leaves through Gov.Claim-Protocol, at once.
+  -- The protocol's share leaves through Gov.Claim-Protocol: money, after the floor.
   eq("not to the DAO", dao({ Action = "Gov.Claim-Protocol", Recipient = F.dao }).error, "Bad-Recipient")
   eq("not to the token", dao({ Action = "Gov.Claim-Protocol", Recipient = F.token }).error, "Bad-Recipient")
   eq("not to itself", dao({ Action = "Gov.Claim-Protocol", Recipient = F.beacon }).error, "Bad-Recipient")
   eq("a stranger cannot claim", send(wallet(F.stranger, { Action = "Gov.Claim-Protocol", Recipient = F.stranger })).error,
     "Not authorised")
-  r, ob = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
+  r, ob = enact({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
   paidOut = paidOut + 4
-  eq("protocol fees paid at once (raw)", out(), '{"claimed":4,"recipient":"' .. F.owner .. '"}')
+  eq("protocol fees paid once applied (raw)", out(), '{"applied":' .. r.applied .. ',"claimed":4,"recipient":"' .. F.owner
+    .. '","verb":"Gov.Claim-Protocol"}')
   check("the claim is one Transfer", ob["rng-protocol"] and ob["rng-protocol"].Recipient == F.owner
     and ob["rng-protocol"].Quantity == string.format("%d", 4 * U) and Beacon.protocolAccrued == 0)
-  r, ob = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
+  r, ob = enact({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
   check("nothing accrued: no transfer", r.claimed == 0 and next(ob) == nil, encode(r))
 
   -- Code: an owner approves a root; the wallet installs code directly;
@@ -442,6 +492,12 @@ function runBeaconTests()
   eq("the wallet renounces", out(), '{"ok":true,"wallet":false}')
   check("beaconinfo shows no wallet", govInfo().wallet == false and govInfo().dao == F.dao)
   eq("the wallet is locked out of Configure", deployer({ ["Signer-Fee"] = "1" }).error, "Not authorised")
+  for _, f in ipairs({ { Action = "Gov.Pause" }, { Action = "Gov.Claim-Protocol", Recipient = F.owner },
+      { Action = "Gov.Cancel", ["Gov-Id"] = "code" }, { Action = "Gov.Configure", Threshold = "2", ["Effective-At"] = at() } }) do
+    eq("the renounced wallet: " .. f.Action, send(wallet(F.owner, f)).error, "Not authorised")
+  end
+  send(wallet(F.owner, { Action = "Gov.Approve-Code", ["Code-Root"] = string.rep("b", 64) }))
+  eq("the renounced wallet cannot approve code", out(), '{"error":"Not authorised","ok":false}')
   send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.owner }))
   eq("the wallet cannot take the DAO seat", out(), '{"error":"Not authorised","ok":false}')
   send(wallet(F.owner, { Action = "Gov.Renounce-Wallet" }))
@@ -457,7 +513,11 @@ function runBeaconTests()
   dao({ Action = "Gov.Approve-Code", ["Code-Root"] = "nothex" })
   eq("a root is 64 lowercase hex", out(), '{"error":"Code-Root must be 64 lowercase hex","ok":false}')
   dao({ Action = "Gov.Approve-Code", ["Code-Root"] = root2 })
-  eq("the DAO approves a root", out(), '{"approved":"' .. root2 .. '","ok":true}')
+  eq("the DAO's approval needs Effective-At", out(), '{"error":"Effective-At-Required","ok":false}')
+  local codeAt = at()
+  dao({ Action = "Gov.Approve-Code", ["Code-Root"] = root2, ["Effective-At"] = codeAt })
+  eq("the DAO approves a root for its Effective-At", out(), '{"approved":"' .. root2 .. '","effectiveAt":' .. codeAt .. ',"ok":true}')
+  check("the code approval opens the hatch", info().hatch == true and info().govPending[1].id == "code")
   send(wallet(F.stranger, { Action = "Gov.Upgrade", Data = code1 .. "\n" }))
   check("code for another root is refused", out():find('"error":"Code does not match the approved root"', 1, true) ~= nil, out())
   send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "0", Data = manifest }))
@@ -467,17 +527,27 @@ function runBeaconTests()
   send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "2", Data = partB }))
   eq("part 2 first", out(), '{"have":1,"ok":true,"part":2,"parts":2}')
   send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "1", Data = partA }))
-  eq("the last part installs", out(), '{"installed":"' .. root2 .. '","ok":true,"version":2}')
+  eq("attack: the last part before Effective-At is kept, not installed", out(), '{"effectiveAt":' .. codeAt
+    .. ',"error":"Not-Yet-Effective","have":2,"ok":false,"parts":2}')
+  check("the old code still runs", UpgradeMarker == 1)
+  GovState.approvedAt = clock -- white box: now due
+  send(wallet(F.stranger, { Action = "Gov.Upgrade", Part = "0", Data = manifest }))
+  eq("once due, the manifest sent again installs the kept parts", out(), '{"installed":"' .. root2 .. '","ok":true,"version":2}')
   check("the DAO's code runs; the approval is spent", UpgradeMarker == 2 and govInfo().approved == ""
     and govInfo().code == root2 and govInfo().version == 2)
 
   -- The DAO hands its seat to another DAO; the old one is nobody after.
   local dao2 = string.rep("d", 43)
-  dao({ Action = "Gov.Set-Dao", Dao = dao2 })
-  eq("the DAO names its successor", out(), '{"dao":"' .. dao2 .. '","ok":true}')
+  r = dao({ Action = "Gov.Set-Dao", Dao = dao2, ["Effective-At"] = at() })
+  check("the DAO's Set-Dao waits", r.pending ~= nil and govInfo().dao == F.dao, encode(r))
+  due(r.pending.id)
+  apply(r.pending.id)
+  eq("the DAO names its successor, once due", out(), '{"applied":' .. r.pending.id .. ',"dao":"' .. dao2
+    .. '","ok":true,"verb":"Gov.Set-Dao"}')
   eq("the old DAO is nobody", dao({ Action = "Gov.Pause" }).error, "Not authorised")
-  send(delivery(dao2, { Action = "Gov.Set-Dao", Dao = F.dao }))
-  eq("the new DAO acts", out(), '{"dao":"' .. F.dao .. '","ok":true}')
+  r = enact({ Action = "Gov.Set-Dao", Dao = F.dao }, dao2)
+  eq("the new DAO acts", r.dao, F.dao)
+  local keptId = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner, ["Effective-At"] = at() }).pending.id
 
   -- A cold VM: the owners come back from beaconstate; installed code does
   -- not (the spawn module runs), so its root comes back approved.
@@ -487,6 +557,9 @@ function runBeaconTests()
   check("a rebuilt VM keeps the renounced wallet and the DAO", govInfo().wallet == false and govInfo().dao == F.dao, encode(govInfo()))
   check("installed code comes back approved, not running", govInfo().code == "" and govInfo().approved == root2
     and govInfo().version == 2, encode(govInfo()))
+  check("a rebuilt VM keeps the pending actions", info().govPending[1] and info().govPending[1].id == keptId
+    and info().hatch == true, encode(info().govPending))
+  dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(keptId) })
   eq("the wallet stays locked out after a rebuild", deployer({ ["Signer-Fee"] = "1" }).error, "Not authorised")
   check("the rebuilt state is the same state", Beacon.transferSeq == savedBeacon.transferSeq
     and info().round == savedBeacon.round)
@@ -497,7 +570,7 @@ function runBeaconTests()
   send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.owner }))
   eq("a published state with no owners re-arms nobody", out(), '{"error":"Not authorised","ok":false}')
   check("and has no wallet", govInfo().wallet == false, encode(govInfo()))
-  Beacon.owners = { dao = F.dao, wallet = false, approved = "", code = { sha = "", version = 2 } }
+  Beacon.owners = { dao = F.dao, wallet = false, approved = "", approvedAt = 0, code = { sha = "", version = 2 } }
   GovState = Beacon.owners
   -- Signers claim their own earnings; a handler that throws leaves no trace.
   local seqBefore = Beacon.transferSeq
@@ -655,4 +728,8 @@ function runBeaconTests()
   return table.concat(lines, "\n")
 end
 
-function rngtest() return runBeaconTests() end
+function rngtest()
+  local ok, out = pcall(runBeaconTests)
+  if ok then return out end
+  return "ERROR " .. tostring(out) .. "\n" .. table.concat(lines, "\n")
+end

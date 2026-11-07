@@ -59,11 +59,16 @@ local ABANDON_CAP_MS = 7 * DAY_MS
 local IDLE_EVICT_MS = 7 * DAY_MS -- a registered validator that never sent Ready may be evicted after this
 local IDLE_FLOOR_MS = 3600000    -- ... and only after this, by a new bond into a full registry
 local MAX_SUBSCRIPTIONS = 16     -- live subscriptions per subscriber
+local MAX_PRICE = 1000000        -- RNG: the most any price (round, request, subscription) may be
+-- Treasury outflow (spends + reserve funding) per window: at most a tenth of
+-- the treasury at the window's start. The window opens at the first outflow
+-- and runs this long.
+local SPEND_WINDOW_MS = 30 * DAY_MS
 local INFO_VALIDATORS = 128     -- validators listed in beaconinfo; the full registry is `beaconvalidators`
 
 --- gov.lua's owner record (GovState) at spawn: the wallet on, no DAO.
 local function freshOwners(wallet)
-  return { dao = "", wallet = wallet, approved = "", code = { sha = "", version = 0 } }
+  return { dao = "", wallet = wallet, approved = "", approvedAt = 0, code = { sha = "", version = 0 } }
 end
 
 local function freshState()
@@ -110,7 +115,10 @@ local function freshState()
     owners = freshOwners(true),
     -- executed: "dao|X-Dao-Proposal" -> true, the last EXECUTED_KEEP
     -- (executedOrder); executedFloor: the highest numeric one pruned.
-    gov = { executed = {}, executedOrder = {}, executedFloor = 0 },
+    -- pending: id -> the DAO's actions waiting for their Effective-At
+    -- (vendor/gov.lua QUEUE HELPERS); window: the treasury outflow cap's
+    -- { start, base, used } (atoms).
+    gov = { executed = {}, executedOrder = {}, executedFloor = 0, pending = {}, nextId = 1 },
     paused = false, pausedHeartbeat = 1,
     successor = "", predecessor = "",
     successorAcks = {},    -- pid -> ms: a Successor-Ack from the successor
@@ -251,17 +259,21 @@ local function bindOwners(reloaded)
   if type(o) ~= "table" then o = freshOwners(false); Timelock.owners = o end
   if type(o.code) ~= "table" then o.code = { sha = "", version = 0 } end
   if reloaded and (o.code.sha or "") ~= "" then
-    if (o.approved or "") == "" then o.approved = o.code.sha end
+    if (o.approved or "") == "" then o.approved, o.approvedAt = o.code.sha, 0 end
     o.code = { sha = "", version = int(o.code.version, 0) }
   end
+  o.approvedAt = int(o.approvedAt, 0)
   GovState = o
 end
 
---- The owner record as one string, to tell whether a message changed it.
+--- The owner record and the pending governance queue as one string, to
+--- tell whether a message changed either.
 local function ownersKey()
-  local o = Timelock.owners
-  return table.concat({ tostring(o.dao), tostring(o.wallet), tostring(o.approved),
-    tostring(o.code.sha), tostring(o.code.version) }, "|")
+  local o, g = Timelock.owners, Timelock.gov or {}
+  local n = 0
+  for _ in pairs(type(g.pending) == "table" and g.pending or {}) do n = n + 1 end
+  return table.concat({ tostring(o.dao), tostring(o.wallet), tostring(o.approved), tostring(o.approvedAt),
+    tostring(o.code.sha), tostring(o.code.version), tostring(g.nextId), tostring(n) }, "|")
 end
 
 --- A message must be signed for THIS beacon: a validator's Commit or Reveal
@@ -761,7 +773,10 @@ local function finalize(base, o, now)
   local ys, payees = {}, {}
   for i, addr in ipairs(addrs) do
     ys[i] = o.outputs[addr].y
-    payees[i] = o.outputs[addr].cracker or addr
+    -- A validator that left by the exit hatch owing this round is paid
+    -- nothing for it (its output may still have come in, or been cracked).
+    local payee = o.outputs[addr].cracker or addr
+    if not (o.forfeit and o.forfeit[addr] and payee == addr) then payees[#payees + 1] = payee end
   end
   local value = rng.hex(rng.sha256("hyperbeam/rng/any-honest/v1/round|" .. Timelock.self .. "|" .. key .. "|" .. table.concat(ys, "|")))
 
@@ -1242,6 +1257,42 @@ H["Finalize-Exit"] = function(base, msg, from)
   return reply(base, { exited = true, refunded = bond, validators = activeValidators() }, outbox)
 end
 
+--- Set by the governance section: whether the exit hatch is open now.
+local hatchOpen
+
+--- The exit hatch (docs/PERMISSIONLESS.md): while a passed money or code
+--- action is pending, a validator leaves at once. It is out of every round
+--- not yet opened, its whole bond goes back now, and the rounds it still
+--- owes pay it nothing. It is never slashed for them: a fault finds no
+--- validator. Those rounds run on by the usual rules (its output revealed or
+--- cracked, else the round abandoned and its requests refunded).
+H["Exit-Now"] = function(base, msg, from, now)
+  local v = from and Timelock.validators[from]
+  if not v then return fail(base, "Not a validator") end
+  if not hatchOpen(now) then return fail(base, "Hatch-Closed") end
+  local forfeited = {}
+  for _, o in pairs(Timelock.opens) do
+    if o.commits[from] then
+      if not o.outputs[from] then
+        o.forfeit = o.forfeit or {}
+        o.forfeit[from] = true
+        forfeited[#forfeited + 1] = o.round
+      end
+    elseif o.phase ~= "reveal" then
+      -- Owed a commit it has not made: the round no longer waits for it.
+      local keep = {}
+      for _, address in ipairs(o.active or {}) do if address ~= from then keep[#keep + 1] = address end end
+      o.active = keep
+    end
+  end
+  table.sort(forfeited)
+  local bond = int(Timelock.bonds[from], 0)
+  Timelock.validators[from], Timelock.bonds[from] = nil, nil
+  local outbox = {}
+  if bond > 0 then outbox["rng-bond-refund"] = transferOut(from, bond, "RNG validator bond: exit hatch") end
+  return reply(base, { exited = true, refunded = bond, forfeited = forfeited, validators = activeValidators() }, outbox)
+end
+
 --- Ready: give me work. Allowed once in good standing (every output it owes
 --- past a deadline is filled or abandoned) with a full stake. A stake below
 --- `stake` is refilled from earnings first, so a validator pays for its own
@@ -1310,7 +1361,12 @@ H["Evict-Idle"] = function(base, msg, from, now)
 end
 
 ---------------------------------------------------------------------------
--- Governance: the launch wallet and the DAO, equal owners (vendor/gov.lua)
+-- Governance (vendor/gov.lua). The launch wallet bootstraps (spawn, genesis
+-- Configure) and renounces; from then on the DAO is the only owner. The
+-- DAO's money and code actions wait for their Effective-At, at least
+-- Gov.EXIT_FLOOR_MS (24 h) after they arrive, and open the exit hatch while
+-- they wait; its harmless actions apply on receipt (or at a later
+-- Effective-At it names). See govClass and docs/PERMISSIONLESS.md.
 ---------------------------------------------------------------------------
 
 --- Which owner sent the current message: "wallet", "dao" or nil
@@ -1377,6 +1433,7 @@ local function badParams(p)
      or p.maxValidators < p.maxActive or p.maxValidators > 1024
      or (p.heartbeat ~= 0 and p.heartbeat ~= 1)
      or p.roundPrice < 1 or p.requestPrice < 1 or p.subscriptionPrice < 1 or p.crackBounty < 1
+     or p.roundPrice > MAX_PRICE or p.requestPrice > MAX_PRICE or p.subscriptionPrice > MAX_PRICE
      -- A crack takes at most a slash from the withholder's bond.
      or p.crackBounty > p.slash
      or p.subscriptionRounds < 1 or p.subscriptionRounds > 31536000
@@ -1387,6 +1444,21 @@ local function badParams(p)
      -- crack: together at most half the stake.
      or 2 * (1 + p.maxInFlight) * (p.slash + p.crackBounty) > p.stake
      or p.fairWindowMs < 1
+end
+
+--- The treasury outflow window (ported from the audited design): spends and
+--- reserve funding applied in it total at most a tenth of the treasury at
+--- its start. Takes `atoms` of it, or returns nil past the cap.
+local function spendWindow(atoms, now)
+  local g = Timelock.gov
+  local w = g.window
+  if type(w) ~= "table" or now >= int(w.start, 0) + SPEND_WINDOW_MS then
+    w = { start = now, base = int(Timelock.treasuryAtoms, 0), used = 0 }
+    g.window = w
+  end
+  if (int(w.used, 0) + atoms) * 10 > int(w.base, 0) then return nil end
+  w.used = int(w.used, 0) + atoms
+  return w
 end
 
 --- Checked whole before any of it applies, and all of it applies at once.
@@ -1484,9 +1556,9 @@ H["Gov.Move-Reserve"] = function(base, msg)
   return reply(base, { movedAtoms = tostring(atoms), to = to }, { ["rng-reserve-move"] = t })
 end
 
---- Out of the treasury, at once. Never to the DAO, this beacon or the token
---- (atoms there are stranded or recycled).
-H["Gov.Treasury-Spend"] = function(base, msg)
+--- Out of the treasury, within the window's cap. Never to the DAO, this
+--- beacon or the token (atoms there are stranded or recycled).
+H["Gov.Treasury-Spend"] = function(base, msg, from, now)
   if not govOnly() then return fail(base, "Not authorised") end
   local arg = govArgs(msg)
   local to, atoms = arg("recipient"), int(arg("quantity"), nil)
@@ -1495,18 +1567,20 @@ H["Gov.Treasury-Spend"] = function(base, msg)
   end
   if not atoms or atoms <= 0 then return fail(base, "Bad-Quantity") end
   if atoms > int(Timelock.treasuryAtoms, 0) then return fail(base, "Insufficient-Treasury") end
+  if not spendWindow(atoms, now) then return fail(base, "Over-Treasury-Cap") end
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) - atoms
   return reply(base, { spentAtoms = tostring(atoms), recipient = to, treasuryAtoms = tostring(Timelock.treasuryAtoms) },
     { ["rng-treasury-spend"] = transferAtoms(to, atoms, "RNG DAO Treasury spend") })
 end
 
---- Treasury into the heartbeat reserve, at once (the reserve can leave whole
---- with Move-Reserve).
-H["Gov.Fund-Reserve"] = function(base, msg)
+--- Treasury into the heartbeat reserve, within the same cap as a spend (the
+--- reserve can leave whole with Move-Reserve).
+H["Gov.Fund-Reserve"] = function(base, msg, from, now)
   if not govOnly() then return fail(base, "Not authorised") end
   local atoms = int(govArgs(msg)("quantity"), nil)
   if not atoms or atoms <= 0 then return fail(base, "Bad-Quantity") end
   if atoms > int(Timelock.treasuryAtoms, 0) then return fail(base, "Insufficient-Treasury") end
+  if not spendWindow(atoms, now) then return fail(base, "Over-Treasury-Cap") end
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) - atoms
   Timelock.foundationReserveAtoms = int(Timelock.foundationReserveAtoms, 0) + atoms
   return reply(base, { reserveAtoms = tostring(Timelock.foundationReserveAtoms),
@@ -1561,6 +1635,144 @@ Gov.reply = function(base, t)
   base.results.outbox = {}
 end
 
+--- MONEY/CODE: anything that moves tokens, changes what a bond is exposed
+--- to, the randomness itself (T, h) or who governs. These wait for an
+--- Effective-At >= receipt + Gov.EXIT_FLOOR_MS. Code approval (Gov.Approve-Code,
+--- Gov.Upgrade) is gov.lua's, with the same floor.
+local MONEY_VERBS = { ["Gov.Set-Successor"] = true, ["Gov.Move-Reserve"] = true, ["Gov.Treasury-Spend"] = true,
+  ["Gov.Fund-Reserve"] = true, ["Gov.Remove-Validator"] = true, ["Gov.Set-Dao"] = true }
+--- Gov.Configure parameters that are money: crackBounty is taken from a
+--- withholder's bond per crack; maxInFlight bounds how many rounds one
+--- incident can fault; cadenceMs and targetIntervalMs set how fast duties
+--- come; roundPrice is what the reserve pays per heartbeat round; T (with h)
+--- is the puzzle every output rests on.
+local MONEY_PARAMS = { "stake", "slash", "commitWindowMs", "revealWindowMs", "crackBounty", "maxInFlight",
+  "cadenceMs", "targetIntervalMs", "roundPrice", "T" }
+--- The DAO's verbs that go through Effective-At (the rest of Gov.* are
+--- Apply, Cancel and gov.lua's own).
+local SCHEDULED = { ["Gov.Configure"] = true, ["Gov.Pause"] = true, ["Gov.Resume"] = true }
+for verb in pairs(MONEY_VERBS) do SCHEDULED[verb] = true end
+
+--- "money" or "harmless". A Configure is money when it changes a money
+--- parameter (a value equal to the current one changes nothing), names h,
+--- or comes before genesis.
+local function govClass(verb, msg)
+  if MONEY_VERBS[verb] then return "money" end
+  if verb ~= "Gov.Configure" then return "harmless" end
+  if Timelock.token == "" then return "money" end
+  local arg = govArgs(msg)
+  for _, k in ipairs(MONEY_PARAMS) do
+    local v = arg(k)
+    if v ~= nil and int(v, nil) ~= int(Timelock.params[k], nil) then return "money" end
+  end
+  if arg("h") ~= nil or arg("hProof") ~= nil then return "money" end
+  return "harmless"
+end
+
+local function govQueue() return Gov.queueOf(Timelock.gov) end
+hatchOpen = function(now) return Gov.hatchOpen(govQueue(), now) end
+
+--- Runs `verb` as the DAO (or the wallet) now. Gov.Set-Dao from the DAO is
+--- applied here, not by gov.lua (which refuses it unscheduled).
+local function applyVerb(base, verb, msg, from, now)
+  if verb == "Gov.Set-Dao" then
+    local dao = govArgs(msg)("dao")
+    if not isAoAddress(dao) then return fail(base, "Dao must be a 43-character process id") end
+    GovState.dao = dao
+    return reply(base, { ok = true, dao = dao })
+  end
+  return H[verb](base, msg, from, now)
+end
+
+local function replyData(res)
+  local ok, v = pcall(json.decode, res and res.results and res.results.output and res.results.output.data or "")
+  return ok and type(v) == "table" and v or {}
+end
+
+--- What a pending entry keeps of the message: its tags, envelope and Data
+--- left out (the DAO's Data is never read).
+local MAX_ARGS_BYTES = 4096
+local ENVELOPE, caseInsensitive -- set with the entry point, below
+local function argsOf(msg)
+  local args, bytes, names = {}, 0, {}
+  for k, v in pairs(msg) do
+    local key = tostring(k):lower()
+    if type(v) == "string" and not ENVELOPE[key] and key ~= "data" and key ~= "effective-at"
+       and key ~= "x-dao-proposal" then
+      args[k], bytes = v, bytes + #tostring(k) + #v
+      names[#names + 1] = k
+    end
+  end
+  table.sort(names)
+  local parts = {}
+  for _, k in ipairs(names) do if tostring(k):lower() ~= "action" then parts[#parts + 1] = k .. "=" .. args[k] end end
+  return args, bytes, table.concat(parts, " "):sub(1, 256)
+end
+
+--- A DAO message for a SCHEDULED verb. Harmless with no later Effective-At:
+--- applied now. Otherwise checked on a copy of the state first (a refusal is
+--- returned as it would be on apply), then its Effective-At, then stored for
+--- Gov.Apply.
+local function propose(base, verb, msg, from, now)
+  local class = govClass(verb, msg)
+  local v = msg["Effective-At"]
+  if class == "harmless" and (v == nil or int(v, 0) <= now) then return applyVerb(base, verb, msg, from, now) end
+  local real, owners = Timelock, GovState
+  Timelock = snapshot()
+  Timelock.seen, Timelock.history = real.seen, real.history
+  GovState = Timelock.owners
+  local ok, res = pcall(applyVerb, base, verb, msg, from, now)
+  Timelock, GovState = real, owners
+  if not ok then error(res, 0) end
+  local out = replyData(res)
+  if out.error then return fail(base, out.error) end
+  local at, why = Gov.when(msg, class, now)
+  if not at then
+    return reply(base, { error = why, class = class, earliest = class == "money" and now + Gov.EXIT_FLOOR_MS or nil })
+  end
+  local args, bytes, summary = argsOf(msg)
+  if bytes > MAX_ARGS_BYTES then return fail(base, "Too-Large") end
+  local e, err = Gov.schedule(govQueue(), { verb = verb, class = class, effectiveAt = at, args = args,
+    summary = verb .. (summary ~= "" and (" " .. summary) or "") }, now)
+  if not e then return fail(base, err) end
+  return reply(base, { pending = { id = e.id, verb = verb, class = class, effectiveAt = at } })
+end
+
+--- Anyone: applies a pending action once due, until Gov.PENDING_EXPIRE_MS
+--- after. The hard bounds are checked again now. A refusal leaves it pending
+--- (the DAO may cancel it); a lapsed one is dropped.
+H["Gov.Apply"] = function(base, msg, from, now)
+  local q = govQueue()
+  local e, key = Gov.due(q, govArgs(msg)("govId"), now)
+  if not e then return fail(base, key) end
+  local saved = Who
+  Who = "dao"
+  local ok, res = pcall(applyVerb, base, e.verb, caseInsensitive(e.args), nil, now)
+  Who = saved
+  if not ok then error(res, 0) end
+  local out = replyData(res)
+  if out.error then return reply(base, { error = out.error, govId = e.id, verb = e.verb }) end
+  q.pending[key] = nil
+  out.applied, out.verb = e.id, e.verb
+  return reply(base, out, res.results.outbox)
+end
+
+--- An owner drops a pending action, at once (Gov-Id "code": the pending code
+--- approval).
+H["Gov.Cancel"] = function(base, msg)
+  if not govOnly() then return fail(base, "Not authorised") end
+  local id = govArgs(msg)("govId")
+  if tostring(id):lower() == "code" then
+    if not Gov.cancelCode() then return fail(base, "Unknown-Gov-Id") end
+    return reply(base, { cancelled = "code" })
+  end
+  local n = int(id, nil)
+  local key = n and string.format("%d", n) or ""
+  if not govQueue().pending[key] then return fail(base, "Unknown-Gov-Id") end
+  govQueue().pending[key] = nil
+  return reply(base, { cancelled = n })
+end
+
 --- From the successor, attested: it names this beacon as its predecessor.
 --- Move-Reserve needs it, received since the successor was named.
 H["Successor-Ack"] = function(base, msg, from, now)
@@ -1590,7 +1802,7 @@ end
 -- Entry point
 ---------------------------------------------------------------------------
 
-local ENVELOPE = {
+ENVELOPE = {
   target = true, id = true, owner = true, signature = true, anchor = true, commitments = true, from = true,
   type = true, variant = true, path = true, method = true, slot = true, device = true, nonce = true,
   epoch = true, accept = true, scheduler = true, subject = true, ["from-process"] = true,
@@ -1601,7 +1813,7 @@ local ENVELOPE = {
 --- The message as handlers see it. Envelope fields (commitments,
 --- from-process) come only from the body the node verified; a `Tags` table
 --- adds tags but never replaces the body or an envelope field.
-local function caseInsensitive(raw)
+function caseInsensitive(raw)
   local t, named = {}, {}
   for k, v in pairs(raw) do if k ~= "Tags" then t[k] = v; named[tostring(k):lower()] = true end end
   -- A tag never shadows a body field in another case: the node's body keys
@@ -1621,6 +1833,13 @@ local function caseInsensitive(raw)
     __index = function(_, key) return t[key] or lower[tostring(key):lower()] end,
     __pairs = function() return pairs(t) end,
   })
+end
+
+--- The handler's own name for an action, in any spelling.
+local function verbName(action)
+  if H[action] then return action end
+  for name in pairs(H) do if norm(name) == norm(action) then return name end end
+  return nil
 end
 
 local function resolveHandler(action)
@@ -1735,13 +1954,23 @@ local function info(now, healthNow)
     successor = Timelock.successor or "", predecessor = Timelock.predecessor or "",
     successorAck = (Timelock.successor or "") ~= ""
       and int(Timelock.successorAcks[Timelock.successor], -1) >= int(Timelock.successorSince, 0),
-    -- gov.lua's owners: { dao, wallet, approved, code, version }.
+    -- gov.lua's owners: { dao, wallet, approved, approvedAt, code, version }.
     gov = Gov.info(), paused = Timelock.paused == true, transferSeq = int(Timelock.transferSeq, 0),
+    -- The DAO's actions waiting for their Effective-At; while a money or
+    -- code one waits, the exit hatch is open (Exit-Now).
+    govPending = Gov.pendingView(govQueue(), now), hatch = hatchOpen(now), exitFloorMs = Gov.EXIT_FLOOR_MS,
+    -- The treasury outflow cap: spends and reserve funding since `start`
+    -- (`used`) stay within a tenth of the treasury then (`base`), in atoms.
+    treasuryWindow = type(Timelock.gov.window) == "table" and { start = int(Timelock.gov.window.start, 0),
+      base = tostring(int(Timelock.gov.window.base, 0)), used = tostring(int(Timelock.gov.window.used, 0)),
+      endsAt = int(Timelock.gov.window.start, 0) + SPEND_WINDOW_MS } or nil,
     -- What this beacon accepts beyond the per-step actions. `act': H["Act"].
     -- `ready': validators say Ready/Pause and every failed duty is slashed.
     -- `bond-join': a validator joins by bonding the stake (X-Bond). `gov': Gov.*.
     -- `pay-and-request': a Credit-Notice with X-Request-Id requests in one message.
-    features = { "act", "ready", "bond-join", "gov", "pay-and-request" },
+    -- `effective-at`: the DAO's money and code actions wait (Gov.Apply);
+    -- `exit-hatch`: Exit-Now while one waits.
+    features = { "act", "ready", "bond-join", "gov", "pay-and-request", "effective-at", "exit-hatch" },
   }
 end
 
@@ -1784,6 +2013,7 @@ function compute(base, req)
       advance(now)
       local from = actor(msg, base)
       Who = Gov.ownerOf(base, type(raw) == "table" and raw or nil)
+      Gov.prune(govQueue(), now)
       -- The DAO executes a proposal once: a redelivered Gov.* with the same
       -- X-Dao-Proposal from the DAO does nothing.
       local proposal = msg["X-Dao-Proposal"]
@@ -1792,6 +2022,8 @@ function compute(base, req)
           return reply(base, { duplicate = true, proposal = tostring(proposal) })
         end
       end
+      local verb = verbName(msg.Action or "none")
+      if isGovernor() and SCHEDULED[verb] then return propose(base, verb, msg, from, now) end
       return handler(base, msg, from, now)
     end)
     if not ok then
@@ -1819,8 +2051,9 @@ function compute(base, req)
   -- On lua-patch@1.0 the state lives in the resident VM (and its snapshots);
   -- the full encode (~37 KB) is only a recovery checkpoint, every
   -- CHECKPOINT_EVERY messages. On lua@5.3a it is the state, every message.
-  -- An owner change is checkpointed at once: a restore from an older
-  -- checkpoint must never bring back a renounced wallet or a replaced DAO.
+  -- An owner or queue change is checkpointed at once: a restore from an
+  -- older checkpoint must never bring back a renounced wallet or a replaced
+  -- DAO, nor lose a pending action (and with it the exit hatch).
   if Lua53bPatchMode ~= true or Timelock.rev % CHECKPOINT_EVERY == 0 or result.timelockstate == nil
      or ownersKey() ~= ownersBefore then
     result.timelockstate = encode(saved)
