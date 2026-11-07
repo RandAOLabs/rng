@@ -76,11 +76,16 @@ export function fairWithdrawTags(nonce: number, quantityAtoms?: bigint | number 
 /**
  * Pay and request in one message: a token Transfer to the beacon. Its
  * Credit-Notice credits the sender and runs Request-Random in the same slot.
- * Send it to the beacon's token, signed by the requester.
+ * Send it to the beacon's token, signed by the requester. `maxPrice` (whole
+ * RNG, X-Max-Price) is the most the request may cost: a price raised past it
+ * is refused (Price-Above-Max) and the transfer stays as a balance.
  */
-export function payAndRequestTags(beacon: string, quantityAtoms: bigint | number | string, requestId: string) {
+export function payAndRequestTags(beacon: string, quantityAtoms: bigint | number | string, requestId: string,
+  maxPrice?: bigint | number) {
   if (!requestId || requestId.length > 128) throw new Error("requestId must be 1-128 characters");
-  return { Action: "Transfer", Recipient: beacon, Quantity: String(quantityAtoms), "X-Request-Id": requestId };
+  const tags: Record<string, string> = { Action: "Transfer", Recipient: beacon, Quantity: String(quantityAtoms), "X-Request-Id": requestId };
+  if (maxPrice !== undefined) tags["X-Max-Price"] = String(maxPrice);
+  return tags;
 }
 
 export type RequestRecord = { round: number; value: string; requests?: Array<{ requester: string; requestId: string; value: string }> };

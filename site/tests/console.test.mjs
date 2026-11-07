@@ -70,6 +70,7 @@ test('pay-and-request is one Transfer with X-Request-Id', async () => {
   assert.deepEqual(fair.payAndRequestTags(beacon, 4_000_000n, 'req-1'), {
     Action: 'Transfer', Recipient: beacon, Quantity: '4000000', 'X-Request-Id': 'req-1' }, 'no user time');
   assert.throws(() => fair.payAndRequestTags(beacon, 1, ''));
+  assert.equal(fair.payAndRequestTags(beacon, 4_000_000n, 'req-1', 4)['X-Max-Price'], '4', 'the price shown is the most paid');
   const commitTags = fair.fairCommitTags(addr('game'), 's', '0'.repeat(64));
   assert.equal(Object.keys(commitTags).some((k) => /time/i.test(k)), false, 'no user time on a commit');
   assert.equal(fair.FAIR_ERRORS['Stale-Commit'], undefined);

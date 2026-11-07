@@ -184,6 +184,12 @@ local continuations = {}
 local cfg = { beacon = nil, send = nil, json = nil, outbox = nil }
 
 local TIERS = { ["local"] = true, beacon = true }
+--- The most a paid request may cost, whole RNG, sent as Max-Price: a beacon
+--- whose price was raised past it refuses the request (Price-Above-Max)
+--- instead of charging more. Default 4, the launch price of either tier
+--- (fast 3, any-honest 4); rng.config{ maxPrice = n } or a request's
+--- opts.maxPrice sets another, false sends none.
+rng.DEFAULT_MAX_PRICE = 4
 
 --- Set the beacon process id and, optionally, how to send and decode.
 --- send(msg) defaults to ao.send; json defaults to require(".json") or
@@ -232,7 +238,8 @@ local function run(name, stream, ctx, info)
 end
 
 --- Ask for randomness. opts: on (continuation name, required), ctx (table
---- passed back), tier ("local" default or "beacon"), salt.
+--- passed back), tier ("local" default or "beacon"), salt, maxPrice (whole
+--- RNG; default cfg.maxPrice, else rng.DEFAULT_MAX_PRICE).
 --- Returns the request id. Tier "local" runs the continuation before returning.
 function rng.request(msg, opts)
   opts = opts or {}
@@ -248,11 +255,15 @@ function rng.request(msg, opts)
   end
   assert(cfg.beacon, "rng: paid tiers need rng.config{ beacon = <process id> }")
   RngPending[requestId] = { on = opts.on, ctx = opts.ctx, tier = tier }
+  local max = opts.maxPrice
+  if max == nil then max = cfg.maxPrice end
+  if max == nil then max = rng.DEFAULT_MAX_PRICE end
+  max = max ~= false and string.format("%d", max) or nil
   -- No time on the request: the beacon uses its scheduler's, and the
   -- scheduler refuses a copy of this message.
   if cfg.outbox then
     cfg.outbox["rng-request-" .. requestId] = {
-      target = cfg.beacon, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
+      target = cfg.beacon, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId, ["Max-Price"] = max,
     }
     return requestId
   end
@@ -263,6 +274,7 @@ function rng.request(msg, opts)
     Action = "Request-Random",
     Tier = tier,
     ["Request-Id"] = requestId,
+    ["Max-Price"] = max,
   })
   return requestId
 end
