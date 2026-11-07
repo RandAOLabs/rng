@@ -238,7 +238,8 @@ test('proposal templates are valid against the DAO caps, reserved names and beac
   const fair = (execTags) => proposalErrors({ ...ok, execProcess: pid('fair'), execTags }, { token: pid('token'), fair: pid('fair') });
   assert.deepEqual(fair({ Action: 'Fair.Configure', Keep: '4', 'Max-Open': '9' }), []);
   assert.deepEqual(fair({ Action: 'Gov.Approve-Code', 'Code-Root': 'b'.repeat(64), ...EA }), []);
-  assert.match(fair({ Action: 'Fair.Configure', 'Request-Price': '5' }).join(), /needs Effective-At/);
+  assert.deepEqual(fair({ Action: 'Fair.Configure', 'Request-Price': '5' }), [], 'pay at deposit: harmless');
+  assert.match(fair({ Action: 'Fair.Configure', Beacon: pid('beacon') }).join(), /needs Effective-At/);
   assert.match(fair({ Action: 'Fair.Configure', Data: '{}' }).join(), /reserved/);
   assert.match(fair({ Action: 'Gov.Pause' }).join(), /not a fair action/);
   const many = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`T${i}`, '1']));
@@ -517,7 +518,9 @@ test('the deployer allocation gives the whole supply to the deployer, ticker RNG
 // (protocol/vendor/SOURCE); sha256.lua is unchanged.
 test('vendored sha256.lua is paralith-mono\'s, byte for byte', (t) => {
   const pm = process.env.PARALITH_MONO;
-  if (!pm || !fs.existsSync(path.join(pm, 'backend/native/gov.lua'))) return t.skip('PARALITH_MONO not set');
+  if (!pm || !fs.existsSync(path.join(pm, 'backend/native/sha256.lua'))) {
+    return t.skip('optional: set PARALITH_MONO to a paralith-mono tree with backend/native/sha256.lua (ours is canonical)');
+  }
   for (const f of ['sha256.lua']) {
     const norm = (s) => s.replace(/\r\n/g, '\n');
     assert.equal(norm(fs.readFileSync(path.join(ROOT, 'protocol/vendor', f), 'utf8')),
@@ -626,7 +629,9 @@ return table.concat(out, "\\n")`;
 
 test('spawn-dao --lua53b --dry-run builds the RNG DAO from PARALITH_MONO, named without TEST-', (t) => {
   const pm = process.env.PARALITH_MONO;
-  if (!pm || !fs.existsSync(path.join(pm, 'backend/native/dao.lua'))) return t.skip('PARALITH_MONO not set');
+  if (!pm || !fs.existsSync(path.join(pm, 'backend/native/dao.lua'))) {
+    return t.skip('optional: set PARALITH_MONO to build the stake-dao/1 module (spawn-dao --dry-run needs none)');
+  }
   const tmp = path.join(ROOT, 'deploy', `.dao-test-${process.pid}.json`);
   const S = pid('sched');
   fs.writeFileSync(tmp, JSON.stringify({ scheduler: S, token: pid('token'), tokenTicker: 'RNG',
