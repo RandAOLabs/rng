@@ -2,10 +2,10 @@
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { useLivePoll } from "../hooks/use-live-poll";
-import { connectWallet, sendMessage } from "../lib/wallet";
+import { connectWallet } from "../lib/wallet";
 import {
-  describeAction, duration, percent, queueView, tally, tokens, yapUrl,
-  type DaoInfo, type DaoProposal, type DaoStake, type GovQueueEntry,
+  describeAction, duration, ownersLabel, percent, tally, tokens, yapUrl,
+  type DaoInfo, type DaoProposal, type DaoStake, type GovOwners,
 } from "../app/api/dao/model";
 import { SiteFooter, SiteHeader } from "./site-header";
 
@@ -14,8 +14,7 @@ type DaoStatus = { configured: boolean; status?: string; process?: string; beaco
 // beaconinfo via /api/anyhonest. The v3 governance fields are absent on a v2 beacon.
 type Beacon = { configured: boolean; process?: string; round?: number; unit?: number;
   foundationReserveAtoms?: string; treasuryAtoms?: string; mode?: string; paused?: boolean;
-  governor?: string; successor?: string; successorAck?: boolean;
-  govQueue?: GovQueueEntry[]; features?: string[] };
+  gov?: GovOwners; successor?: string; successorAck?: boolean; features?: string[] };
 
 const h1: CSSProperties = { fontFamily: "var(--display)", fontSize: 30, lineHeight: 1.2, letterSpacing: "-.01em", textTransform: "none" };
 const h2: CSSProperties = { fontFamily: "var(--display)", fontSize: 20, lineHeight: 1.3, letterSpacing: 0, textTransform: "none", marginBottom: 12 };
@@ -43,7 +42,6 @@ function Stat({ label, value }: { label: string; value: ReactNode }) {
 export function DaoConsole() {
   const [dao, setDao] = useState<DaoStatus>({ configured: false, proposals: [] });
   const [beacon, setBeacon] = useState<Beacon>({ configured: false });
-  const [now, setNow] = useState(0);
   const [address, setAddress] = useState<string | null>(null);
   const [stake, setStake] = useState<DaoStake | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -55,7 +53,6 @@ export function DaoConsole() {
     ]);
     setDao(await daoResponse.json() as DaoStatus);
     setBeacon(await beaconResponse.json() as Beacon);
-    setNow(Date.now());
   }
 
   useLivePoll(refresh, 5_000);
@@ -75,19 +72,11 @@ export function DaoConsole() {
     if (!response.ok) throw new Error(body.error || "stake unavailable");
     setStake(body.stake ?? null);
   });
-  // Gov.Apply is open to anyone once a queued action's timelock has passed.
-  const apply = (id: number) => action(`Applying #${id}`, async () => {
-    if (!beacon.process) throw new Error("the beacon is not configured");
-    if (!address) setAddress(await connectWallet());
-    const reply = (await sendMessage(beacon.process, { Action: "Gov.Apply", "Gov-Id": String(id) })).reply;
-    if (typeof reply?.error === "string") throw new Error(reply.error);
-  });
 
   const info = dao.info;
   const denom = info?.Denomination ?? 6;
   const unitDigits = Math.round(Math.log10(beacon.unit ?? 1_000_000));
   const v3 = beacon.features?.includes("gov") ?? false;
-  const queue = queueView(beacon.govQueue, now);
   const beaconPid = dao.beacon || beacon.process || "";
 
   return (
@@ -97,7 +86,7 @@ export function DaoConsole() {
         <section className="py-10">
           <h1 style={h1}>RNG DAO</h1>
           <div className="mt-4 max-w-[760px] space-y-3 text-[15px] leading-relaxed text-[var(--gray)]">
-            <p className="m-0">RNG holders govern the beacon through a YapDAO <code>stake-dao/1</code> process. Stake RNG to vote. A passed proposal sends one message, usually a <code>Gov.*</code> action to the beacon. Actions that move money wait out a 10-day timelock in the beacon first, longer than the 7-day vote, so a cancelling proposal can always pass before they land. There is no guardian: pausing is a proposal too.</p>
+            <p className="m-0">RNG holders govern the beacon through a YapDAO <code>stake-dao/1</code> process. Stake RNG to vote. A passed proposal sends one message, usually a <code>Gov.*</code> action to the beacon, and it applies on receipt.</p>
             <p className="m-0">This page is read-only. Staking, proposing and voting happen on YapDAO.</p>
             {dao.process && <p className="m-0"><a className="button invert" href={yapUrl(dao.process)} target="_blank" rel="noreferrer">Vote on yapdao.com</a></p>}
           </div>
@@ -107,28 +96,13 @@ export function DaoConsole() {
           {!beacon.configured && <p className="m-0">The beacon is not deployed on this network yet.</p>}
           {beacon.configured && !v3 && <p className="m-0">This beacon predates DAO governance. The fields below fill in once beacon v3 is live.</p>}
           <dl className="m-0 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            <Stat label="Governor" value={v3 ? (beacon.governor ? short(beacon.governor) : "Deployer, until handover") : "—"} />
+            <Stat label="Owners" value={v3 ? ownersLabel(beacon.gov) : "—"} />
+            <Stat label="DAO" value={beacon.gov?.dao ? short(beacon.gov.dao) : "—"} />
             <Stat label="Mode" value={beacon.paused ? "Paused" : beacon.mode ?? "—"} />
             <Stat label="Reserve" value={`${tokens(beacon.foundationReserveAtoms, unitDigits)} RNG`} />
             <Stat label="Treasury" value={`${tokens(beacon.treasuryAtoms, unitDigits)} RNG`} />
             <Stat label="Successor" value={beacon.successor ? `${short(beacon.successor)}${beacon.successorAck ? " (acked)" : ""}` : "None"} />
           </dl>
-        </Section>
-
-        <Section title="Timelocked actions">
-          <p className="m-0">Set-Successor and Move-Reserve wait 7 days, Treasury-Spend 48 hours. Anyone can apply an action once its time has come; the DAO can cancel it before then.</p>
-          {queue.length === 0 ? <p className="m-0">Nothing is queued.</p> : (
-            <table className="w-full border-collapse text-[13px]">
-              <thead><tr className="text-left text-[var(--dim)]"><th className="py-1 pr-3">#</th><th className="py-1 pr-3">Action</th><th className="py-1 pr-3">Details</th><th className="py-1 pr-3">Runs</th><th /></tr></thead>
-              <tbody>{queue.map((e) => (
-                <tr key={e.id} className="border-t border-[var(--line)]">
-                  <td className="py-2 pr-3">{e.id}</td>
-                  <td className="py-2 pr-3 text-[var(--white)]">{e.kind}</td>
-                  <td className="py-2 pr-3 break-all">{e.detail || "—"}</td>
-                  <td className="py-2 pr-3">{e.due ? "Now" : `in ${duration(e.remainingMs)} (${when(e.at)})`}</td>
-                  <td className="py-2">{e.due && <button className="button" onClick={() => void apply(e.id)} disabled={Boolean(busy)}>Apply</button>}</td>
-                </tr>))}</tbody>
-            </table>)}
         </Section>
 
         <Section title="The DAO">

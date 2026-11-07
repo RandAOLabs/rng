@@ -22,8 +22,8 @@ export type DaoProposal = {
 
 export type DaoStake = { active: string; cooling: string; releaseAt: number; lockedUntil: number; votes?: Record<string, string> };
 
-/** A beacon Gov.* action waiting out its timelock (beaconinfo.govQueue, v3). */
-export type GovQueueEntry = { id: number; kind: string; at: number; queuedAt: number; [field: string]: unknown };
+/** gov.lua's owners, as the beacon publishes them (beaconinfo.gov). */
+export type GovOwners = { dao: string; wallet: boolean; approved: string; code: string; version: number };
 
 const BPS = BigInt(10_000);
 const big = (value: string | number | undefined) => {
@@ -68,11 +68,10 @@ export function describeAction(action: DaoProposal["action"], beacon: string) {
   return { name, args, toBeacon: Boolean(beacon) && action.process === beacon, executed: action.executed };
 }
 
-/** The beacon's queued Gov.* actions, soonest first, with whether Gov.Apply can run now. */
-export function queueView(queue: GovQueueEntry[] | undefined, now: number) {
-  return [...(queue ?? [])].sort((a, b) => a.at - b.at).map((e) => {
-    const { id, kind, at, queuedAt, ...detail } = e;
-    return { id, kind, at, queuedAt, due: now >= at, remainingMs: Math.max(0, at - now),
-      detail: Object.entries(detail).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" ") };
-  });
+/** Who governs the beacon: the launch wallet and the DAO are equal owners until the wallet renounces. */
+export function ownersLabel(gov: GovOwners | undefined) {
+  if (!gov) return "—";
+  if (gov.dao && gov.wallet) return "Wallet and DAO";
+  if (gov.dao) return "DAO";
+  return gov.wallet ? "Wallet" : "None";
 }

@@ -1,6 +1,6 @@
 {
   "title": "Resume the beacon",
-  "body": "Gov.Resume lifts a Gov.Pause and restores the heartbeat. Only a DAO proposal can pause or resume.",
+  "body": "Gov.Resume lifts a Gov.Pause and restores the heartbeat. Only an owner (the DAO, or the launch wallet until it renounces) can pause or resume.",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Resume"

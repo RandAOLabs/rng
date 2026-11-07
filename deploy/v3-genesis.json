@@ -1,5 +1,5 @@
 {
-  "ticker": "TEST-RNG",
+  "ticker": "RNG",
   "note": "Genesis: RNG Labs receives the whole supply (1,000,000,000 RNG = 10^15 atoms) in one allocation ($DEPLOYER on testnet; the Labs wallet on mainnet). Distribution is by transfers in the runbook (deploy/README.md): 250,000,000 RNG under DAO control in the beacon (reserve via X-Foundation, treasury via X-Treasury; the DAO process itself can never move the token it stakes), and validatorRng to each launch validator, bonded whole (4 x stake). A later Paralith allocation is not part of launch.",
   "allocations": [
     { "role": "labs", "address": "$DEPLOYER", "rng": 1000000000 }

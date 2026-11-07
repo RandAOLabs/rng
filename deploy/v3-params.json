@@ -1,5 +1,5 @@
 {
-  "predecessor": "MZMoXv-2aLD1MaR5tHEpXNrZgc6DoUpdw2q4DvlfxC0",
+  "predecessor": "",
   "T": 134217728,
   "commitWindowMs": 5000, "revealWindowMs": 30000, "abandonAfterMs": 1800000,
   "minCommits": 2, "maxActive": 64, "maxValidators": 256,

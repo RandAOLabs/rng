@@ -1,0 +1,10 @@
+{
+  "title": "Tune fair play",
+  "body": "Fair.Configure on the fair-play process, on receipt, inside its bounds. Request-Price must follow the beacon's request price (whole RNG). The beacon and token are fixed.",
+  "execProcess": "$FAIR",
+  "execTags": {
+    "Action": "Fair.Configure",
+    "Request-Price": "4",
+    "Fair-Window-Ms": "60000"
+  }
+}

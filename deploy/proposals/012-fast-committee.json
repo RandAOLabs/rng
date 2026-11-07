@@ -1,6 +1,6 @@
 {
   "title": "Replace the fast-tier committee",
-  "body": "Queues a new committee for 10 days, then anyone runs Gov.Apply (within 14 days). Needs a new DKG ceremony first: Committee is a JSON list of member wallets, Share-Public-Keys a JSON list in the same order, Group-Key the new group key, Threshold at least 2. Old members keep their earned fees. A Gov.Cancel proposal to the fast tier can stop it.",
+  "body": "Replaces the fast-tier committee on receipt. Needs a new DKG ceremony first: Committee is a JSON list of member wallets, Share-Public-Keys a JSON list in the same order, Group-Key the new group key, Threshold at least 2. Old members keep their earned fees.",
   "execProcess": "$FAST",
   "execTags": {
     "Action": "Gov.Configure",

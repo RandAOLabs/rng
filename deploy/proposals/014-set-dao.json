@@ -1,0 +1,9 @@
+{
+  "title": "Hand the DAO seat to a new DAO",
+  "body": "Gov.Set-Dao names another DAO process as owner in place of this one, on receipt. TARGET is the beacon, fair or fast process: one proposal per process.",
+  "execProcess": "$TARGET",
+  "execTags": {
+    "Action": "Gov.Set-Dao",
+    "Dao": "$NEW_DAO"
+  }
+}

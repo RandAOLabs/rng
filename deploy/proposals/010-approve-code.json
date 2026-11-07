@@ -1,0 +1,9 @@
+{
+  "title": "Approve new protocol code",
+  "body": "Gov.Approve-Code approves one code root (docs: paralith-mono gov.lua). Once it passes anyone uploads the matching code with Gov.Upgrade (one message, or a manifest and parts), and it is installed; the approval is spent by any install. TARGET is the beacon, fair or fast process.",
+  "execProcess": "$TARGET",
+  "execTags": {
+    "Action": "Gov.Approve-Code",
+    "Code-Root": "$CODE_ROOT"
+  }
+}

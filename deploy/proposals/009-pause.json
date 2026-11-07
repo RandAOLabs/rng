@@ -1,6 +1,6 @@
 {
   "title": "Pause the beacon",
-  "body": "Gov.Pause stops the heartbeat and new requests and subscriptions; rounds already open finish. The emergency brake is a DAO proposal like any other (7-day vote); timelocked actions wait 10 days, so a pause or a Gov.Cancel can always pass before they land.",
+  "body": "Gov.Pause stops the heartbeat and new requests and subscriptions; rounds already open finish. It applies on receipt, from the DAO or the launch wallet until it renounces.",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Pause"

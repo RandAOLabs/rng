@@ -7,7 +7,7 @@ import * as fair from '../../lib/js/fair-client.ts';
 import * as history from '../../lib/js/history.ts';
 import { beaconHealth } from '../components/health-banner.tsx';
 import { estimateEarnings } from '../components/validator-guide.tsx';
-import { describeAction, queueView, tally, tokens } from '../app/api/dao/model.ts';
+import { describeAction, ownersLabel, tally, tokens } from '../app/api/dao/model.ts';
 import { signDataItem as vendorSign } from '../../validator/vendor/ans104.mjs';
 
 // The runner's hashes (test/run-fair-tests.mjs), computed with node:crypto.
@@ -249,7 +249,7 @@ test('WP6 estimateEarnings splits round pay across the active set', () => {
   assert.equal(estimateEarnings(1, 2, 0).perRound, 1);
 });
 
-test('DAO tally, actions and the beacon queue', () => {
+test('DAO tally, actions and the beacon owners', () => {
   const p = { yes: '600', no: '300', abstain: '0', veto: '100', quorum: '500', passBps: 5000, vetoBps: 3334 };
   assert.equal(tally(p).outcome, 'passed');
   assert.equal(tally({ ...p, quorum: '2000' }).outcome, 'failed-quorum');
@@ -258,6 +258,10 @@ test('DAO tally, actions and the beacon queue', () => {
   const beacon = addr('beacon');
   assert.deepEqual(describeAction({ process: beacon, tags: { Action: 'Gov.Configure', 'Reveal-Window-Ms': '30000' }, executed: false }, beacon),
     { name: 'Gov.Configure', args: 'Reveal-Window-Ms=30000', toBeacon: true, executed: false });
-  const q = queueView([{ id: 2, kind: 'Treasury-Spend', at: 300, queuedAt: 0, recipient: 'x' }, { id: 1, kind: 'Set-Successor', at: 100, queuedAt: 0 }], 200);
-  assert.deepEqual(q.map((e) => [e.id, e.due, e.remainingMs, e.detail]), [[1, true, 0, ''], [2, false, 100, 'recipient=x']]);
+  const gov = (dao, wallet) => ({ dao, wallet, approved: '', code: '', version: 0 });
+  assert.equal(ownersLabel(gov(addr('dao'), true)), 'Wallet and DAO');
+  assert.equal(ownersLabel(gov(addr('dao'), false)), 'DAO');
+  assert.equal(ownersLabel(gov('', true)), 'Wallet');
+  assert.equal(ownersLabel(gov('', false)), 'None');
+  assert.equal(ownersLabel(undefined), '—');
 });

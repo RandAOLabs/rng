@@ -1,6 +1,6 @@
 {
   "title": "Refill the reserve from the treasury",
-  "body": "Queues Gov.Fund-Reserve for 10 days: treasury atoms into the heartbeat reserve, under the same 10%-per-30-days cap as treasury spends.",
+  "body": "Gov.Fund-Reserve moves treasury atoms into the heartbeat reserve on receipt, up to what the treasury holds.",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Fund-Reserve",

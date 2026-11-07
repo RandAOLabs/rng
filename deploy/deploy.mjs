@@ -14,18 +14,20 @@
 //   fund-game <rng> <game>                  prepay a game's fair-play balance (X-Fair-Game); any game
 //   grant <address> <rng>                   plain RNG transfer from the deployer
 //   bond-for <rng> <address...|validators.json>  Transfer X-Bond X-For each validator
-//   gov <Gov.Action> [Tag=Value ...]        any deployer-path Gov.* (Pause, Resume, Apply, Set-Successor, ...)
+//   gov <Gov.Action> [Tag=Value ...]        any wallet-path Gov.* on the beacon (Pause, Resume, Set-Successor, ...)
 //   resend-ack                              Resend-Successor-Ack to the predecessor
-//   handover --confirm                      Gov.Handover to the recorded DAO (one way; refused unless the
-//                                           beacon's queue is empty and the DAO is a live stake-dao/1).
-//                                           There is no guardian: after it only DAO proposals act.
+// Owners (vendor/gov.lua: the launch wallet and the DAO, equal; every action on receipt, no queue):
+//   set-dao [beacon|fair|fast ...]          Gov.Set-Dao naming the recorded DAO (default: every deployed
+//                                           protocol). Refused unless the DAO is a live stake-dao/1 on our
+//                                           token with no admin, on our scheduler; reads gov.dao back.
+//   renounce-wallet <beacon|fair|fast ...> --confirm   Gov.Renounce-Wallet (one way). Refused unless the
+//                                           protocol already reads the recorded DAO as owner; reads back.
 // Fast tier (on-demand 2-of-3 threshold BLS, beacon/beacon.lua; not a heartbeat):
 //   spawn-fast                              the fast-tier process (lua@5.3a)
 //   genesis-configure-fast [committee.json] deployer Gov.Configure: v3 token, the existing committee
 //                                           (deploy/committee.json), fees; locks token/unit/self
 //   fund-fast <rng> [for]                   a fast-tier balance (X-For)
-//   gov-fast <Gov.Action> [Tag=Value ...]   any deployer-path Gov.* on the fast tier
-//   handover-fast --confirm                 Gov.Handover of the fast tier to the recorded DAO (one way)
+//   gov-fast <Gov.Action> [Tag=Value ...]   any wallet-path Gov.* on the fast tier
 //   dao-stake <rng> | dao-propose <template.json> [KEY=VALUE ...] | dao-vote <id> <Yes|No|NoWithVeto|Abstain>
 //   status | verify                         read and check token, DAO, beacon, fair (verify exits 1 on a failure)
 //   test-subscription                       authenticated-push acceptance test against the v3 beacon
@@ -200,16 +202,27 @@ const EXEC_RESERVED = new Set(['target', 'fromprocess', 'from', 'owner', 'signat
   'process', 'priv', 'type', 'variant', 'dataprotocol', 'pushedfor', 'fromscheduler', 'hashpath', 'slot', 'timestamp',
   'blockheight', 'contenttype', 'contentdigest', 'aotypes', 'aoresult', 'codecdevice', 'bundle',
   'xtransfersequence', 'xreference', 'cast']);
+// gov.lua's verbs a DAO proposal may carry (Gov.Renounce-Wallet is the wallet's
+// alone; Gov.Upgrade carries code in Data, which a proposal cannot: anyone
+// uploads the approved code instead).
+const OWNER_TAGS = { 'Gov.Set-Dao': ['Dao'], 'Gov.Approve-Code': ['Code-Root'] };
+// Every action applies on receipt: there is no queue, Gov.Apply or Gov.Cancel.
 const GOV_TAGS = {
   'Gov.Configure': null, // checked against CONFIGURE_TAGS
   'Gov.Set-Successor': ['Successor'], 'Gov.Move-Reserve': ['Successor'], 'Gov.Treasury-Spend': ['Recipient', 'Quantity'],
   'Gov.Fund-Reserve': ['Quantity'], 'Gov.Remove-Validator': ['Validator'], 'Gov.Pause': [], 'Gov.Resume': [],
-  'Gov.Cancel': ['Gov-Id'], 'Gov.Apply': ['Gov-Id'],
+  ...OWNER_TAGS,
 };
-// The fast tier's Gov.* (beacon/beacon.lua): fees and the abandon window at once, committee timelocked.
+// The fast tier's Gov.* (beacon/beacon.lua).
 const FAST_GOV_TAGS = {
   'Gov.Configure': ['Signer-Fee', 'Protocol-Fee', 'Abandon-After-Ms', 'Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'],
-  'Gov.Claim-Protocol': ['Recipient'], 'Gov.Pause': [], 'Gov.Resume': [], 'Gov.Cancel': ['Gov-Id'], 'Gov.Apply': ['Gov-Id'],
+  'Gov.Claim-Protocol': ['Recipient'], 'Gov.Pause': [], 'Gov.Resume': [], ...OWNER_TAGS,
+};
+// Fair play (fair/fair.lua): Fair.Configure by tag.
+const FAIR_GOV_TAGS = {
+  'Fair.Configure': ['Beacon', 'Token', 'Request-Price', 'Fair-Window-Ms', 'Keep', 'Max-Open', 'Min-Interval-Ms',
+    'Max-Games', 'Max-Per-Game'],
+  ...OWNER_TAGS,
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
   'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',
@@ -227,8 +240,9 @@ export function fillTemplate(template, vars) {
 }
 
 /** Errors a (filled) proposal would hit at the DAO's Propose, or at the beacon
- * (or the fast tier, when `fast` names it and the proposal targets it). */
-export function proposalErrors(p, { token, fast } = {}) {
+ * (or the fast tier or fair play, when `fast` / `fair` names it and the
+ * proposal targets it). */
+export function proposalErrors(p, { token, fast, fair } = {}) {
   const errs = [];
   if (typeof p.title !== 'string' || !p.title || p.title.length > 120) errs.push('title must be 1-120 characters');
   if (typeof p.body !== 'string' || p.body.length > 4000) errs.push('body must be at most 4000 characters');
@@ -249,9 +263,9 @@ export function proposalErrors(p, { token, fast } = {}) {
     if (typeof v !== 'string' || !v || v.length > 512 || /[\x00-\x1f\x7f]/.test(v)) errs.push(`tag ${name}: non-empty string <= 512, no control characters`);
   }
   const action = tags.Action;
-  const toFast = Boolean(fast) && p.execProcess === fast;
-  const table = toFast ? FAST_GOV_TAGS : GOV_TAGS;
-  if (!(action in table)) errs.push(`Action ${action} is not a ${toFast ? 'fast-tier' : 'beacon'} Gov.* action the DAO may send`);
+  const target = Boolean(fast) && p.execProcess === fast ? 'fast-tier' : Boolean(fair) && p.execProcess === fair ? 'fair' : 'beacon';
+  const table = { 'fast-tier': FAST_GOV_TAGS, fair: FAIR_GOV_TAGS, beacon: GOV_TAGS }[target];
+  if (!(action in table)) errs.push(`Action ${action} is not a ${target} action the DAO may send`);
   else {
     const allowed = new Set(['action', ...(table[action] || CONFIGURE_TAGS).map(word)]);
     for (const name of names) if (!allowed.has(word(name))) errs.push(`${action} does not read tag ${name}`);
@@ -260,33 +274,45 @@ export function proposalErrors(p, { token, fast } = {}) {
   return errs;
 }
 
-/** The beacon's shortest governance delay (anyhonest.lua GOV_DELAY_MS): the DAO's
- * voting period must be shorter, so a Gov.Cancel can pass before an action lands. */
-export const BEACON_GOV_DELAY_MS = 10 * DAY;
+/** The governed protocols and the key each publishes its owners in (`gov`). */
+export const PROTOCOL_ROLES = ['beacon', 'fair', 'fast'];
+export const INFO_KEY = { beacon: 'beaconinfo', fair: 'fairinfo', fast: 'beaconinfo' };
 
-/** Why Gov.Handover must not be sent yet (empty: go). The governor must be a
- * live stake-dao/1 process on our token (a wallet publishes no daoinfo), and
- * the beacon must have nothing queued: the deployer's queue would land under
- * the DAO's name. */
-export function handoverErrors({ state, beaconinfo, daoinfo, me }) {
+/** Why Gov.Set-Dao must not be sent to `role` (empty: go). The DAO must be a
+ * live stake-dao/1 process on our token with no admin (a wallet publishes no
+ * daoinfo), on the one scheduler; the protocol must be configured on the
+ * token and still answer to the wallet. */
+export function setDaoErrors({ state, role, info, daoinfo, me }) {
   const errs = [];
+  if (!PROTOCOL_ROLES.includes(role)) return [`${role} is not a governed protocol (${PROTOCOL_ROLES.join(', ')})`];
+  if (!isPid(state[role])) errs.push(`${role} is not deployed`);
   if (!isPid(state.dao)) errs.push('no DAO recorded: spawn-dao first');
-  if (state.dao && state.dao === me) errs.push('the governor is the deployer wallet');
-  if (!beaconinfo) errs.push(`beacon ${state.beacon} publishes no beaconinfo`);
+  if (state.dao && state.dao === me) errs.push('the DAO is the deployer wallet');
+  try { sameScheduler(state, ['dao', role]); } catch (e) { errs.push(e.message); }
+  if (!info) errs.push(`${role} ${state[role]} publishes no ${INFO_KEY[role]}`);
   else {
-    if (beaconinfo.token !== state.token) errs.push('beacon has not run genesis-configure');
-    if (beaconinfo.governor) errs.push(`beacon is already governed by ${beaconinfo.governor}`);
-    const queued = Array.isArray(beaconinfo.govQueue) ? beaconinfo.govQueue.length : 0;
-    if (queued) errs.push(`beacon has ${queued} queued governance action(s): Gov.Cancel them first`);
+    if (info.token !== state.token) errs.push(`${role} is not configured on the token yet`);
+    if (!info.gov) errs.push(`${role} publishes no gov: not a co-owned build`);
+    else if (info.gov.wallet !== true && info.gov.dao !== state.dao) errs.push(`${role} no longer answers to the wallet`);
   }
-  if (!daoinfo) errs.push(`governor ${state.dao} publishes no daoinfo: not a live DAO process (a wallet?)`);
+  if (!daoinfo) errs.push(`DAO ${state.dao} publishes no daoinfo: not a live DAO process (a wallet?)`);
   else {
-    if (daoinfo.Standard !== 'stake-dao/1') errs.push(`governor is ${daoinfo.Standard}, not stake-dao/1`);
-    if (daoinfo.Configured !== true || daoinfo.Token !== state.token) errs.push('governor is not a DAO configured on our token');
-    if (daoinfo.Admin !== '') errs.push('governor DAO has an admin');
-    if (!(Number(daoinfo.VotingPeriod) < BEACON_GOV_DELAY_MS)) errs.push('DAO voting period is not shorter than the beacon governance delay');
+    if (daoinfo.Standard !== 'stake-dao/1') errs.push(`DAO is ${daoinfo.Standard}, not stake-dao/1`);
+    if (daoinfo.Configured !== true || daoinfo.Token !== state.token) errs.push('DAO is not configured on our token');
+    if (daoinfo.Admin !== '') errs.push('DAO has an admin');
   }
   return errs;
+}
+
+/** Why Gov.Renounce-Wallet must not be sent to `role` (empty: go): one
+ * way, so only once the protocol reads the recorded DAO as its owner. */
+export function renounceErrors({ state, role, info }) {
+  if (!PROTOCOL_ROLES.includes(role)) return [`${role} is not a governed protocol (${PROTOCOL_ROLES.join(', ')})`];
+  if (!info) return [`${role} ${state[role]} publishes no ${INFO_KEY[role]}`];
+  if (!info.gov) return [`${role} publishes no gov: not a co-owned build`];
+  if (!isPid(state.dao) || info.gov.dao !== state.dao) return [`${role} does not name the DAO ${state.dao}: set-dao ${role} first`];
+  if (info.gov.wallet !== true) return [`${role} has no wallet owner left to renounce`];
+  return [];
 }
 
 /** Why a transfer to the beacon (or the fast tier: role 'fast') would strand
@@ -336,7 +362,6 @@ export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fasti
     if (state.predecessor !== undefined) c('beacon predecessor', (beaconinfo?.predecessor || '') === state.predecessor, beaconinfo?.predecessor);
     c('beacon health ok', beaconinfo?.health?.status === 'ok', JSON.stringify(beaconinfo?.health));
     c('beacon reserve funded', BigInt(beaconinfo?.foundationReserveAtoms || 0) > 0n, beaconinfo?.foundationReserveAtoms);
-    if (state.governor) c('beacon governed by the DAO', beaconinfo?.governor === state.dao, beaconinfo?.governor);
   }
   if (state.fast) {
     c('fast token', fastinfo?.token === state.token, fastinfo?.token);
@@ -344,11 +369,17 @@ export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fasti
     c('fast on demand', fastinfo?.tier === 'fast' && fastinfo?.nextRoundAt === 0, fastinfo?.mode);
     c('fast committee', Array.isArray(fastinfo?.committee) && fastinfo.committee.length >= fastinfo.threshold
       && fastinfo.threshold >= 2, `${fastinfo?.threshold}/${fastinfo?.committee?.length}`);
-    if (state.fastGovernor) c('fast governed by the DAO', fastinfo?.governor === state.dao, fastinfo?.governor);
   }
   if (state.fair) {
     c('fair bound to beacon', fairinfo?.beacon === state.beacon, fairinfo?.beacon);
     c('fair paid in RNG', fairinfo?.token === state.token && Number(fairinfo?.requestPriceAtoms) > 0, fairinfo?.token);
+  }
+  // Owners: what set-dao / renounce-wallet recorded must be what each protocol publishes.
+  for (const [role, info] of [['beacon', beaconinfo], ['fair', fairinfo], ['fast', fastinfo]]) {
+    const want = state[role] && state.owners?.[role];
+    if (!want) continue;
+    if (want.dao) c(`${role} co-owned by the DAO`, info?.gov?.dao === state.dao, info?.gov?.dao);
+    if (want.walletRenounced) c(`${role} wallet renounced`, info?.gov?.wallet === false, info?.gov?.wallet);
   }
   try { sameScheduler(state, ['token', 'dao', 'beacon', 'fair', 'fast'].filter((r) => state[r])); c('one scheduler', true, state.scheduler); }
   catch (e) { c('one scheduler', false, e.message); }
@@ -365,7 +396,11 @@ const json = () => [
   'local encode, jsonObject = jsonx.encode, jsonx.object',
 ];
 export const tokenSource = (prelude) => [prelude, ...json(), read('protocol/token/rng-token.lua')].join('\n');
-const anyHonestSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('protocol/beacon/anyhonest.lua')].join('\n');
+// Every governed protocol carries paralith-mono's gov.lua (vendored, checked
+// against PARALITH_MONO by the deploy tests) and its sha256.lua.
+const govSource = () => [read('protocol/vendor/sha256.lua'), read('protocol/vendor/gov.lua')];
+const anyHonestSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', ...govSource(),
+  read('protocol/beacon/anyhonest.lua')].join('\n');
 // lua-patch@1.0 (paralith-mono's lua53b.lua adapter): only changed keys are
 // published and the VM keeps state between messages. The adapter's compute
 // calls the beacon's, so the beacon's final full collect moves out to it; the
@@ -393,10 +428,14 @@ const fairSource = () => [
   'json = require(".json")',
   'rng = (function()', read('lib/rng.lua'), 'end)()',
   'fair = (function()', read('lib/fair.lua'), 'end)()',
+  ...govSource(),
   read('protocol/fair/fair.lua'),
 ].join('\n');
 // The fast tier: on-demand threshold BLS (lua@5.3a, whole state per message).
-const fastSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', read('protocol/beacon/beacon.lua')].join('\n');
+const fastSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', ...govSource(),
+  read('protocol/beacon/beacon.lua')].join('\n');
+/** The bundle each protocol role is spawned with (lua@5.3a; the beacon's lua-patch@1.0 wraps its own). */
+export const protocolSources = { anyHonest: anyHonestSource, fair: fairSource, fast: fastSource };
 const subscriptionConsumerSource = (beacon, id) => [...json(), read('protocol/test/subscription-consumer.lua')]
   .join('\n').replaceAll('__BEACON__', beacon).replaceAll('__SUBSCRIPTION_ID__', id);
 
@@ -515,17 +554,27 @@ async function main(argv) {
       const rules = daoRules({ token: state.token, ticker: state.tokenTicker || 'RNG' });
       const definition = Object.fromEntries(Object.entries(rules).map(([k, v]) => [k.toLowerCase(), v]));
       const device = flag('--lua53b') ? 'lua-patch@1.0' : 'lua@5.3a';
+      // deploy-dao.mjs semantics, our rules: the module comes from paralith-mono.
+      const PM = path.resolve(process.env.PARALITH_MONO || path.join(ROOT, '..', 'paralith-mono'));
+      const imp = (p) => import(pathToFileURL(path.join(PM, p)).href);
       if (DRY) {
         const pid = placeholder('dao');
+        // With PARALITH_MONO set, a dry run builds the module too: it proves the
+        // DAO bundles from that tree, and names the bytes a live run would spawn.
+        let module = null;
+        if (process.env.PARALITH_MONO) {
+          const { daoModuleSources, dao53bModuleSources } = await imp('backend/native/contracts-53b-bundle.mjs');
+          const lua = device === 'lua-patch@1.0'
+            ? dao53bModuleSources({ owner: placeholder('spawner'), scheduler: state.scheduler, definition })
+            : daoModuleSources();
+          module = { from: PM, sourceBytes: Buffer.byteLength(lua), sourceSha256: sha256(lua) };
+        }
         log({ op: 'spawn', pid, role: 'dao', standard: 'stake-dao/1', executionDevice: device, scheduler: state.scheduler,
-          vanityPrefix: 'yap', definition });
+          vanityPrefix: 'yap', definition, ...(module ? { module } : {}) });
         state.processes[pid] = { role: 'dao', scheduler: state.scheduler, executionDevice: device };
         state.dao = pid;
         return pid;
       }
-      // deploy-dao.mjs semantics, our rules: the module comes from paralith-mono.
-      const PM = path.resolve(process.env.PARALITH_MONO || path.join(ROOT, '..', 'paralith-mono'));
-      const imp = (p) => import(pathToFileURL(path.join(PM, p)).href);
       const { daoModuleSources, dao53bModuleSources } = await imp('backend/native/contracts-53b-bundle.mjs');
       const { spawnVanity, throwawayKey } = await imp('packages/rune-ao/src/spawn/node.mjs');
       const ti = await key(state.token, 'tokeninfo');
@@ -618,26 +667,55 @@ async function main(argv) {
 
     async gov(action, ...kv) {
       if (!/^Gov\.[A-Za-z-]+$/.test(action || '')) throw new Error('gov <Gov.Action> [Tag=Value ...]');
-      if (action === 'Gov.Handover') throw new Error('use `handover`');
+      if (/^Gov\.(Set-Dao|Renounce-Wallet)$/.test(action)) throw new Error('use `set-dao` / `renounce-wallet`');
       const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
       return send(state.beacon, action, { tags });
     },
     'resend-ack': () => send(state.beacon, 'Resend-Successor-Ack'),
 
-    // One way, and there is no guardian: after it the DAO acts only through
-    // proposals, and every timelock (10 d) outlasts its 7-day vote.
-    async handover() {
-      if (!flag('--confirm') && !DRY) throw new Error('Gov.Handover is one way: add --confirm');
-      sameScheduler(state, ['token', 'dao', 'beacon']);
-      if (!DRY) {
-        const [beaconinfo, daoinfo] = await Promise.all([key(state.beacon, 'beaconinfo'), key(state.dao, 'daoinfo')]);
-        const errs = handoverErrors({ state, beaconinfo, daoinfo, me });
-        if (errs.length) throw new Error(`handover refused: ${errs.join('; ')}`);
+    // The DAO becomes an owner beside the wallet, on every named protocol
+    // (default: every deployed one). Read back before it is recorded.
+    async 'set-dao'(...roles) {
+      const list = roles.length ? roles : PROTOCOL_ROLES.filter((r) => state[r]);
+      if (!list.length) throw new Error('set-dao [beacon|fair|fast ...]: nothing deployed');
+      for (const role of list) {
+        if (!DRY) {
+          const [info, daoinfo] = await Promise.all([key(state[role], INFO_KEY[role]), key(state.dao, 'daoinfo')]);
+          const errs = setDaoErrors({ state, role, info, daoinfo, me });
+          if (errs.length) throw new Error(`set-dao ${role} refused: ${errs.join('; ')}`);
+        } else {
+          const errs = setDaoErrors({ state, role, info: { token: state.token, gov: { dao: '', wallet: true } },
+            daoinfo: { Standard: 'stake-dao/1', Configured: true, Token: state.token, Admin: '' }, me });
+          if (errs.length) throw new Error(`set-dao ${role} refused: ${errs.join('; ')}`);
+        }
+        const r = await send(state[role], 'Gov.Set-Dao', { tags: { Dao: state.dao } });
+        if (!DRY) {
+          const back = (await key(state[role], INFO_KEY[role]))?.gov;
+          if (back?.dao !== state.dao) throw new Error(`set-dao ${role}: reads back ${JSON.stringify(back)}; reply ${r.output}`);
+        }
+        state.owners = { ...state.owners, [role]: { ...state.owners?.[role], dao: state.dao } };
+        save();
       }
-      const r = await send(state.beacon, 'Gov.Handover', { tags: { Governor: state.dao } });
-      state.governor = state.dao;
-      save();
-      return r;
+    },
+    // One way: after it only the DAO governs that protocol.
+    async 'renounce-wallet'(...roles) {
+      if (!roles.length) throw new Error('renounce-wallet <beacon|fair|fast ...> --confirm');
+      if (!flag('--confirm') && !DRY) throw new Error('Gov.Renounce-Wallet is one way: add --confirm');
+      for (const role of roles) {
+        if (!DRY) {
+          const errs = renounceErrors({ state, role, info: await key(state[role], INFO_KEY[role]) });
+          if (errs.length) throw new Error(`renounce-wallet ${role} refused: ${errs.join('; ')}`);
+        } else if (state.owners?.[role]?.dao !== state.dao || !PROTOCOL_ROLES.includes(role)) {
+          throw new Error(`renounce-wallet ${role} refused: set-dao ${role} first`);
+        }
+        const r = await send(state[role], 'Gov.Renounce-Wallet');
+        if (!DRY) {
+          const back = (await key(state[role], INFO_KEY[role]))?.gov;
+          if (back?.wallet !== false) throw new Error(`renounce-wallet ${role}: reads back ${JSON.stringify(back)}; reply ${r.output}`);
+        }
+        state.owners = { ...state.owners, [role]: { ...state.owners?.[role], walletRenounced: true } };
+        save();
+      }
     },
 
     // Fast tier: on-demand threshold BLS, paid per request; no heartbeat.
@@ -656,22 +734,9 @@ async function main(argv) {
     'fund-fast': async (rng, forWho) => fundBeacon(rng, { 'X-For': forWho || me }, 'fast'),
     async 'gov-fast'(action, ...kv) {
       if (!/^Gov\.[A-Za-z-]+$/.test(action || '')) throw new Error('gov-fast <Gov.Action> [Tag=Value ...]');
-      if (action === 'Gov.Handover') throw new Error('use `handover-fast`');
+      if (/^Gov\.(Set-Dao|Renounce-Wallet)$/.test(action)) throw new Error('use `set-dao fast` / `renounce-wallet fast`');
       const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
       return send(state.fast, action, { tags });
-    },
-    async 'handover-fast'() {
-      if (!flag('--confirm') && !DRY) throw new Error('Gov.Handover is one way: add --confirm');
-      sameScheduler(state, ['token', 'dao', 'fast']);
-      if (!DRY) {
-        const [fastinfo, daoinfo] = await Promise.all([key(state.fast, 'beaconinfo'), key(state.dao, 'daoinfo')]);
-        const errs = handoverErrors({ state: { ...state, beacon: state.fast }, beaconinfo: fastinfo, daoinfo, me });
-        if (errs.length) throw new Error(`fast handover refused: ${errs.join('; ')}`);
-      }
-      const r = await send(state.fast, 'Gov.Handover', { tags: { Governor: state.dao } });
-      state.fastGovernor = state.dao;
-      save();
-      return r;
     },
 
     'dao-stake': (rng) => transfer(state.dao, rng),
@@ -679,7 +744,7 @@ async function main(argv) {
       const vars = { BEACON: state.beacon, FAST: state.fast, DAO: state.dao, TOKEN: state.token, FAIR: state.fair,
         ...Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2))) };
       const p = fillTemplate(readJson(file), vars);
-      const errs = proposalErrors(p, { token: state.token, fast: state.fast });
+      const errs = proposalErrors(p, { token: state.token, fast: state.fast, fair: state.fair });
       if (errs.length) throw new Error(`proposal refused: ${errs.join('; ')}`);
       return send(state.dao, 'Propose', { tags: { Title: p.title, Body: p.body,
         'Exec-Process': p.execProcess, 'Exec-Tags': JSON.stringify(p.execTags) } });
@@ -696,8 +761,8 @@ async function main(argv) {
       const checks = checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo });
       console.log(JSON.stringify({ token: state.token, dao: state.dao, beacon: state.beacon, fair: state.fair, fast: state.fast,
         scheduler: state.scheduler, mode: beaconinfo?.mode, round: beaconinfo?.round, health: beaconinfo?.health,
-        registered: beaconinfo?.registered, governor: beaconinfo?.governor, govQueue: beaconinfo?.govQueue,
-        fastRound: fastinfo?.round, fastGovernor: fastinfo?.governor, fastGovQueue: fastinfo?.govQueue, checks }, null, 1));
+        registered: beaconinfo?.registered, gov: { beacon: beaconinfo?.gov, fair: fairinfo?.gov, fast: fastinfo?.gov },
+        fastRound: fastinfo?.round, checks }, null, 1));
       return checks;
     },
     async verify() {
@@ -746,9 +811,10 @@ async function main(argv) {
       // daemons are repointed at it live (deploy/nodes.sh beacon <fast>).
       await v3['spawn-fast']();
       await v3['genesis-configure-fast']();
-      // The old beacon's Admin.Set-Successor (legacy-set-successor) goes here, live.
-      await v3.handover();
-      await v3['handover-fast']();
+      // A fresh deploy has no predecessor beacon (v3-params.json predecessor "").
+      // The RNG DAO co-owns every protocol; the wallet keeps its seat until
+      // renounce-wallet, which a fresh deploy does not send.
+      await v3['set-dao']();
       await v3['dao-propose'](path.join(HERE, 'proposals', '001-handover-proof.json'));
       log({ op: 'check', sameScheduler: sameScheduler(state, ['token', 'dao', 'beacon', 'fair', 'fast']), scheduler: state.scheduler });
     },

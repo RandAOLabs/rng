@@ -1,6 +1,6 @@
 {
   "title": "Tune beacon parameters",
-  "body": "Gov.Configure applies at once, inside the hard bounds (docs/PERMISSIONLESS.md), except Stake, Slash, Commit-Window-Ms and Reveal-Window-Ms: those are queued for 10 days, then anyone runs Gov.Apply. Up to 14 parameters per proposal.",
+  "body": "Gov.Configure applies on receipt, inside the hard bounds (docs/PERMISSIONLESS.md). Up to 14 parameters per proposal.",
   "execProcess": "$BEACON",
   "execTags": {
     "Action": "Gov.Configure",

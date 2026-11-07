@@ -175,11 +175,10 @@ final value. Membership changes cannot mutate an existing round.
 
 The new beacon's genesis `Gov.Configure` names the old one as `predecessor`
 and sends it `Successor-Ack` (`Resend-Successor-Ack` sends it again). On the
-old beacon, governance queues `Gov.Set-Successor` (10 days, then anyone's
-`Gov.Apply`). A validator stops taking new rounds on the old beacon (Pause),
+old beacon, an owner sends `Gov.Set-Successor` (on receipt). A validator stops taking new rounds on the old beacon (Pause),
 reveals what it still owes, then moves to a successor that names the old
 beacon as predecessor, and records the move in `secrets-dir/beacon.json`.
-`Gov.Move-Reserve` (10 days) sends the unspent reserve to the successor it
+`Gov.Move-Reserve` (on receipt) sends the unspent reserve to the successor it
 names, once that is the successor and has acked since it was named, on the
 same token. Stakes do not move: validators exit the old beacon to get
 theirs back and bond on the new one.
@@ -188,7 +187,7 @@ theirs back and bond on the new one.
 
 | Key | What | Changes |
 | --- | --- | --- |
-| `beaconinfo` | rounds open and revealing, listed validators, params, prices, `mode`, `health`, `at`, governor, `govQueue`, `features` | every message |
+| `beaconinfo` | rounds open and revealing, listed validators, params, prices, `mode`, `health`, `at`, `gov` (owners), `features` | every message |
 | `beaconvalidators` | the full registry | when it changes |
 | `beaconparams` | the group `g`, `n`, the puzzle `T` and `h` | on `Gov.Configure` |
 | `beaconround-<round % 8>` | a finalized round: commits, outputs, value | when it finalizes |
@@ -245,27 +244,31 @@ published round before reporting success.
 
 ## Governance
 
-Before handover the deployer wallet governs; `Gov.Handover` hands the beacon to
-the RNG DAO for good. After that only a passed DAO proposal (one tags-only
-message, sent by the DAO process) can act:
+The beacon, fair play and the fast tier each have two equal owners
+(paralith-mono's `gov.lua`, vendored in `protocol/vendor/`): the launch wallet,
+until it sends `Gov.Renounce-Wallet` (one way, refused while no DAO is set),
+and the RNG DAO named by `Gov.Set-Dao` (a passed proposal: one tags-only
+message, sent by the DAO process and attested by our scheduler). Every owner
+action applies on receipt; there is no queue, no `Gov.Apply`, `Gov.Cancel` or
+`Gov.Handover`, and no guardian.
 
-| Action | Delay | Effect |
-| --- | --- | --- |
-| `Gov.Configure` | none; 10 days for `stake`, `slash`, `commitWindowMs`, `revealWindowMs` | parameters, inside hard bounds (`slash` at most a tenth of `stake`); token, unit, self and predecessor never change after genesis |
-| `Gov.Set-Successor`, `Gov.Move-Reserve` | 10 days | name a successor (the newest supersedes); move the reserve to the successor it names |
-| `Gov.Treasury-Spend`, `Gov.Fund-Reserve` | 10 days | together at most 10% of the Treasury per 30 days; never to the DAO, the beacon or the token |
-| `Gov.Remove-Validator` | none | remove a validator, bond refunded in full |
-| `Gov.Pause` / `Gov.Resume`, `Gov.Cancel` | none | the brake; drop a queued action |
+| Action | Effect |
+| --- | --- |
+| `Gov.Set-Dao` | names the DAO owner (either owner; the DAO can hand its seat to another DAO) |
+| `Gov.Renounce-Wallet` | the wallet leaves for good (the wallet only) |
+| `Gov.Approve-Code`, `Gov.Upgrade` | an owner approves a code root, anyone uploads it (the wallet installs directly) |
+| `Gov.Configure` | parameters, inside hard bounds (`slash` at most a tenth of `stake`, one incident at most half); token, unit, self and predecessor never change after genesis |
+| `Gov.Set-Successor`, `Gov.Move-Reserve` | name a successor (the newest replaces it); move the whole reserve to it once it has acked since it was named |
+| `Gov.Treasury-Spend`, `Gov.Fund-Reserve` | up to what the treasury holds; never to the DAO, the beacon or the token |
+| `Gov.Remove-Validator` | remove a validator, bond refunded in full |
+| `Gov.Pause` / `Gov.Resume` | the brake |
 
-Every delay is longer than the DAO's 7-day vote, so a cancelling proposal can
-pass first. Anyone runs `Gov.Apply` once a queued action is due; 14 days after
-that it expires. `Gov.Handover` is refused while anything is queued. There is
-no guardian: after handover the DAO acts only through proposals, the brake
-included, and because every timelock outlasts the vote the DAO can always
-cancel a queued action before it lands. Governance can never take a bond or a user balance: a
-fault costs at most a tenth of the stake, and changes to what a bond is exposed
-to land 10 days after the vote, time enough to exit. Proposal templates are in
-`deploy/proposals/`.
+A `Gov.*` from the DAO carrying an `X-Dao-Proposal` already seen runs once.
+Owners are published as `gov` in `beaconinfo` (and `fairinfo`) and kept in the
+process state, so a rebuilt VM never re-arms a renounced wallet; an owner
+change is checkpointed at once on lua-patch@1.0. Governance can never take a
+bond or a user balance: removal refunds in full and a fault costs at most a
+tenth of the stake. Proposal templates are in `deploy/proposals/`.
 
 ## Fair play
 

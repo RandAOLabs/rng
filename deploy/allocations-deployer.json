@@ -1,0 +1,12 @@
+{
+  "ticker": "RNG",
+  "note": "Fresh deploy 2026-11-07: the deployer wallet receives the whole supply (1,000,000,000 RNG = 10^15 atoms) in one allocation. The runbook then moves 200,000,000 RNG into the beacon reserve (X-Foundation) and 50,000,000 into its treasury (X-Treasury), under the beacon's owners (the wallet and the RNG DAO), and bonds validatorRng for each launch validator. The rest stays with the deployer for seeding the RNG/PUSD book and the swarm.",
+  "allocations": [
+    { "role": "deployer", "address": "$DEPLOYER", "rng": 1000000000 }
+  ],
+  "distribution": {
+    "reserveRng": 200000000,
+    "treasuryRng": 50000000,
+    "validatorRng": 100000
+  }
+}
