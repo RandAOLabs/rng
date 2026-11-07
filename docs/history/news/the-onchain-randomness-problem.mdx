@@ -1,0 +1,46 @@
+---
+slug: the-onchain-randomness-problem
+title: The Onchain Randomness Problem
+authors: ['abpiv']
+tags: [technical, investment]
+date: 2025-04-01
+---
+
+import { RANDAO } from '@arcaogaming/project-links';
+
+
+> “There is no truly random. There is only unpredictable.”
+
+In the world of blockchain, randomness isn’t just hard — it’s inherently compromised by the very properties that make blockchains powerful: transparency and determinism.
+
+Randomness in a blockchain context has to be **unpredictable** — and more importantly, **equally unpredictable to all participants**. That means no party should have privileged access to influence or predict the outcome of a random event. This is fundamentally at odds with trustless, permissionless systems.
+
+Random numbers are vital: from cryptographic keys to fair games of chance, and even to video game mechanics like loot boxes. But onchain, randomness becomes a minefield of trust assumptions and attack vectors.
+
+{/* truncate */}
+
+#### Why Traditional RNG Fails Onchain
+
+Blockchains, by design, are public and deterministic. This means that any randomness derived from onchain data — like block hashes or timestamps — is inherently predictable or manipulable by miners and validators.
+
+Enter **Verifiable Random Functions (VRFs)**. These can generate random values in a cryptographically secure way, but the issue lies in **who operates them**. Whoever runs the VRF gains advanced knowledge or control over outcomes — violating the principle of equal unpredictability.
+
+**Oracles**, another workaround, centralize trust even further. Users must trust that the oracle operator hasn’t gamed the result — like drawing winning lottery numbers that conveniently benefit them.
+
+#### So What’s the Fix?
+
+We’ve developed **RANDAO** — a permissionless randomness protocol powered by a decentralized network. It’s based on a **modified commit-reveal** scheme, enhanced with **time-unlocked commitments** and secured by a network of **$RNG miners**. These miners provide and solve **Timelock puzzles** onchain, creating a transparent and trustless pipeline of unpredictable randomness.
+
+The goal? To make **onchain randomness truly permissionless, transparent, and tamper-resistant** — opening the door for fairer games, stronger cryptography, and more secure dApps.
+
+---
+
+_Interested in shaping the future of onchain randomness?_
+
+🧠 Learn how to become an **$RNG Miner** and start securing decentralized randomness today.
+
+💬 Need help getting started? Join our growing community on Discord for miner support, discussions, and updates:
+
+<a href={RANDAO.discord} target="_blank"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-333333?style=flat&logo=discord"/></a>
+
+<a href={RANDAO.providerSite} target="_blank"><img alt="Website" src="https://img.shields.io/badge/Website-Visit-333333?style=flat&logo=google-chrome"/></a>
