@@ -20,6 +20,15 @@
 -- one value per request and sends each requesting PROCESS one RNG-Result.
 -- A wallet reads its round from `beaconstate.seen["<wallet>|<id>"]` and its
 -- value from the round record (pushes to wallets stall the node's delivery).
+-- A round the committee does not sign in time is abandoned: its requests are
+-- refunded in full and requesting processes get RNG-Error Round-Abandoned.
+--
+-- State is bounded (docs/PERMISSIONLESS.md, "State bounds"): request ids are
+-- remembered GUARD_MS, token references CREDIT_KEEP, finalized rounds
+-- ROUND_HISTORY. History lives in the per-slot results: every finalized or
+-- abandoned round publishes `beaconround` in its own slot, and
+-- `beaconhistory` maps the last HISTORY_KEEP rounds to their slots
+-- (deploy/README.md, "History").
 --
 -- Members exchange partial signatures through this process (Partial), so the
 -- nodes never need to reach each other directly: each reads the others'
@@ -41,8 +50,20 @@
 
 local json = require(".json")
 
--- Finalized rounds kept in state for Get-Round reads; older ones age out.
-local ROUND_HISTORY = 256
+-- Finalized rounds kept in state for Get-Round reads; older ones age out
+-- (readable at their slot, see `beaconhistory`).
+local ROUND_HISTORY = 32
+local HISTORY_KEEP = 1024    -- rounds listed in `beaconhistory` (round -> slot)
+local GUARD_MS = 600000      -- a request id is remembered (and a Request-Time accepted) this long
+local SKEW_MS = 120000       -- how far ahead of the scheduler's clock a Request-Time may be
+local CREDIT_KEEP = 1000     -- token references kept before the oldest fold into `creditFloor`
+local EXECUTED_KEEP = 256    -- DAO proposals remembered as executed (see markExecuted)
+-- A round left unsigned abandonAfterMs after its oldest request is abandoned
+-- and refunded. Once its value can be computed from what was published (t
+-- partials, or a posted signature), not before ABANDON_CAP_MS after it locked:
+-- abandoning then would let members who dislike a value they have seen void
+-- it (selective abort), so that costs them a week's delay.
+local ABANDON_CAP_MS = 7 * 86400000
 
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 
@@ -69,24 +90,31 @@ local function freshState()
     verification = "attestations", -- testnet fallback; production uses rng@1.0
     signerFee = 1,        -- RNG per request to each signer of its round
     protocolFee = 1,      -- RNG per request to the protocol (spent by governance)
-    round = 0,            -- last finalized round
+    round = 0,            -- last finalized (or abandoned past its lock) round
     lastRoundAt = 0,
-    rounds = {},          -- "r" -> { signature, value, signers }
+    abandonAfterMs = 1800000, -- an unsigned round's requests are refunded this long after the oldest
+    rounds = {},          -- "r" -> { signature, value, signers }, the last ROUND_HISTORY
+    history = {},         -- { round, slot[, "abandoned"] }, oldest first; published as `beaconhistory`
     balances = {},        -- address -> RNG
     accrued = {},         -- signer address -> RNG earned, unclaimed
     protocolAccrued = 0,
     pending = {},         -- "r" -> list of { requester, requestId, charged, protocol, process }
     pendingCount = 0,
     lockedRound = 0,      -- first Partial/Round closes this round to new requests
-    seen = {},            -- requester|requestId -> round it was bound to
-    credited = {},        -- token Reference -> true (notices may arrive twice)
+    lockedAt = 0,         -- when it did
+    seen = {},            -- requester|requestId -> round it was bound to, for GUARD_MS
+    seenQueue = {},       -- { requester|requestId, forget-at ms }, in arrival order
+    credited = {},        -- token reference seq -> true (notices may arrive twice)
+    creditFloor = 0,      -- every reference seq at or below this counts as credited
     attest = {},          -- "r" -> { by = member -> sig, sigs = sig -> members }
     equivocations = {},   -- member -> conflicting signatures posted
     partials = { round = 0, by = {} }, -- open round's partial signatures, by member
     -- Governance. Before Gov.Handover the deployer wallet (Owner) governs;
     -- after it only `governor`, the DAO process, as attested by our scheduler.
     governor = "",
-    gov = { queue = {}, nextId = 1, executed = {} },
+    -- executed: "governor|X-Dao-Proposal" -> true, the last EXECUTED_KEEP
+    -- (executedOrder); executedFloor: the highest numeric proposal pruned.
+    gov = { queue = {}, nextId = 1, executed = {}, executedOrder = {}, executedFloor = 0 },
     paused = false,
     transferSeq = 0,      -- X-Transfer-Sequence of the last token Transfer; only ever increases
   }
@@ -116,6 +144,10 @@ local function restore(base)
   if ok and type(saved) == "table" then
     Beacon = freshState()
     for k, v in pairs(deflate(saved)) do Beacon[k] = v end
+    local hok, history = pcall(json.decode, base.beaconhistory or "")
+    if hok and type(history) == "table" and type(history.rounds) == "table" then
+      Beacon.history = deflate(history.rounds)
+    end
   end
 end
 
@@ -243,6 +275,15 @@ local function fail(base, message, to, extra)
   return reply(base, { error = message }, outbox)
 end
 
+--- Messages the round housekeeping (advance) sends, added to the reply.
+local Notices = {}
+--- Rounds this message finalized or abandoned: { round, slot[, "abandoned"] },
+--- added to `history` only once the message succeeds; and their records,
+--- published in this slot as `beaconround` (finalized) and `beaconabandoned`.
+local HistoryNew, Finalized, Abandoned = {}, nil, nil
+--- The slot being computed (the node's assignment), or nil when unknown.
+local Slot = nil
+
 local function dataOf(msg)
   local d = msg.Data or msg.data
   if type(d) == "string" then
@@ -289,6 +330,45 @@ local function govQueueView()
   return list
 end
 
+--- Requests that will never get a value: refunded exactly what each was
+--- charged (to its balance; Withdraw pays it out through the token's
+--- sequenced-v1 stream), processes told. Signers are paid nothing for it.
+local function refundPending(r)
+  local key = tostring(r)
+  local list = Beacon.pending[key] or {}
+  for i, p in ipairs(list) do
+    add(Beacon.balances, p.requester, int(p.charged, 0))
+    if p.process then
+      Notices["rng-abandoned-" .. key .. "-" .. i] = { target = p.requester, Action = "RNG-Error",
+        Data = encode({ error = "Round-Abandoned", requestId = p.requestId, round = r }) }
+    end
+  end
+  Beacon.pending[key] = nil
+  Beacon.pendingCount = int(Beacon.pendingCount, 0) - #list
+  return list
+end
+
+--- True once round r's value can be computed from what this process
+--- published: threshold partials, or a posted group signature.
+local function valueKnowable(r)
+  local key = tostring(r)
+  if Beacon.attest[key] and next(Beacon.attest[key].by or {}) then return true end
+  return int(Beacon.partials.round, 0) == r and count(Beacon.partials.by) >= int(Beacon.threshold, 2)
+end
+
+--- When the open round's requests are refunded (nil: nothing waits).
+local function abandonAt(r)
+  local list = Beacon.pending[tostring(r)]
+  if not list or #list == 0 then return nil end
+  local oldest = math.maxinteger
+  for _, p in ipairs(list) do oldest = math.min(oldest, int(p.at, 0)) end
+  local due = oldest + int(Beacon.abandonAfterMs, 1800000)
+  if int(Beacon.lockedRound, 0) == r and valueKnowable(r) then
+    due = math.max(due, int(Beacon.lockedAt, 0) + ABANDON_CAP_MS)
+  end
+  return due
+end
+
 local function info()
   local members = {}
   for addr, idx in pairs(Beacon.committee) do
@@ -317,7 +397,8 @@ local function info()
     protocolAccrued = int(Beacon.protocolAccrued, 0), verification = Beacon.verification,
     governor = Beacon.governor or "", paused = Beacon.paused == true,
     govQueue = govQueueView(), transferSeq = int(Beacon.transferSeq, 0),
-    features = { "on-demand", "pay-and-request", "gov" },
+    abandonAfterMs = int(Beacon.abandonAfterMs, 1800000), abandonAt = abandonAt(nextRound),
+    features = { "on-demand", "pay-and-request", "gov", "abandon" },
   }
 end
 
@@ -367,7 +448,7 @@ local H = {}
 
 local function configured() return Beacon.token ~= "" and Beacon.groupKey ~= "" end
 
-H["Request-Random"] = function(base, msg, from)
+H["Request-Random"] = function(base, msg, from, now)
   if not from then return fail(base, "Unsigned") end
   local tier = msg.Tier or "fast"
   local requestId = msg["Request-Id"]
@@ -382,6 +463,13 @@ H["Request-Random"] = function(base, msg, from)
   if Beacon.seen[key] then
     return reply(base, { duplicate = true, requestId = requestId, round = int(Beacon.seen[key], 0) })
   end
+  -- Request-Time (the requester's message time) bounds when a copy can still
+  -- arrive: a copy is accepted only within GUARD_MS of it, and the id is
+  -- remembered at least that long, so forgetting it later lets no copy be
+  -- charged twice. Required: an id with no time would have to be kept forever.
+  local at = int(msg["Request-Time"], nil)
+  if at == nil then return fail(base, "Missing-Request-Time", from, ctx) end
+  if at < now - GUARD_MS or at > now + SKEW_MS then return fail(base, "Stale-Request", from, ctx) end
   if not configured() then return fail(base, "Not-Configured", from, ctx) end
   if Beacon.paused then return fail(base, "Paused", from, ctx) end
   local cost = price()
@@ -396,24 +484,47 @@ H["Request-Random"] = function(base, msg, from)
   local r = int(Beacon.round, 0) + 1
   if int(Beacon.lockedRound, 0) == r then r = r + 1 end
   Beacon.seen[key] = r
+  local q = Beacon.seenQueue
+  q[#q + 1] = { key, math.max(at, now) + GUARD_MS }
   local keyRound = tostring(r)
   local list = Beacon.pending[keyRound] or {}
   list[#list + 1] = { requester = from, requestId = requestId, charged = cost,
-    protocol = int(Beacon.protocolFee, 1), process = FromProcess or nil }
+    protocol = int(Beacon.protocolFee, 1), process = FromProcess or nil, at = now }
   Beacon.pending[keyRound] = list
   Beacon.pendingCount = int(Beacon.pendingCount, 0) + 1
   return reply(base, { requestId = requestId, round = r, price = cost, balance = Beacon.balances[from] })
 end
 
-H["Credit-Notice"] = function(base, msg, from)
+--- Mark a token reference handled. The token numbers its notices t1, t2, ...
+--- (its TransferSeq, which never goes back); past CREDIT_KEEP the oldest folds
+--- into the floor, and every seq at or below the floor counts as credited. A
+--- replay is refused either way; only a notice that arrives after CREDIT_KEEP
+--- newer ones would be refused wrongly (fail-closed: never a double credit).
+local function markCredited(seq)
+  Beacon.credited[tostring(seq)] = true
+  local n, oldest = 0, nil
+  for k in pairs(Beacon.credited) do
+    n = n + 1
+    local x = int(k, 0)
+    if not oldest or x < oldest then oldest = x end
+  end
+  if n > CREDIT_KEEP then
+    Beacon.credited[tostring(oldest)] = nil
+    if oldest > int(Beacon.creditFloor, 0) then Beacon.creditFloor = oldest end
+  end
+end
+
+H["Credit-Notice"] = function(base, msg, from, now)
   if Beacon.token == "" then return fail(base, "Not-Configured") end
   if from ~= Beacon.token or not FromProcess then return fail(base, "Not the configured token") end
   local reference = msg.Reference
   if type(reference) ~= "string" or #reference > 24 or not reference:match("^t%d+$") then
     return fail(base, "Invalid-Reference")
   end
-  if Beacon.credited[reference] then return reply(base, { duplicate = true }) end
-  Beacon.credited[reference] = true
+  local seq = int(reference:sub(2), nil)
+  if not seq then return fail(base, "Invalid-Reference") end
+  if seq <= int(Beacon.creditFloor, 0) or Beacon.credited[tostring(seq)] then return reply(base, { duplicate = true }) end
+  markCredited(seq)
   local atoms = int(msg.Quantity, 0)
   local unit = int(Beacon.unit, 1)
   local amount = atoms // unit
@@ -438,10 +549,13 @@ H["Credit-Notice"] = function(base, msg, from)
     -- as its own Request-Random would. A refused request leaves the credit
     -- (Withdraw takes it back). The payer may be a wallet, so no push: its
     -- round is in `seen`, its value derives from the round record.
+    -- X-Request-Time is optional here: the token reference already makes
+    -- this notice count once, so the request's time defaults to now.
     if not isAoAddress(sender) then return fail(base, "Bad-Sender") end
     add(Beacon.balances, sender, amount)
     FromProcess = false
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"] }, sender)
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"],
+      ["Request-Time"] = msg["X-Request-Time"] or string.format("%d", now) }, sender, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, sender, int(Beacon.balances[sender], 0)
@@ -471,12 +585,14 @@ local function finalize(base, r, sig, signers, now)
   Beacon.rounds[key] = { signature = sig, value = value, signers = signers }
   Beacon.rounds[tostring(r - ROUND_HISTORY)] = nil
   Beacon.attest[key] = nil
-  Beacon.lockedRound = 0
+  Beacon.lockedRound, Beacon.lockedAt = 0, 0
   Beacon.partials = { round = 0, by = {} }
 
-  local byRequester, order, served = {}, {}, 0
+  local byRequester, order, served, requests = {}, {}, 0, {}
   local n = #signers
   for _, p in ipairs(Beacon.pending[key] or {}) do
+    requests[#requests + 1] = { requester = p.requester, requestId = p.requestId,
+      value = rng.hex(rng.sha256("hyperbeam/rng/v1/request|" .. value .. "|" .. p.requestId)) }
     if p.process then
       local out = byRequester[p.requester]
       if not out then
@@ -503,7 +619,44 @@ local function finalize(base, r, sig, signers, now)
   end
   Beacon.pending[key] = nil
   Beacon.pendingCount = int(Beacon.pendingCount, 0) - served
+  -- This slot's record: checkable on its own (BLS-verify `signature` on
+  -- `message` under `groupKey`; value = H(round | message | signature); each
+  -- request's value = H(request | value | requestId)), and readable later at
+  -- compute&slot=<slot>/beaconround.
+  Finalized = { round = r, message = roundMessage(r), signature = sig, value = value,
+    signers = signers, groupKey = Beacon.groupKey, finalizedAt = now, slot = Slot, requests = requests }
+  HistoryNew[#HistoryNew + 1] = { r, Slot }
   return reply(base, { round = r, served = served, value = value }, outbox)
+end
+
+--- Run before every handler: forget request ids past their guard, and
+--- abandon the open round once past abandonAt (requests refunded, signers
+--- unpaid). Its number is kept (the next requests bind to it again) unless
+--- the round had locked: a BLS signature on a fixed message is
+--- deterministic and published partials may already reveal it, so a locked
+--- number is skipped and never carries a value.
+local function advance(now)
+  local q, expired = Beacon.seenQueue, 0
+  while expired < #q and int(q[expired + 1][2], 0) < now do expired = expired + 1 end
+  if expired > 0 then
+    for i = 1, expired do Beacon.seen[q[i][1]] = nil end
+    local n = #q
+    for i = 1, n - expired do q[i] = q[i + expired] end
+    for i = n, n - expired + 1, -1 do q[i] = nil end
+  end
+  local r = int(Beacon.round, 0) + 1
+  local due = abandonAt(r)
+  if not due or now < due then return end
+  local key = tostring(r)
+  local refunded = {}
+  for _, p in ipairs(refundPending(r)) do refunded[#refunded + 1] = { requester = p.requester, requestId = p.requestId } end
+  local skipped = int(Beacon.lockedRound, 0) == r
+  if skipped then Beacon.round = r end
+  Beacon.attest[key] = nil
+  Beacon.lockedRound, Beacon.lockedAt = 0, 0
+  Beacon.partials = { round = 0, by = {} }
+  Abandoned = { { round = r, skipped = skipped, abandonedAt = now, slot = Slot, refunded = refunded } }
+  HistoryNew[#HistoryNew + 1] = { r, Slot, "abandoned" }
 end
 
 --- Only a round that requests wait for is signed: there is no heartbeat.
@@ -519,7 +672,7 @@ H["Round"] = function(base, msg, from, now)
   end
   local key = tostring(r)
   if #(Beacon.pending[key] or {}) == 0 then return fail(base, "Nothing-Pending") end
-  if int(Beacon.lockedRound, 0) == 0 then Beacon.lockedRound = r end
+  if int(Beacon.lockedRound, 0) == 0 then Beacon.lockedRound, Beacon.lockedAt = r, now end
 
   if Beacon.verification == "device" then
     local signers = partialSigners(r)
@@ -546,7 +699,7 @@ end
 --- A member's partial signature for the open round, published for the
 --- other members to combine. Not checked here (no pairing in Lua); members
 --- verify each partial against its share key before using it.
-H["Partial"] = function(base, msg)
+H["Partial"] = function(base, msg, from, now)
   local member = provenSigner(msg)
   if not member or not Beacon.committee[member] then return fail(base, "Not a committee member") end
   local data = dataOf(msg)
@@ -561,7 +714,7 @@ H["Partial"] = function(base, msg)
     local valid, why = verifySignature(publicKey, roundMessage(r), sig)
     if not valid then return fail(base, why) end
   end
-  if int(Beacon.lockedRound, 0) == 0 then Beacon.lockedRound = r end
+  if int(Beacon.lockedRound, 0) == 0 then Beacon.lockedRound, Beacon.lockedAt = r, now end
   if int(Beacon.partials.round, 0) ~= r then Beacon.partials = { round = r, by = {} } end
   Beacon.partials.by[member] = sig
   return reply(base, { round = r, partials = count(Beacon.partials.by) })
@@ -582,7 +735,16 @@ H["Get-Info"] = function(base) return reply(base, info()) end
 H["Get-Round"] = function(base, msg)
   local r = int(msg.Round or msg.round, Beacon.round)
   local round = Beacon.rounds[tostring(r)]
-  if not round then return fail(base, "Round-Not-Found") end
+  if not round then
+    -- Older rounds are read at their slot (`beaconhistory`, deploy/README.md).
+    for i = #Beacon.history, 1, -1 do
+      local e = Beacon.history[i]
+      if int(e[1], 0) == r then
+        return reply(base, { error = "Round-Not-Retained", round = r, slot = e[2], abandoned = e[3] == "abandoned" })
+      end
+    end
+    return fail(base, "Round-Not-Found")
+  end
   return reply(base, { round = r, signature = round.signature, value = round.value, signers = round.signers })
 end
 
@@ -600,6 +762,29 @@ local function isGovernor(from)
   local g = Beacon.governor or ""
   return FromProcess and g ~= "" and from == g
 end
+--- The DAO executes a proposal once: true when this governor's proposal
+--- already ran (a redelivery), else records it. The last EXECUTED_KEEP are
+--- remembered; a numeric id at or below the highest one pruned also counts as
+--- run. A redelivery follows its first copy closely, and a DAO proposal is
+--- executed within days of its vote, so one older than EXECUTED_KEEP later
+--- executions is a replay: refusing it is the safe direction.
+local function executedBefore(g, from, proposal)
+  g.executed, g.executedOrder = g.executed or {}, g.executedOrder or {}
+  local key = from .. "|" .. tostring(proposal)
+  local n = int(proposal, nil)
+  if g.executed[key] or (n and n <= int(g.executedFloor, 0)) then return true end
+  local order = g.executedOrder
+  while #order >= EXECUTED_KEEP do
+    local gone = table.remove(order, 1)
+    g.executed[gone] = nil
+    local pruned = int(tostring(gone):match("|(.*)$"), nil)
+    if pruned and pruned > int(g.executedFloor, 0) then g.executedFloor = pruned end
+  end
+  g.executed[key] = true
+  order[#order + 1] = key
+  return false
+end
+
 --- The deployer wallet, until Gov.Handover switches it off for good.
 local function isDeployer(msg) return (Beacon.governor or "") == "" and isOwner(provenSigner(msg)) end
 local function govOnly(msg, from) return isDeployer(msg) or isGovernor(from) end
@@ -713,7 +898,7 @@ local function applyCommittee(c)
   Beacon.threshold, Beacon.verification = c.threshold, c.verification
   -- The open round restarts under the new key: its old partials and
   -- attestations no longer count. Its requests stay bound to it.
-  Beacon.partials, Beacon.attest, Beacon.lockedRound = { round = 0, by = {} }, {}, 0
+  Beacon.partials, Beacon.attest, Beacon.lockedRound, Beacon.lockedAt = { round = 0, by = {} }, {}, 0, 0
 end
 
 --- The first Gov.Configure that names the token is genesis: token, unit and
@@ -744,9 +929,17 @@ H["Gov.Configure"] = function(base, msg, from, now)
       if not fees[k] or fees[k] < 1 or fees[k] > MAX_FEE then return fail(base, "Bad-Parameter") end
     end
   end
+  -- Applies at once, like the fees: it only sets how long requests wait
+  -- before their refund.
+  local abandonAfter = arg("abandonAfterMs")
+  if abandonAfter ~= nil then
+    abandonAfter = int(abandonAfter, nil)
+    if not abandonAfter or abandonAfter < 60000 or abandonAfter > ABANDON_CAP_MS then return fail(base, "Bad-Parameter") end
+  end
   local c, why, changed = committeeFrom(arg)
   if not c then return fail(base, why) end
   Beacon.signerFee, Beacon.protocolFee = fees.signerFee, fees.protocolFee
+  if abandonAfter then Beacon.abandonAfterMs = abandonAfter end
   local queued = nil
   if genesis then
     Beacon.token, Beacon.self = token, self
@@ -886,6 +1079,8 @@ function compute(base, req, opts)
   local msg = caseInsensitive(type(raw) == "table" and raw or {})
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
+  Slot = int(req and (req.slot or (type(req.body) == "table" and req.body.slot)), nil)
+  Notices, HistoryNew, Finalized, Abandoned = {}, {}, nil, nil
   local handler = resolveHandler(msg.Action or "none")
   local result
   local refused = TargetRefusal(raw, req)
@@ -901,12 +1096,11 @@ function compute(base, req, opts)
       -- X-Dao-Proposal from the governor does nothing.
       local proposal = msg["X-Dao-Proposal"]
       if proposal ~= nil and tostring(msg.Action):lower():sub(1, 4) == "gov." and isGovernor(from) then
-        local g = Beacon.gov
-        g.executed = type(g.executed) == "table" and g.executed or {}
-        local key = from .. "|" .. tostring(proposal)
-        if g.executed[key] then return reply(base, { duplicate = true, proposal = tostring(proposal) }) end
-        g.executed[key] = true
+        if executedBefore(Beacon.gov, from, proposal) then
+          return reply(base, { duplicate = true, proposal = tostring(proposal) })
+        end
       end
+      advance(now)
       return handler(base, msg, from, now)
     end)
     if not ok then
@@ -914,13 +1108,22 @@ function compute(base, req, opts)
       -- and leaves no half-applied state.
       Beacon = saved
       FromProcess = false
+      Notices, HistoryNew, Finalized, Abandoned = {}, {}, nil, nil
     end
     result = ok and out or fail(base, tostring(out))
   end
+  for k, v in pairs(Notices) do result.results.outbox[k] = v end
+  for _, e in ipairs(HistoryNew) do rng.history(Beacon.history, e, HISTORY_KEEP) end
+  if Finalized then result.beaconround = encode(Finalized) end
+  if Abandoned then result.beaconabandoned = encode(Abandoned) end
   Beacon.rev = int(Beacon.rev, 0) + 1
   local state = {}
-  for k, v in pairs(Beacon) do if type(v) ~= "function" then state[k] = v end end
+  for k, v in pairs(Beacon) do if type(v) ~= "function" and k ~= "history" then state[k] = v end end
   result.beaconstate = encode(state)
+  -- Round -> slot for the last HISTORY_KEEP rounds; rewritten only when it moves.
+  if #HistoryNew > 0 or result.beaconhistory == nil then
+    result.beaconhistory = encode({ keep = HISTORY_KEEP, rounds = Beacon.history })
+  end
   result.beaconrev = string.format("%d", Beacon.rev)
   result.beaconinfo = encode(info())
   result.beaconpartials = encode(Beacon.partials)

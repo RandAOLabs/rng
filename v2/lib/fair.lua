@@ -48,6 +48,7 @@ local fair = {}
 local GUARD_MS = 600000  -- a Commit-Time is accepted this far back; resolved keys are remembered this long
 local SKEW_MS = 120000   -- and this far ahead of the scheduler's clock
 local BATCH_KEEP = 16    -- bound batches kept for `fairbatches`
+local HISTORY_KEEP = 1024 -- resolved sessions and bound batches listed in `history` (id -> slot)
 local RETRY_BASE_MS, RETRY_CAP_MS = 5000, 300000
 local LOST_AFTER_MS = 1800000 -- a request unanswered this long is given up and its batch re-requested
 
@@ -105,7 +106,17 @@ function fair.new(opts)
     bound = {},      -- bound batch numbers, oldest first (BATCH_KEEP)
     outstanding = nil, -- { batch, requestId, sentAt } while a request is out
     attempts = 0, retryAt = 0,
+    -- { "session:<game|session|player>" | "batch:<b>", slot }, oldest first:
+    -- where each resolved session's Fair-Result and each bound batch were
+    -- emitted (their output there is the full record). Older ones: scan slots.
+    history = {},
   }
+end
+
+--- Note where `id` was emitted (`slot`: the caller's message slot, or nil).
+local function remember(st, id, slot)
+  st.history = st.history or {}
+  rng.history(st.history, { id, slot }, HISTORY_KEEP)
 end
 
 local function key(game, session, player) return game .. "|" .. session .. "|" .. player end
@@ -204,6 +215,7 @@ local function gameEntry(st, game, now)
       st.sessions[k] = nil
       if gone then st.done[k] = gone.commitTime + GUARD_MS end
     end
+    for k, untilMs in pairs(st.done) do if untilMs < now then st.done[k] = nil end end
     st.byGame[idle] = nil
     st.games[idle] = nil -- its balance stays in st.accounts
     st.gameCount = st.gameCount - 1
@@ -360,6 +372,7 @@ function fair.onResult(st, p)
       s.revealBy = now + s.windowMs
     end
   end
+  remember(st, "batch:" .. o.batch, p.slot)
   st.bound[#st.bound + 1] = o.batch
   while #st.bound > BATCH_KEEP do
     local old = table.remove(st.bound, 1)
@@ -395,7 +408,7 @@ local function find(st, p)
   return s
 end
 
-local function resolve(st, s, now, status, secret, final)
+local function resolve(st, s, now, status, secret, final, slot)
   s.status, s.secret, s.final, s.resolvedAt = status, secret, final, now
   st.open = st.open - 1
   touch(st)
@@ -411,6 +424,7 @@ local function resolve(st, s, now, status, secret, final)
     if gone then st.done[old] = gone.commitTime + GUARD_MS end
   end
   for k, untilMs in pairs(st.done) do if untilMs < now then st.done[k] = nil end end
+  remember(st, "session:" .. key(s.game, s.session, s.player), slot)
   local notice = { target = s.game, Action = "Fair-Result", Session = s.session, Player = s.player,
     Status = status, Final = final, Round = tostring(s.round), Data = fair.view(s) }
   return notice
@@ -425,7 +439,7 @@ function fair.reveal(st, p)
   if s.status ~= "reveal-due" then return nil, "Not-Bound" end
   if now > s.revealBy then return nil, "Reveal-Late" end
   if not isHex64(p.secret) or fair.commitHash(s.game, s.session, p.secret) ~= s.commit then return nil, "Bad-Secret" end
-  local notice = resolve(st, s, now, "revealed", p.secret, fair.finalValue(s.v, p.secret))
+  local notice = resolve(st, s, now, "revealed", p.secret, fair.finalValue(s.v, p.secret), p.slot)
   return withPump(st, now, { revealed = true, session = fair.view(s) }, { ["fair-result"] = notice })
 end
 
@@ -437,7 +451,7 @@ function fair.expire(st, p)
   if s.status == "revealed" or s.status == "forfeit" then return { duplicate = true, session = fair.view(s) }, {} end
   if s.status ~= "reveal-due" then return nil, "Not-Bound" end
   if now <= s.revealBy then return nil, "Not-Expired", { revealBy = s.revealBy } end
-  local notice = resolve(st, s, now, "forfeit", nil, fair.forfeitValue(s.v))
+  local notice = resolve(st, s, now, "forfeit", nil, fair.forfeitValue(s.v), p.slot)
   return withPump(st, now, { forfeit = true, session = fair.view(s) }, { ["fair-result"] = notice })
 end
 
@@ -531,10 +545,11 @@ function fair.batchesView(st)
 end
 
 --- One entry point for a handler table. `from` is the proven sender (wallet
---- signer, or the scheduler-attested from-process); `fromProcess` says which.
+--- signer, or the scheduler-attested from-process); `fromProcess` says which;
+--- `slot` (optional) is this message's slot, recorded in `history`.
 --- Returns (data, outbox) or (nil, err, extra); a nil `err` with nil data
 --- means "not a fair message" (e.g. an RNG-Result for the game's own request).
-function fair.dispatch(st, action, msg, from, fromProcess, now)
+function fair.dispatch(st, action, msg, from, fromProcess, now, slot)
   local a = tostring(action or ""):lower()
   local function data()
     local d = msg.Data
@@ -549,9 +564,9 @@ function fair.dispatch(st, action, msg, from, fromProcess, now)
       commitTime = msg["Commit-Time"], now = now })
   elseif a == "fair.reveal" then
     return fair.reveal(st, { game = msg.Game, session = msg.Session, player = msg.Player or from,
-      secret = msg.Secret, now = now })
+      secret = msg.Secret, now = now, slot = slot })
   elseif a == "fair.expire" then
-    return fair.expire(st, { game = msg.Game, session = msg.Session, player = msg.Player, now = now })
+    return fair.expire(st, { game = msg.Game, session = msg.Session, player = msg.Player, now = now, slot = slot })
   elseif st.metered and a == "credit-notice" then
     return fair.credit(st, { from = from, fromProcess = fromProcess, sender = msg.Sender, quantity = msg.Quantity,
       reference = msg.Reference, forGame = msg["X-Fair-Game"] or msg["X-For"] })
@@ -564,7 +579,7 @@ function fair.dispatch(st, action, msg, from, fromProcess, now)
   elseif a == "rng-result" or a == "rng-error" then
     if st.beacon == "" or from ~= st.beacon or not fromProcess then return nil, "Not-Beacon" end
     local d = data()
-    if a == "rng-result" then return fair.onResult(st, { data = d, now = now }) end
+    if a == "rng-result" then return fair.onResult(st, { data = d, now = now, slot = slot }) end
     if type(d) ~= "table" then return nil, "Bad-Result" end
     return fair.onError(st, { requestId = d.requestId, error = d.error, now = now })
   end

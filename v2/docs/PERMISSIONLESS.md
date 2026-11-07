@@ -37,6 +37,45 @@ Fast sits between bad local randomness and the best any-honest randomness.
 It is not a beacon: nothing runs on a clock. A round opens only when a paid
 request waits for it, and the three `rng-provider` daemons sign only rounds
 with requests. `beacon` stays its internal id (`Tier = "beacon"` or `"fast"`).
+A Fast round the committee leaves unsigned is abandoned like an Any-Honest one:
+`abandonAfterMs` (default 30 min, `Gov.Configure Abandon-After-Ms`, 1 min to 7 d)
+after its oldest request, every request is refunded exactly what it was charged
+(to its balance; `Withdraw` pays out on the sequenced-v1 stream), requesting
+processes get `RNG-Error Round-Abandoned`, and signers are paid nothing. Once
+the value is computable from what was published (threshold partials or a posted
+signature) it waits `ABANDON_CAP_MS` (7 d) after the lock instead (no selective
+abort). An unlocked round keeps its number; a locked one's number is skipped,
+since its deterministic signature may already be public.
+
+## State bounds
+
+Every map is bounded; history is read from the per-slot results
+(`<pid>~process@1.0/compute&slot=<n>/<key>`, deploy/README.md "History").
+`Request-Random` now requires `Request-Time` (pay-and-request defaults it to the
+slot time, the token reference being its guard).
+
+| Process | Map | Bound | Why a pruned entry cannot be replayed |
+|---|---|---|---|
+| Fast, Any-Honest | `seen` (request ids) | `GUARD_MS` (10 min) + skew of requests, by time | a copy is refused unless its `Request-Time` is within `GUARD_MS`, and an id is kept past `Request-Time + GUARD_MS` |
+| Fast, Any-Honest, fair | `credited` (token refs) | newest 1000 (fair 1024), the rest folded into `creditFloor` | `t<n>` is the token's ever-increasing seq; anything ≤ floor counts as credited (fail-closed) |
+| Fast, Any-Honest | `gov.executed` (DAO proposals) | newest 256, numeric ids folded into `executedFloor` | a redelivery follows its first copy; an id ≤ floor counts as run |
+| Fast | `rounds` | last 32 (was 256) | — (records stay readable at their slot) |
+| Any-Honest | `rounds`, `recent` | last 8 | — |
+| Fast, Any-Honest | `pending` | open rounds only; refunded after `abandonAfterMs` | — |
+| Fast, Any-Honest | `history` → `beaconhistory` / `timelockhistory` | last 1024 rounds `[round, slot, "abandoned"?]` | — (an index; older: binary search on `beaconinfo.round`) |
+| fair | `sessions`, `byGame` | unresolved + last `keep` per game | `done` refuses a pruned key until `Commit-Time + GUARD_MS`; a `Commit-Time` older than that is stale |
+| fair | `batches`, `bound` | last 16 bound | — |
+| fair | `history` → `fairhistory` | last 1024 `["session:<g|s|p>" / "batch:<b>", slot]` | — |
+| fair | `accounts` (nonce) | one per funded game | `Fair.Withdraw` nonce strictly increases per account; accounts are never pruned |
+| token | `TransferReceipts`, `TransferStreams` | 1024 receipts (32 per sender); per sender a floor + 256 window | sequenced-v1: a seq ≤ floor or in the window is a duplicate |
+| all | balances, bonds, validators, subscriptions | accounts (economic state, not history); validators ≤ `maxValidators`, live subscriptions ≤ 16 per subscriber | — |
+
+Each slot's own record is enough to check it independently: Fast
+`beaconround = { round, message, signature, value, signers, groupKey, requests, slot }`
+(BLS-verify, then value = H(round | message | signature)), Any-Honest
+`beaconround-<r%8>` (commits, outputs, value, requests, slot), abandons in
+`beaconabandoned = [{ round, refunded, slot }]`, fair sessions in the slot's
+output (`fair.view`, enough to recompute `final`).
 
 ## Decisions (changeable)
 

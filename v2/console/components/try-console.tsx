@@ -124,7 +124,7 @@ export function TryConsole() {
     if (!status || !address) throw new Error("connect a wallet first");
     const requestId = `console-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     // Tier "beacon" is the fast tier's internal id, accepted by the old and the new process.
-    const reply = (await sendMessage(status.beacon, { Action: "Request-Random", Tier: "beacon", "Request-Id": requestId })).reply;
+    const reply = (await sendMessage(status.beacon, { Action: "Request-Random", Tier: "beacon", "Request-Id": requestId, "Request-Time": String(Date.now()) })).reply;
     rejectError(reply);
     const round = Number(reply.round);
     if (!Number.isSafeInteger(round) || round < 1) throw new Error("the fast tier did not assign a round");

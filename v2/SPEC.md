@@ -31,7 +31,7 @@ No `fast` or `max` tier is defined by this version.
   partials, finalizes signatures, and accounts for fees.
 - **Committee member:** holds one DKG secret share and an AO wallet used to
   authenticate partial and round submissions.
-- **Requester:** prepays a beacon balance and submits a unique `Request-Id`.
+- **Requester:** prepays a beacon balance and submits a unique `Request-Id` with its `Request-Time` (ms; accepted within 10 min).
 - **Token process:** sends replay-identifiable `Credit-Notice` messages when a
   requester funds the beacon.
 

@@ -25,7 +25,8 @@
 --        topped up from the games' payment after every bound batch),
 --        Transfer -> token (top-up, refund, withdrawal; X-Transfer-Sequence),
 --        Fair-Result -> Game.
--- Publishes: fairsessions, fairbatches, fairaccounts, fairinfo, fairstate, fairrev.
+-- Publishes: fairsessions, fairbatches, fairaccounts, fairinfo, fairstate, fairrev,
+--   fairhistory (resolved session / bound batch -> slot, the last 1024).
 --
 -- Native ~lua@5.3a contract, the beacon's conventions. Bundled after
 -- vendor/json.lua, vendor/jsonenc.lua (encode, jsonObject), lib/rng.lua
@@ -222,6 +223,8 @@ function compute(base, req)
   raw = type(raw) == "table" and raw or {}
   local msg = fields(raw)
   local now = math.tointeger(tonumber(req and (req.timestamp or req.Timestamp)) or 0) or 0
+  local slot = tonumber(req and (req.slot or (type(req.body) == "table" and req.body.slot)) or "")
+  slot = slot and math.tointeger(slot)
   local action = tostring(msg.Action or "")
   local st = Fair.state
   local changesBefore = st.changes or 0
@@ -239,7 +242,7 @@ function compute(base, req)
         local m = fair.pump(st, now)
         return { ok = true }, m and { ["fair-request"] = m } or {}
       end
-      local d, o, x = fair.dispatch(st, action, msg, from, fromProcess, now)
+      local d, o, x = fair.dispatch(st, action, msg, from, fromProcess, now, slot)
       if d == nil and o == nil then return nil, "unknown action '" .. action .. "'" end
       return d, o, x
     end)
@@ -270,7 +273,8 @@ function compute(base, req)
     games = jsonObject(gamesState(st.games)), gameCount = st.gameCount, lastRequestAt = st.lastRequestAt,
     token = st.token, price = st.price, unit = st.unit, accounts = jsonObject(st.accounts),
     credited = jsonObject(st.credited), creditFloor = st.creditFloor, transferSeq = st.transferSeq,
-    surplus = st.surplus, changes = st.changes } })
+    surplus = st.surplus, changes = st.changes, history = st.history } })
+  result.fairhistory = encode({ keep = 1024, entries = st.history or {} })
   result.fairsessions = encode(jsonObject(fair.sessionsView(st)))
   result.fairbatches = encode(fair.batchesView(st))
   result.fairaccounts = encode(jsonObject(fair.accountsView(st)))

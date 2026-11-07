@@ -22,6 +22,8 @@ local ROUND_HISTORY = 8      -- finalized round records kept in published state
 local GUARD_MS = 600000      -- a request is remembered (and a Request-Time accepted) this long
 local SKEW_MS = 120000       -- how far ahead of the scheduler's clock a Request-Time may be
 local CREDIT_KEEP = 1000     -- credit references kept before the oldest fold into `creditFloor`
+local HISTORY_KEEP = 1024    -- rounds listed in `timelockhistory` (round -> slot); older: see deploy/README.md
+local EXECUTED_KEEP = 256    -- DAO proposals remembered as executed (see executedBefore)
 
 -- SPEC 2.3: the RSA-2048 challenge modulus and g = (expand("rng/timelock/g", 2112) mod N)^2 mod N.
 local N = "c7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b"
@@ -102,16 +104,19 @@ local function freshState()
     balances = {}, accrued = {}, accruedAtoms = {}, protocolAccrued = 0,
     foundationReserveAtoms = 0, treasuryAtoms = 0,
     subscriptions = {},
-    seen = {},             -- requester|requestId -> round it was bound to; published in `timelockseen-<shard>`
-    seenUntil = {},        -- "bound round // 50" -> when that batch of `seen` may be forgotten (ms)
+    -- bucket -> { requester|requestId -> round it was bound to }: an id goes in
+    -- bucket (forget-at // SEEN_BUCKET_MS) and the whole bucket is dropped once
+    -- its last forget-at has passed. Published as `timelockseen-<bucket>`.
+    seen = {},
     credited = {},         -- token reference seq -> true (notices may arrive twice); in `timelockguards`
     creditFloor = 0,       -- every reference seq at or below this counts as credited
     -- Governance. Before Gov.Handover the deployer wallet (Owner) governs;
     -- after it only `governor`, the DAO process, as attested by our scheduler.
     governor = "",
     -- queue: "id" -> { id, kind, at, queuedAt, ... }; window: the treasury outflow cap's
-    -- { start, base, used } (atoms); executed: "governor|X-Dao-Proposal" -> true.
-    gov = { queue = {}, nextId = 1, executed = {} },
+    -- { start, base, used } (atoms); executed: "governor|X-Dao-Proposal" -> true, the
+    -- last EXECUTED_KEEP (executedOrder); executedFloor: the highest numeric one pruned.
+    gov = { queue = {}, nextId = 1, executed = {}, executedOrder = {}, executedFloor = 0 },
     paused = false, pausedHeartbeat = 1,
     successor = "", predecessor = "",
     successorAcks = {},    -- pid -> ms: a Successor-Ack from the successor (or a queued one)
@@ -119,11 +124,14 @@ local function freshState()
     transferSeq = 0,       -- X-Transfer-Sequence of the last token Transfer; only ever increases
     strays = {},           -- before genesis: sender -> { seq, refs } of Credit-Notices refunded (strayCredit)
     health = { status = "halted", since = 0 },
+    -- { round, slot[, "abandoned"] }, oldest first: published as `timelockhistory`
+    -- (not in timelockstate) and only appended after a message succeeds.
+    history = {},
   }
 end
 Timelock = Timelock or freshState()
 -- Guards are published apart from the state, and only when they change.
-local GUARDS = { seen = true, seenUntil = true, credited = true, creditFloor = true }
+local GUARDS = { seen = true, credited = true, creditFloor = true }
 local GuardsChanged = false
 
 -- Digit strings are parsed exactly: on a node's Luerl, tonumber() returns a
@@ -148,35 +156,32 @@ local function int(v, d)
   return n and math.tointeger(n) or d
 end
 
--- `seen` is published in shards of SEEN_SHARD bound rounds, `timelockseen-<shard>`,
--- and a message rewrites only the shards it touched: re-encoding the whole map
--- (10 minutes of request ids) on every request made each request cost more
--- the busier the beacon was.
-local SEEN_SHARD = 5
+-- `seen` is published by bucket, `timelockseen-<bucket>`, and a message
+-- rewrites only the buckets it touched: re-encoding the whole map (10 minutes
+-- of request ids) on every request made each request cost more the busier
+-- the beacon was. A bucket spans SEEN_BUCKET_MS of forget-at times.
+local SEEN_BUCKET_MS = 60000
 local SEEN_PREFIX = "timelockseen-"
 local SeenDirty = {}
-local function shardOf(bound) return tostring(int(bound, 0) // SEEN_SHARD) end
--- shard -> { id -> bound }, rebuilt from `seen` after a restore.
-local SeenIdx = nil
-local function seenIndex()
-  if not SeenIdx then
-    SeenIdx = {}
-    for id, bound in pairs(Timelock.seen) do
-      local sh = shardOf(bound)
-      SeenIdx[sh] = SeenIdx[sh] or {}
-      SeenIdx[sh][id] = bound
-    end
+
+--- The round an id was bound to, while it is remembered.
+local function seenRound(id)
+  for _, part in pairs(Timelock.seen) do
+    if part[id] then return part[id] end
   end
-  return SeenIdx
+  return nil
 end
 
---- `seen` changes this message, newest last: { id, previous bound }. A
---- handler that throws is undone from here, not from a copy (the map holds
+--- `seen` changes this message, newest last: { bucket, id, previous bound }.
+--- A handler that throws is undone from here, not from a copy (the map holds
 --- ten minutes of request ids).
 local SeenUndo = {}
-local function setSeen(id, bound)
-  SeenUndo[#SeenUndo + 1] = { id, Timelock.seen[id] }
-  Timelock.seen[id] = bound
+local function setSeen(bucket, id, bound)
+  local part = Timelock.seen[bucket]
+  if not part then part = {}; Timelock.seen[bucket] = part end
+  SeenUndo[#SeenUndo + 1] = { bucket, id, part[id] }
+  part[id] = bound
+  SeenDirty[bucket] = true
 end
 
 local function deepCopy(v)
@@ -186,19 +191,23 @@ local function deepCopy(v)
   return t
 end
 
---- The state before a handler runs, `seen` left out (see SeenUndo).
+--- The state before a handler runs, `seen` left out (see SeenUndo), and
+--- `history` (handlers never touch it: compute appends after success).
 local function snapshot()
   local out = {}
-  for k, v in pairs(Timelock) do if k ~= "seen" then out[k] = deepCopy(v) end end
+  for k, v in pairs(Timelock) do if k ~= "seen" and k ~= "history" then out[k] = deepCopy(v) end end
   return out
 end
 
 local function rollback(saved)
-  for i = #SeenUndo, 1, -1 do Timelock.seen[SeenUndo[i][1]] = SeenUndo[i][2] end
-  local seen = Timelock.seen
+  for i = #SeenUndo, 1, -1 do
+    local u = SeenUndo[i]
+    Timelock.seen[u[1]] = Timelock.seen[u[1]] or {}
+    Timelock.seen[u[1]][u[2]] = u[3]
+  end
+  local seen, history = Timelock.seen, Timelock.history
   Timelock = saved
-  Timelock.seen = seen
-  SeenIdx = nil
+  Timelock.seen, Timelock.history = seen, history
 end
 
 local function deflate(v)
@@ -213,17 +222,22 @@ local function restore(base)
   local ok, saved = pcall(json.decode, base.timelockstate or "")
   if ok and type(saved) == "table" then
     Timelock = freshState()
-    SeenIdx = nil
     for k, v in pairs(deflate(saved)) do Timelock[k] = v end
     local gok, guards = pcall(json.decode, base.timelockguards or "")
     if gok and type(guards) == "table" then
       for k in pairs(GUARDS) do if guards[k] ~= nil then Timelock[k] = deflate(guards[k]) end end
     end
+    local hok, history = pcall(json.decode, base.timelockhistory or "")
+    if hok and type(history) == "table" and type(history.rounds) == "table" then
+      Timelock.history = deflate(history.rounds)
+    end
     for k, v in pairs(base) do
       if type(k) == "string" and k:sub(1, #SEEN_PREFIX) == SEEN_PREFIX and type(v) == "string" then
         local sok, part = pcall(json.decode, v)
         if sok and type(part) == "table" then
-          for id, bound in pairs(part) do Timelock.seen[id] = int(bound, 0) end
+          local bucket = k:sub(#SEEN_PREFIX + 1)
+          Timelock.seen[bucket] = {}
+          for id, bound in pairs(part) do Timelock.seen[bucket][id] = int(bound, 0) end
         end
       end
     end
@@ -357,6 +371,12 @@ end
 
 --- Messages the round housekeeping (advance) sends, added to the reply.
 local Notices = {}
+--- Rounds this message finalized or abandoned ({ round, slot[, "abandoned"] }),
+--- appended to `history` once it succeeds, and the abandoned rounds' records
+--- (published in this slot as `beaconabandoned`).
+local HistoryNew, Abandoned = {}, {}
+--- The slot being computed (the node's assignment), or nil when unknown.
+local Slot = nil
 
 local function dataOf(msg)
   local d = msg.Data or msg.data
@@ -620,22 +640,26 @@ local function closeIfDue(now)
 end
 
 --- Requests that will never get a value: refunded in full, processes told.
-local function refundPending(r)
+local function refundPending(r, now)
   local key = tostring(r)
+  local refunded = {}
   for i, p in ipairs(Timelock.pending[key] or {}) do
     add(Timelock.balances, p.requester, int(p.charged, 0))
+    refunded[#refunded + 1] = { requester = p.requester, requestId = p.requestId, charged = int(p.charged, 0) }
     if p.process then
       Notices["rng-abandoned-" .. key .. "-" .. i] = { target = p.requester, Action = "RNG-Error",
         Data = encode({ error = "Round-Abandoned", requestId = p.requestId, round = r }) }
     end
   end
   Timelock.pending[key] = nil
+  Abandoned[#Abandoned + 1] = { round = r, abandonedAt = now, slot = Slot, refunded = refunded }
+  HistoryNew[#HistoryNew + 1] = { r, Slot, "abandoned" }
 end
 
 --- A round that never gets a value.
-local function abandon(o)
+local function abandon(o, now)
   Timelock.foundationReserveAtoms = int(Timelock.foundationReserveAtoms, 0) + int(o.sponsorAtoms, 0)
-  refundPending(o.round)
+  refundPending(o.round, now)
   Timelock.opens[tostring(o.round)] = nil
 end
 
@@ -664,7 +688,24 @@ end
 --- a reveal deadline (each round is its own failure), abandon rounds still
 --- unfinished abandonAfterMs after it (see abandonable). Rounds after a late
 --- one go on without waiting: only the late round's value waits for its crack.
+--- Forget every bucket of request ids whose guard has passed. An id goes in
+--- bucket b = forget-at // SEEN_BUCKET_MS with forget-at = max(Request-Time,
+--- arrival) + GUARD_MS, and a copy is refused once now > Request-Time +
+--- GUARD_MS. Bucket b is dropped once now >= (b + 1) * SEEN_BUCKET_MS, past
+--- every forget-at in it, so no forgotten id can be charged again. By time,
+--- every message: `seen` holds only the last GUARD_MS + SKEW_MS of requests,
+--- whether rounds run or not.
+local function forgetExpired(now)
+  for bucket, part in pairs(Timelock.seen) do
+    if (int(bucket, 0) + 1) * SEEN_BUCKET_MS <= now then
+      for id in pairs(part) do setSeen(bucket, id, nil) end
+      SeenDirty[bucket], GuardsChanged = true, true -- dropped, even if already empty
+    end
+  end
+end
+
 local function advance(now)
+  forgetExpired(now)
   closeIfDue(now)
   local rs = {}
   for _, o in pairs(Timelock.opens) do
@@ -680,7 +721,7 @@ local function advance(now)
       table.sort(addrs)
       for _, addr in ipairs(addrs) do fault(addr, r, "reveal", now) end
     end
-    if now >= o.revealDeadline + int(Timelock.params.abandonAfterMs, 1800000) and abandonable(o, now) then abandon(o) end
+    if now >= o.revealDeadline + int(Timelock.params.abandonAfterMs, 1800000) and abandonable(o, now) then abandon(o, now) end
   end
   -- A round that never opens (too few validators, nobody committing) would
   -- hold its requests forever: past abandonAfterMs from the oldest, refund
@@ -690,7 +731,7 @@ local function advance(now)
   if list and #list > 0 and (not o or o.phase == "collecting") then
     local oldest = now
     for _, p in ipairs(list) do oldest = math.min(oldest, int(p.at, now)) end
-    if now - oldest >= int(Timelock.params.abandonAfterMs, 360000) then refundPending(Timelock.next) end
+    if now - oldest >= int(Timelock.params.abandonAfterMs, 360000) then refundPending(Timelock.next, now) end
   end
 end
 
@@ -761,7 +802,8 @@ local function finalize(base, o, now)
   end
   Timelock.rounds[key] = { round = r, opened = o.firstCommitAt, commitClose = o.commitClose, finalizedAt = now,
     T = o.T, h = o.h, commits = o.commits, outputs = o.outputs, value = value,
-    requests = requests, served = served, sponsorAtoms = int(o.sponsorAtoms, 0) }
+    requests = requests, served = served, sponsorAtoms = int(o.sponsorAtoms, 0), slot = Slot }
+  HistoryNew[#HistoryNew + 1] = { r, Slot }
   -- Its own key, so a reader checks a round without the full state:
   -- `beaconround-<round % ROUND_HISTORY>' (the newest ROUND_HISTORY rounds).
   base["beaconround-" .. string.format("%d", r % ROUND_HISTORY)] = encode(Timelock.rounds[key])
@@ -771,23 +813,6 @@ local function finalize(base, o, now)
   Timelock.pending[key] = nil
   Timelock.opens[key] = nil
   Timelock.round, Timelock.lastRoundAt = math.max(int(Timelock.round, 0), r), now
-  if r % 50 == 0 then
-    local expired = {}
-    for batch, untilMs in pairs(Timelock.seenUntil) do
-      if int(untilMs, 0) < now then expired[int(batch, -1)] = true; Timelock.seenUntil[batch] = nil end
-    end
-    if next(expired) then
-      for k, bound in pairs(Timelock.seen) do
-        if expired[int(bound, 0) // 50] then
-          setSeen(k, nil)
-          local ix, sh = seenIndex(), shardOf(bound)
-          if ix[sh] then ix[sh][k] = nil end
-          SeenDirty[sh] = true
-        end
-      end
-      GuardsChanged = true
-    end
-  end
   return reply(base, { round = r, value = value, served = served }, outbox)
 end
 
@@ -926,11 +951,14 @@ H["Credit-Notice"] = function(base, msg, from, now)
   if msg["X-Request-Id"] then
     -- Pay and request in one message: credit the payer, then request for it
     -- as its own Request-Random would. A refused request leaves the credit.
+    -- X-Request-Time is optional here: the token reference already makes
+    -- this notice count once, so the request's time defaults to now.
     local payer = msg.Sender
     if not isAoAddress(payer) then return fail(base, "Bad-Sender") end
     add(Timelock.balances, payer, amount)
     FromProcess = false -- the payer may be a wallet: its value is in the round record
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], ["Request-Time"] = msg["X-Request-Time"] }, payer, now)
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"],
+      ["Request-Time"] = msg["X-Request-Time"] or string.format("%d", now) }, payer, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, payer, int(Timelock.balances[payer], 0)
@@ -965,14 +993,15 @@ H["Request-Random"] = function(base, msg, from, now)
   local key = from .. "|" .. requestId
   -- A redelivery: the first copy was charged and is (or was) answered. No
   -- RNG-Error, which a consumer would read as its request failing.
-  if Timelock.seen[key] then return reply(base, { duplicate = true, requestId = requestId }) end
+  if seenRound(key) then return reply(base, { duplicate = true, requestId = requestId }) end
   -- Request-Time (the requester's message time) bounds when a copy can still
-  -- arrive, so the guard can forget the id afterwards without charging twice.
+  -- arrive: a copy is accepted only within GUARD_MS of it, and the id is
+  -- remembered past that (forgetExpired), so forgetting it later lets no copy be
+  -- charged twice. Required: an id with no time would have to be kept forever.
   local at = msg["Request-Time"]
-  if at ~= nil then
-    at = int(at, nil)
-    if not at or at < now - GUARD_MS or at > now + SKEW_MS then return fail(base, "Stale-Request", from, ctx) end
-  end
+  if at == nil then return fail(base, "Missing-Request-Time", from, ctx) end
+  at = int(at, nil)
+  if not at or at < now - GUARD_MS or at > now + SKEW_MS then return fail(base, "Stale-Request", from, ctx) end
   if Timelock.params.h == "" then return fail(base, "Not-Configured", from, ctx) end
   if Timelock.paused then return fail(base, "Paused", from, ctx) end
   if #activeValidators() < int(Timelock.params.minCommits, 2) then return fail(base, "Too-Few-Validators", from, ctx) end
@@ -983,13 +1012,7 @@ H["Request-Random"] = function(base, msg, from, now)
   -- commits close, so nobody can know its value yet.
   local r = current().round
   Timelock.balances[from] = bal - cost
-  setSeen(key, r)
-  local ix, sh = seenIndex(), shardOf(r)
-  ix[sh] = ix[sh] or {}
-  ix[sh][key] = r
-  SeenDirty[sh] = true
-  local batch = tostring(r // 50)
-  Timelock.seenUntil[batch] = math.max(int(Timelock.seenUntil[batch], 0), math.max(at or now, now) + GUARD_MS)
+  setSeen(tostring((math.max(at, now) + GUARD_MS) // SEEN_BUCKET_MS), key, r)
   GuardsChanged = true
   local list = Timelock.pending[tostring(r)] or {}
   list[#list + 1] = { requester = from, requestId = requestId, charged = cost, process = FromProcess or nil, at = now }
@@ -1285,6 +1308,29 @@ local function isGovernor(from)
   local g = Timelock.governor or ""
   return FromProcess and g ~= "" and from == g
 end
+--- The DAO executes a proposal once: true when this governor's proposal
+--- already ran (a redelivery), else records it. The last EXECUTED_KEEP are
+--- remembered; a numeric id at or below the highest one pruned also counts as
+--- run. A redelivery follows its first copy closely, and a DAO proposal is
+--- executed within days of its vote, so one older than EXECUTED_KEEP later
+--- executions is a replay: refusing it is the safe direction.
+local function executedBefore(g, from, proposal)
+  g.executed, g.executedOrder = type(g.executed) == "table" and g.executed or {}, g.executedOrder or {}
+  local key = from .. "|" .. tostring(proposal)
+  local n = int(proposal, nil)
+  if g.executed[key] or (n and n <= int(g.executedFloor, 0)) then return true end
+  local order = g.executedOrder
+  while #order >= EXECUTED_KEEP do
+    local gone = table.remove(order, 1)
+    g.executed[gone] = nil
+    local pruned = int(tostring(gone):match("|(.*)$"), nil)
+    if pruned and pruned > int(g.executedFloor, 0) then g.executedFloor = pruned end
+  end
+  g.executed[key] = true
+  order[#order + 1] = key
+  return false
+end
+
 --- The deployer wallet, until Gov.Handover switches it off for good.
 local function isDeployer(msg) return (Timelock.governor or "") == "" and isOwner(provenSigner(msg)) end
 local function govOnly(msg, from) return isDeployer(msg) or isGovernor(from) end
@@ -1847,6 +1893,9 @@ function compute(base, req)
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
   Notices, GuardsChanged, SeenDirty, SeenUndo = {}, false, {}, {}
+  HistoryNew, Abandoned = {}, {}
+  Slot = int(req and (req.slot or (type(req.body) == "table" and req.body.slot)), nil)
+  Timelock.history = Timelock.history or {}
   local handler = resolveHandler(msg.Action or "none")
   local result
   local refused = TargetRefusal(raw, req)
@@ -1863,11 +1912,9 @@ function compute(base, req)
       -- X-Dao-Proposal from the governor does nothing.
       local proposal = msg["X-Dao-Proposal"]
       if proposal ~= nil and tostring(msg.Action):lower():sub(1, 4) == "gov." and isGovernor(from) then
-        local g = Timelock.gov
-        g.executed = type(g.executed) == "table" and g.executed or {}
-        local key = from .. "|" .. tostring(proposal)
-        if g.executed[key] then return reply(base, { duplicate = true, proposal = tostring(proposal) }) end
-        g.executed[key] = true
+        if executedBefore(Timelock.gov, from, proposal) then
+          return reply(base, { duplicate = true, proposal = tostring(proposal) })
+        end
       end
       return handler(base, msg, from, now)
     end)
@@ -1877,14 +1924,21 @@ function compute(base, req)
       -- taken before it ran (on lua-patch@1.0 too, whose checkpoint is older).
       rollback(saved)
       Notices, GuardsChanged, SeenDirty = {}, false, {}
+      HistoryNew, Abandoned = {}, {}
     end
     result = ok and out or fail(base, tostring(out))
   end
   for k, v in pairs(Notices) do result.results.outbox[k] = v end
+  for _, e in ipairs(HistoryNew) do rng.history(Timelock.history, e, HISTORY_KEEP) end
+  if #Abandoned > 0 then result.beaconabandoned = encode(Abandoned) end
+  -- Round -> slot for the last HISTORY_KEEP rounds; rewritten only when it moves.
+  if #HistoryNew > 0 or result.timelockhistory == nil then
+    result.timelockhistory = encode({ keep = HISTORY_KEEP, rounds = Timelock.history })
+  end
   local healthNow = health(now) -- before the state is saved: it may move `health.since`
   Timelock.rev = int(Timelock.rev, 0) + 1
   local saved = {}
-  for k, v in pairs(Timelock) do if not GUARDS[k] then saved[k] = v end end
+  for k, v in pairs(Timelock) do if not GUARDS[k] and k ~= "history" then saved[k] = v end end
   -- On lua-patch@1.0 the state lives in the resident VM (and its snapshots);
   -- the full encode (~37 KB) is only a recovery checkpoint, every
   -- CHECKPOINT_EVERY messages. On lua@5.3a it is the state, every message.
@@ -1892,20 +1946,19 @@ function compute(base, req)
     result.timelockstate = encode(saved)
   end
   if result.timelockguards == nil then
-    for sh in pairs(seenIndex()) do SeenDirty[sh] = true end
+    for b in pairs(Timelock.seen) do SeenDirty[b] = true end
   end
-  for sh in pairs(SeenDirty) do
-    local part = seenIndex()[sh]
+  for b in pairs(SeenDirty) do
+    local part = Timelock.seen[b]
     if part and next(part) then
-      result[SEEN_PREFIX .. sh] = encode(jsonObject(part))
+      result[SEEN_PREFIX .. b] = encode(jsonObject(part))
     else
-      result[SEEN_PREFIX .. sh] = nil
-      seenIndex()[sh] = nil
+      result[SEEN_PREFIX .. b] = nil
+      Timelock.seen[b] = nil
     end
   end
   if GuardsChanged or result.timelockguards == nil then
-    result.timelockguards = encode({ seenUntil = jsonObject(Timelock.seenUntil),
-                                     credited = jsonObject(Timelock.credited), creditFloor = int(Timelock.creditFloor, 0) })
+    result.timelockguards = encode({ credited = jsonObject(Timelock.credited), creditFloor = int(Timelock.creditFloor, 0) })
   end
   result.timelockrev = string.format("%d", Timelock.rev)
   result.beaconinfo = encode(info(now, healthNow))

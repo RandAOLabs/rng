@@ -206,9 +206,9 @@ const GOV_TAGS = {
   'Gov.Fund-Reserve': ['Quantity'], 'Gov.Remove-Validator': ['Validator'], 'Gov.Pause': [], 'Gov.Resume': [],
   'Gov.Cancel': ['Gov-Id'], 'Gov.Apply': ['Gov-Id'],
 };
-// The fast tier's Gov.* (beacon/beacon.lua): fees at once, committee timelocked.
+// The fast tier's Gov.* (beacon/beacon.lua): fees and the abandon window at once, committee timelocked.
 const FAST_GOV_TAGS = {
-  'Gov.Configure': ['Signer-Fee', 'Protocol-Fee', 'Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'],
+  'Gov.Configure': ['Signer-Fee', 'Protocol-Fee', 'Abandon-After-Ms', 'Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'],
   'Gov.Claim-Protocol': ['Recipient'], 'Gov.Pause': [], 'Gov.Resume': [], 'Gov.Cancel': ['Gov-Id'], 'Gov.Apply': ['Gov-Id'],
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
@@ -792,7 +792,7 @@ async function main(argv) {
     },
     'legacy-beacon-info': async () => console.log(JSON.stringify(await key(state.beacon, 'beaconinfo'), null, 1)),
     'legacy-request': async (id = `req-${Date.now()}`) => {
-      const r = await send(state.beacon, 'Request-Random', { tags: { Tier: 'beacon', 'Request-Id': id } });
+      const r = await send(state.beacon, 'Request-Random', { tags: { Tier: 'beacon', 'Request-Id': id, 'Request-Time': String(Date.now()) } });
       console.log(r.output);
     },
     'legacy-verify': async (roundArg) => {

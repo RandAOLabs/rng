@@ -29,9 +29,11 @@ end
 -- The ledger seen from outside: atoms credited in, atoms the process sent out
 -- (top-ups, refunds, withdrawals) and every X-Transfer-Sequence it used.
 local fundedIn, paidOut, seqs = 0, 0, {}
+local slotNo = 0
 local function send(body, advance)
   clock = clock + (advance or 100)
-  base = compute(base, { body = body, timestamp = clock, process = SELF })
+  slotNo = slotNo + 1
+  base = compute(base, { body = body, timestamp = clock, process = SELF, slot = slotNo })
   local ok, d = pcall(json.decode, base.results.output.data or "")
   for _, m in pairs(base.results.outbox or {}) do
     if m.Action == "Transfer" then
@@ -294,6 +296,9 @@ local function runFairTests()
   eq("Fair-Result final", note and note.Final, F.final1)
   eq("Fair-Result names the player", note and note.Player, F.p1)
   eq("Fair-Result data", note and json.decode(note.Data).commit, F.c1)
+  local fh = json.decode(base.fairhistory).entries
+  check("fairhistory maps the session to the slot that resolved it",
+    fh[#fh][1] == "session:" .. F.game .. "|sess-1|" .. F.p1 and fh[#fh][2] == slotNo, encode(fh[#fh]))
   r, ob = reveal(F.p1, "sess-1", F.s1)
   check("reveal replay is a duplicate, no second result", r.duplicate == true and ob["fair-result"] == nil)
   eq("expire after reveal changes nothing", expire("sess-1", F.p1).duplicate, true)
@@ -544,6 +549,44 @@ local function runFairTests()
   -- Embedded (unmetered) mode needs no token or balance.
   st = fair.new({ beacon = F.beacon })
   check("embedded: no funding needed", fair.open(st, { game = F.game, session = "s", player = F.p1, now = 1000 }) ~= nil)
+
+  -- State bounds after M >> N sessions (docs/PERMISSIONLESS.md): resolved
+  -- sessions (keep), replay guards (time), the slot index (1024 entries).
+  st = fair.new({ beacon = F.beacon })
+  local G, P, t, slotN = F.game, F.p1, 1000, 0
+  local maxSessions, maxDone, firstAt, firstSlot = 0, 0, nil, nil
+  for i = 1, 700 do
+    local sess, secret = "h" .. i, rng.hex(rng.sha256("secret|" .. i))
+    fair.open(st, { game = G, session = sess, player = P, now = t })
+    fair.commit(st, { game = G, session = sess, player = P, commit = fair.commitHash(G, sess, secret),
+      commitTime = tostring(t), now = t })
+    firstAt = firstAt or t
+    local out = st.outstanding
+    slotN = slotN + 1
+    fair.onResult(st, { now = t + 1, slot = slotN, data = { results = { { requestId = out and out.requestId,
+      round = i, value = rng.hex(rng.sha256("round|" .. i)) } } } })
+    slotN = slotN + 1
+    local d = fair.reveal(st, { game = G, session = sess, player = P, secret = secret, now = t + 2, slot = slotN })
+    if i == 1 then firstSlot = d and slotN end
+    maxSessions, maxDone = math.max(maxSessions, count(st.sessions)), math.max(maxDone, count(st.done))
+    t = t + 6000
+  end
+  check("resolved sessions stay within keep", maxSessions <= st.keep + 1, maxSessions)
+  check("replay guards stay within GUARD_MS of commits", maxDone <= 110, maxDone)
+  check("the slot index stays within 1024", #st.history == 1024, #st.history)
+  local last = st.history[#st.history]
+  check("the index maps the newest session to its slot", last[1] == "session:" .. G .. "|h700|" .. P and last[2] == slotN)
+  check("the first session was indexed at its slot", firstSlot == 2)
+  eq("a pruned session cannot be committed again (stale)", select(2, fair.commit(st, { game = G, session = "h1", player = P,
+    commit = fair.commitHash(G, "h1", rng.hex(rng.sha256("x"))), commitTime = tostring(firstAt), now = t })), "Stale-Commit")
+  -- Token references: the newest 1024, older ones below the floor.
+  st = fair.new({ metered = true, token = F.token, price = 1, unit = 1, beacon = F.beacon })
+  for i = 1, 1100 do fair.credit(st, { from = F.token, fromProcess = true, sender = F.payer, quantity = "5",
+    reference = "t" .. i, forGame = G }) end
+  check("credited stays within CREDIT_KEEP", count(st.credited) <= 1024 and st.creditFloor > 0, count(st.credited))
+  local balBefore = st.accounts[G].balance
+  local again = fair.credit(st, { from = F.token, fromProcess = true, sender = F.payer, quantity = "5", reference = "t1", forGame = G })
+  check("a pruned reference is still a duplicate", again and again.duplicate == true and st.accounts[G].balance == balBefore)
 
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
   return table.concat(lines, "\n")

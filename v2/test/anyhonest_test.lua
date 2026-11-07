@@ -37,9 +37,15 @@ local function delivery(pid, fields)
   body["from-process"] = pid
   return body
 end
+local slot = 1
 local function send(body, advance)
   clock = clock + (advance or 100)
-  base = compute(base, { body = body, timestamp = clock, process = SELF })
+  -- Requests carry their own time (the beacon requires Request-Time); "none"
+  -- sends one without.
+  if body.Action == "Request-Random" and body["Request-Time"] == nil then body["Request-Time"] = tostring(clock) end
+  if body["Request-Time"] == "none" then body["Request-Time"] = nil end
+  base = compute(base, { body = body, timestamp = clock, process = SELF, slot = slot })
+  slot = slot + 1
   local ok, d = pcall(json.decode, base.results.output.data or "")
   return ok and d or {}, base.results.outbox or {}
 end
@@ -55,6 +61,9 @@ local function crack(v, r, target, y, proof)
 end
 local function request(id) return send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = id })) end
 local function tick(ms) return send(wallet(F.stranger, { Action = "Get-Info" }), ms) end
+-- `seen` is bucketed by forget time: the round an id is bound to, and how many are held.
+local function seenOf(id) for _, part in pairs(Timelock.seen) do if part[id] then return part[id] end end return nil end
+local function seenCount() local n = 0 for _, part in pairs(Timelock.seen) do for _ in pairs(part) do n = n + 1 end end return n end
 
 function runTimelockTests()
   local U = F.unit
@@ -389,7 +398,7 @@ function runTimelockTests()
   Timelock = { rev = 0 }
   tick()
   eq("state restored", info().round, 8)
-  check("guards restored", Timelock.credited["4"] == true and Timelock.seen[F.game .. "|req-1"] == 1)
+  check("guards restored", Timelock.credited["4"] == true and seenOf(F.game .. "|req-1") == 1)
 
   -- Duplicates, stale requests, withdrawals, claims.
   local bal = Timelock.balances[F.game]
@@ -442,7 +451,7 @@ function runTimelockTests()
   r = request("rollback-1")
   encode = realEncode
   check("lua-patch@1.0: a throwing request rolls back its charge and its guard", tostring(r.error):match("boom")
-    and Timelock.balances[F.game] == gameBal and Timelock.seen[F.game .. "|rollback-1"] == nil
+    and Timelock.balances[F.game] == gameBal and seenOf(F.game .. "|rollback-1") == nil
     and Timelock.transferSeq == seq0, encode(r))
   thrown = false
   encode = function(v) if not thrown then thrown = true; error("boom") end return realEncode(v) end
@@ -968,6 +977,63 @@ function runTimelockTests()
   local increasing = #seqs >= 4
   for k = 2, #seqs do if not (seqs[k] > seqs[k - 1]) then increasing = false end end
   check("X-Transfer-Sequence strictly increasing", increasing and seqs[#seqs] == Timelock.transferSeq, table.concat(seqs, ","))
+
+  -- State bounds (docs/PERMISSIONLESS.md). Request ids live GUARD_MS, by
+  -- time, whether or not rounds run; a copy of a forgotten one is stale.
+  local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
+  local function int(v, d) return math.tointeger(tonumber(v) or d) or d end
+  dao({ Action = "Gov.Configure", ["Abandon-After-Ms"] = "60000" })
+  local function fund(rng, ref) return send(delivery(F.token, { Action = "Credit-Notice", Sender = F.game,
+    Quantity = tostring(rng * U), Reference = ref })) end
+  fund(5000, "t900")
+  r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "nt-1", ["Request-Time"] = "none" }))
+  eq("a request without Request-Time is refused", r.error, "Missing-Request-Time")
+  local firstAt, maxSeen, accepted = nil, 0, 0
+  for i = 1, 100 do
+    r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "g-" .. i }), 30000)
+    if r.round then accepted = accepted + 1 end
+    firstAt = firstAt or clock
+    maxSeen = math.max(maxSeen, seenCount())
+  end
+  check("requests accepted while bounding", accepted == 100, accepted)
+  check("seen stays within the guard window", maxSeen <= 30, maxSeen)
+  check("a forgotten id is gone", seenOf(F.game .. "|g-1") == nil)
+  local before = Timelock.balances[F.game]
+  r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "g-1", ["Request-Time"] = tostring(firstAt) }))
+  check("a replay of a forgotten id is refused, uncharged", r.error == "Stale-Request" and Timelock.balances[F.game] == before, r.error)
+  local nShards = 0
+  for k in pairs(base) do if type(k) == "string" and k:match("^timelockseen%-") then nShards = nShards + 1 end end
+  check("published seen buckets stay bounded ((GUARD + SKEW) / bucket + 2)", nShards <= 14, nShards)
+
+  -- Abandoned rounds are listed with their slot and published in it.
+  local hist = json.decode(base.timelockhistory).rounds
+  local ab = base.beaconabandoned and json.decode(base.beaconabandoned)[1]
+  check("abandons are published in their slot", ab and ab.refunded[1] and ab.slot ~= nil, base.beaconabandoned)
+  local listed = false
+  for _, e in ipairs(hist) do if e[1] == ab.round and e[2] == ab.slot and e[3] == "abandoned" then listed = true end end
+  check("history maps the abandoned round to its slot", listed)
+  check("history bounded", #hist <= 1024 and #hist > 0, #hist)
+
+  -- Token references fold into creditFloor past CREDIT_KEEP: the same
+  -- pattern beacon_test.lua drives past its bound.
+  Timelock.creditFloor = math.max(int(Timelock.creditFloor, 0), 950)
+  before = Timelock.balances[F.game]
+  check("a reference at or below the floor is a duplicate", fund(1, "t950").duplicate == true and Timelock.balances[F.game] == before)
+
+  -- Executed DAO proposals: the newest 256, older numeric ids below a floor.
+  for i = 1, 300 do dao({ Action = "Gov.Resume", ["X-Dao-Proposal"] = tostring(5000 + i) }) end
+  check("executed stays within EXECUTED_KEEP", count(Timelock.gov.executed) <= 256, count(Timelock.gov.executed))
+  r = dao({ Action = "Gov.Pause", ["X-Dao-Proposal"] = "5001" })
+  check("a pruned proposal is still a duplicate", r.duplicate == true and not Timelock.paused, encode(r))
+  r = dao({ Action = "Gov.Pause", ["X-Dao-Proposal"] = "5300" })
+  check("a kept proposal is a duplicate", r.duplicate == true and not Timelock.paused)
+
+  -- History survives a cold VM (restored from its own key, not the state).
+  local n = #Timelock.history
+  check("history kept out of timelockstate", state().history == nil)
+  Timelock = { rev = 0 }
+  tick()
+  eq("history restored", #Timelock.history, n)
 
   check("mock knew every device call", #misses == 0, table.concat(misses, ", "))
 

@@ -17,6 +17,7 @@ local base = {
   process = { commitments = { p = { type = "rsa-pss-sha512", committer = F.owner } } },
 }
 local clock = 1700000000000
+local slot = 1
 local DAY = 86400000
 
 -- A wallet message, signed by `signer` for this beacon (the target door).
@@ -39,7 +40,12 @@ end
 local transfers = {}
 local function send(body, advance)
   clock = clock + (advance or 1000)
-  base = compute(base, { body = body, timestamp = clock, process = F.beacon })
+  -- Requests carry their own time (the beacon requires Request-Time); "none"
+  -- sends one without.
+  if body.Action == "Request-Random" and body["Request-Time"] == nil then body["Request-Time"] = tostring(clock) end
+  if body["Request-Time"] == "none" then body["Request-Time"] = nil end
+  base = compute(base, { body = body, timestamp = clock, process = F.beacon, slot = slot })
+  slot = slot + 1
   local out = base.results and base.results.output and base.results.output.data
   local ok, decoded = pcall(json.decode, out or "")
   local outbox = base.results.outbox or {}
@@ -225,6 +231,12 @@ function runBeaconTests()
   r = send(wallet(F.stranger, { Action = "Get-Round", Round = "1" }))
   eq("finalized round is queryable", r.value, F.value1)
   eq("queried round carries its signature", r.signature, F.sig1)
+  local rec1 = json.decode(base.beaconround)
+  check("round 1's record is published in its slot, checkable alone", rec1.round == 1 and rec1.value == F.value1
+    and rec1.signature == F.sig1 and rec1.message == "hyperbeam/rng/v1|" .. F.beacon .. "|1"
+    and rec1.groupKey == Beacon.groupKey and rec1.requests[1].value == F.out1 and rec1.slot ~= nil)
+  local h1 = json.decode(base.beaconhistory).rounds
+  check("history maps round 1 to the slot that finalized it", #h1 == 1 and h1[1][1] == 1 and h1[1][2] == rec1.slot)
 
   -- A VM that lost its globals comes back from the published state.
   Beacon = nil
@@ -388,6 +400,116 @@ function runBeaconTests()
     t and t["X-Transfer-Sequence"])
   eq("accrued reset", Beacon.accrued[F.members[2]], 0)
   eq("claim twice pays nothing", send(wallet(F.members[2], { Action = "Claim" })).error, "Nothing-To-Claim")
+
+  -- Abandon: a round the committee does not sign within abandonAfterMs is
+  -- refunded (exactly what was charged), processes told, signers unpaid.
+  local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
+  local function tick(ms) return send(wallet(F.stranger, { Action = "Get-Info" }), ms) end
+  credit(F.game, 3000 * U, "t5")
+  credited = credited + 3000
+  local bal0 = Beacon.balances[F.game]
+  local earned = { Beacon.accrued[F.members[1]], Beacon.accrued[F.members[2]], Beacon.protocolAccrued }
+  local open = info().nextRound
+  local price = info().price.fast
+  r = send(wallet(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-none", ["Request-Time"] = "none" }))
+  check("a request without Request-Time is refused uncharged", r.error == "Missing-Request-Time"
+    and Beacon.balances[F.game] == bal0, r.error)
+  r, ob = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-old", ["Request-Time"] = tostring(clock - 700000) }))
+  check("a stale Request-Time is refused uncharged", r.error == "Stale-Request" and ob["rng-error"] ~= nil
+    and Beacon.balances[F.game] == bal0, r.error)
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-1" }))
+  check("bound to the open round", r.round == open and Beacon.balances[F.game] == bal0 - price, r.error)
+  eq("abandonAt published", info().abandonAt, clock + 1800000)
+  tick(1700000)
+  eq("not refunded before abandonAfterMs", Beacon.balances[F.game], bal0 - price)
+  r, ob = tick(100000)
+  local note = ob["rng-abandoned-" .. open .. "-1"]
+  check("abandoned: refunded in full", Beacon.balances[F.game] == bal0 and info().pendingCount == 0, Beacon.balances[F.game])
+  check("the requesting process is told Round-Abandoned", note and note.target == F.game
+    and json.decode(note.Data).error == "Round-Abandoned" and json.decode(note.Data).requestId == "ab-1")
+  check("an unlocked round keeps its number", info().round == open - 1 and info().nextRound == open)
+  local rec = json.decode(base.beaconabandoned)[1]
+  check("the abandon is published in its slot", rec.round == open and rec.slot == slot - 1
+    and rec.refunded[1].requestId == "ab-1", base.beaconround)
+  local hist = json.decode(base.beaconhistory).rounds
+  check("history maps the round to its slot", hist[#hist][1] == open and hist[#hist][2] == slot - 1 and hist[#hist][3] == "abandoned")
+  check("signers are paid nothing for it", Beacon.accrued[F.members[1]] == earned[1]
+    and Beacon.accrued[F.members[2]] == earned[2] and Beacon.protocolAccrued == earned[3])
+
+  -- Once its value is computable from published partials, a locked round
+  -- waits ABANDON_CAP_MS (no selective abort), and its number is skipped.
+  local savedAo2 = ao
+  ao = { resolve = function() return "ok", { valid = true, value = "x" } end }
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-2" }))
+  eq("the kept number takes the next request", r.round, open)
+  send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = open, signature = "q1" }) }))
+  send(wallet(F.members[2], { Action = "Partial", Data = encode({ round = open, signature = "q2" }) }))
+  tick(1900000)
+  check("a knowable locked round is not abandoned at abandonAfterMs", info().pendingCount == 1 and info().lockedRound == open)
+  r, ob = tick(7 * DAY)
+  check("abandoned 7 days after it locked", info().pendingCount == 0 and Beacon.balances[F.game] == bal0
+    and ob["rng-abandoned-" .. open .. "-1"] ~= nil)
+  check("its number is skipped", info().round == open and json.decode(base.beaconabandoned)[1].skipped == true)
+  r = send(wallet(F.stranger, { Action = "Get-Round", Round = tostring(open) }))
+  check("Get-Round points at the slot", r.error == "Round-Not-Retained" and r.abandoned == true and r.slot ~= nil, encode(r))
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-3" }))
+  eq("the next request binds past the skipped number", r.round, open + 1)
+  send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = open + 1, signature = "q1" }) }))
+  r = send(wallet(F.members[1], { Action = "Round", Data = encode({ round = open, signature = F.sig3 }) }))
+  eq("a skipped round cannot be signed", r.error, "Bad-Round")
+  tick(1900000)
+  check("one partial reveals nothing: abandoned at abandonAfterMs, number skipped",
+    info().pendingCount == 0 and info().round == open + 1 and Beacon.balances[F.game] == bal0)
+  ao = savedAo2
+  eq("abandon window bounded", dao({ Action = "Gov.Configure", ["Abandon-After-Ms"] = "59999" }).error, "Bad-Parameter")
+  eq("nor past the cap", dao({ Action = "Gov.Configure", ["Abandon-After-Ms"] = "604800001" }).error, "Bad-Parameter")
+  r = dao({ Action = "Gov.Configure", ["Abandon-After-Ms"] = "120000" })
+  check("the DAO sets the abandon window", r.ok == true and r.abandonAfterMs == 120000, r.error)
+
+  -- Bounds. Request ids live GUARD_MS: after 400 requests 30 s apart `seen`
+  -- holds about 20, and a copy of a forgotten one is stale, never re-charged.
+  local firstAt, maxSeen = nil, 0
+  for i = 1, 400 do
+    send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-" .. i }), 30000)
+    firstAt = firstAt or clock
+    maxSeen = math.max(maxSeen, count(Beacon.seen))
+  end
+  check("seen stays within the guard window", maxSeen <= 25 and count(Beacon.seen) == #Beacon.seenQueue, maxSeen)
+  check("pending stays bounded by the abandon window", info().pendingCount <= 5, info().pendingCount)
+  check("a forgotten id is gone", Beacon.seen[F.game .. "|b-1"] == nil)
+  local before = Beacon.balances[F.game]
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-1", ["Request-Time"] = tostring(firstAt) }))
+  check("a replay of a forgotten id is refused, uncharged", r.error == "Stale-Request" and Beacon.balances[F.game] == before, r.error)
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-400" }))
+  check("a remembered id is a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
+  check("history bounded", #json.decode(base.beaconhistory).rounds <= 1024 and #Beacon.history > 100, #Beacon.history)
+  check("rounds bounded", count(Beacon.rounds) <= 32)
+
+  -- Token references: the newest 1000, older ones below the floor.
+  for i = 1, 1500 do credit(F.game, U, "t" .. (100 + i), nil) end
+  credited = credited + 1500
+  before = Beacon.balances[F.game]
+  check("credited stays within CREDIT_KEEP", count(Beacon.credited) <= 1000 and Beacon.creditFloor >= 500, count(Beacon.credited))
+  r = credit(F.game, U, "t101")
+  check("a pruned reference is still a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
+  r = credit(F.game, U, "t1600")
+  check("a kept reference is a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
+
+  -- Executed DAO proposals: the newest 256, older numeric ids below a floor.
+  for i = 1, 300 do dao({ Action = "Gov.Resume", ["X-Dao-Proposal"] = tostring(1000 + i) }) end
+  check("executed stays within EXECUTED_KEEP", count(Beacon.gov.executed) <= 256
+    and #Beacon.gov.executedOrder <= 256, count(Beacon.gov.executed))
+  r = dao({ Action = "Gov.Pause", ["X-Dao-Proposal"] = "1001" })
+  check("a pruned proposal is still a duplicate", r.duplicate == true and not Beacon.paused, encode(r))
+  r = dao({ Action = "Gov.Pause", ["X-Dao-Proposal"] = "1300" })
+  check("a kept proposal is a duplicate", r.duplicate == true and not Beacon.paused)
+
+  -- A cold VM restores the history from its own key (it is not in beaconstate).
+  local nHist = #Beacon.history
+  check("history kept out of beaconstate", json.decode(base.beaconstate).history == nil)
+  Beacon = { rev = 0 }
+  tick(1)
+  eq("history restored", #Beacon.history, nHist)
 
   -- Every Transfer carries the next X-Transfer-Sequence, with no gaps.
   local contiguous = #transfers >= 4

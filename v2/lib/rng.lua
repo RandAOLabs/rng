@@ -248,9 +248,14 @@ function rng.request(msg, opts)
   end
   assert(cfg.beacon, "rng: paid tiers need rng.config{ beacon = <process id> }")
   RngPending[requestId] = { on = opts.on, ctx = opts.ctx, tier = tier }
+  -- The beacons require Request-Time (this message's time): it bounds when a
+  -- copy can still arrive, so they can forget the id afterwards.
+  local at = field(msg, "Timestamp", "timestamp")
+  at = at ~= "" and at or nil
   if cfg.outbox then
     cfg.outbox["rng-request-" .. requestId] = {
       target = cfg.beacon, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
+      ["Request-Time"] = at,
     }
     return requestId
   end
@@ -261,6 +266,7 @@ function rng.request(msg, opts)
     Action = "Request-Random",
     Tier = tier,
     ["Request-Id"] = requestId,
+    ["Request-Time"] = at,
   })
   return requestId
 end
@@ -311,6 +317,19 @@ function rng.install(msg, salt)
   local s = rng.stream(material(msg, salt))
   math.random = function(m, n) return s:random(m, n) end
   return s
+end
+
+--- A bounded history index (deploy/README.md, "History"): append `entry`
+--- (e.g. { round, slot }) and keep only the newest `keep`, oldest first.
+--- Older entries stay readable at the slot that wrote them.
+function rng.history(list, entry, keep)
+  list[#list + 1] = entry
+  local extra = #list - keep
+  if extra > 0 then
+    for i = 1, #list - extra do list[i] = list[i + extra] end
+    for i = #list, #list - extra + 1, -1 do list[i] = nil end
+  end
+  return list
 end
 
 return rng

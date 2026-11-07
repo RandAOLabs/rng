@@ -141,6 +141,9 @@ function runRngTests()
     eq("action", sent[1].Action, "Request-Random")
     eq("tier tag", sent[1].Tier, "beacon")
     eq("request id tag", sent[1]["Request-Id"], id)
+    eq("no time on the message: no Request-Time", sent[1]["Request-Time"], nil)
+    rng.request({ Id = "m-10", Target = "game", Timestamp = 1700000000123 }, { tier = "beacon", on = "Loot" })
+    eq("Request-Time is the message's time", sent[2]["Request-Time"], "1700000000123")
     eq("nothing ran yet", #ran, 0)
 
     local result = { From = "beacon-pid", Data = { results = { { requestId = id, value = "ab12", round = 7 } } } }
@@ -165,6 +168,16 @@ function runRngTests()
     check("missing continuation name", not pcall(rng.request, { Id = "a" }, {}))
     check("paid tier without beacon", not pcall(rng.request, { Id = "a" }, { on = "X", tier = "beacon" }))
     check("int with bad range", not pcall(function() rng.stream("x"):int(5, 1) end))
+  end)
+
+  test("history keeps the newest entries only", function()
+    local list = {}
+    for i = 1, 5000 do rng.history(list, { i, i * 10 }, 16) end
+    eq("bounded", #list, 16)
+    eq("oldest kept", list[1][1], 4985)
+    eq("newest last", list[16][2], 50000)
+    rng.history(list, { 1 }, 4)
+    check("shrinks to a smaller keep", #list == 4 and list[4][1] == 1 and list[1][1] == 4998)
   end)
 
   test("install shims math.random", function()

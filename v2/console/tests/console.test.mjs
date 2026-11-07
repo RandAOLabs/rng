@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto, { createHash } from 'node:crypto';
 import * as fair from '../lib/fair-client.ts';
+import * as history from '../lib/history.ts';
 import { beaconHealth } from '../components/health-banner.tsx';
 import { estimateEarnings } from '../components/validator-guide.tsx';
 import { describeAction, queueView, tally, tokens } from '../app/api/dao/model.ts';
@@ -146,6 +147,54 @@ test('FairClient commits, waits for reveal-due, then reveals (memory store)', as
   assert.ok(Buffer.from(sent[1]).includes(Buffer.from(saved.secret)), 'the reveal carries the secret');
   // A browser that lost IndexedDB sees the forfeit coming.
   assert.equal(fair.nextStep(view, null, Date.now()), 'forfeit-expected');
+});
+
+test('FairClient.history reads an aged-out session at the slot fairhistory names', async () => {
+  const game = addr('game'), player = addr('p1'), fairPid = 'F'.repeat(43);
+  const view = { game, session: 's-1', player, status: 'revealed', final: 'ab' };
+  const urls = [];
+  const fetchStub = async (url) => {
+    urls.push(url);
+    if (url.endsWith('/now/fairhistory')) return new Response(JSON.stringify({ keep: 1024,
+      entries: [[`session:${game}|s-0|${player}`, 3], [`session:${game}|s-1|${player}`, 9], ['batch:4', 10]] }));
+    if (url.endsWith('/compute&slot=9/results/output/data')) return new Response(JSON.stringify({ revealed: true, session: view }));
+    return new Response('null', { status: 404 });
+  };
+  const client = new fair.FairClient({ fair: fairPid, node: 'http://node', store: fair.memoryStore(), fetch: fetchStub });
+  assert.deepEqual(await client.history(game, 's-1', player), { slot: 9, view });
+  assert.equal(await client.history(game, 's-9', player), null, 'not in the index');
+});
+
+test('history.findRound: index first, then a binary search over a mocked slot store', async () => {
+  // Cumulative state: a key read at slot n holds its last write at or before n.
+  const writes = {};
+  const put = (slot, key, value) => (writes[key] ??= []).push([slot, value]);
+  let reads = 0;
+  const read = async (slot, key) => {
+    reads++;
+    if (key === 'at-slot' && slot == null) return 2000;
+    let v = null;
+    for (const [s, x] of writes[key] ?? []) if (s <= (slot ?? Infinity)) v = x;
+    return v;
+  };
+  const index = [];
+  for (let r = 1; r <= 400; r++) {
+    const slot = r * 5;
+    if (r === 50) put(slot, 'beaconabandoned', [{ round: r, refunded: [] }]);
+    else put(slot, 'beaconround', { round: r, value: `v${r}` });
+    put(slot, 'beaconinfo', { round: r });
+    index.push(r === 50 ? [r, slot, 'abandoned'] : [r, slot]);
+    if (index.length > 8) index.shift();
+    put(slot, 'beaconhistory', { rounds: [...index] });
+  }
+  const keys = () => ['beaconround', 'beaconabandoned'];
+  const recent = await history.findRound(read, { round: 398, indexKey: 'beaconhistory', keys });
+  assert.deepEqual([recent.slot, recent.record.value, reads <= 3], [1990, 'v398', true]);
+  const old = await history.findRound(read, { round: 3, indexKey: 'beaconhistory', keys });
+  assert.deepEqual([old.slot, old.record.value, old.abandoned], [15, 'v3', false]);
+  const gone = await history.findRound(read, { round: 50, keys });
+  assert.deepEqual([gone.slot, gone.abandoned], [250, true]);
+  assert.equal(await history.findRound(read, { round: 401, keys }), null);
 });
 
 test('fairOpenTags is the game-side authorization', () => {

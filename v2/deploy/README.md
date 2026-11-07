@@ -24,6 +24,40 @@ curl -fsS https://randao.net/api/dao
 Keep the previous container and image until the device, beacon, DAO, console,
 validators, and authenticated subscription path have all been verified.
 
+## History and rebuilding state
+
+The processes keep only a bounded recent window (docs/PERMISSIONLESS.md,
+"State bounds"). Nothing older is lost: HyperBEAM keeps every slot's state
+and results, so any key can be read as of any slot:
+
+```bash
+NODE=https://randao.net/hb-stage
+curl -fsS -H 'accept: application/ao' "$NODE/<pid>~process@1.0/now/at-slot"            # latest slot
+curl -fsS -H 'accept: application/ao' "$NODE/<pid>~process@1.0/compute&slot=1234/beaconround"
+curl -fsS "$NODE/<pid>~process@1.0/compute&slot=1234/results/output/data"              # that slot's reply
+```
+
+- Index: `beaconhistory` (Fast), `timelockhistory` (Any-Honest) and
+  `fairhistory` (fair) list the last 1024 rounds / sessions as `[id, slot]`
+  (`"abandoned"` third for an abandoned round).
+- Past the index: binary-search slots `1..at-slot` for the first whose
+  `beaconinfo.round >= R`; the round's record is there (`beaconround`,
+  `beaconround-<R%8>`, or `beaconabandoned`). An Any-Honest round cracked late
+  finalizes a few slots after later rounds: scan forward from that slot.
+- Helpers: `provider/history.mjs` (`httpReader`, `findRound`, `indexLookup`)
+  and `console/lib/history.ts`; the console's `getNetworkStatus(round)`,
+  `findAnyHonestRound(round)` and `FairClient.history(...)` use them.
+
+To audit, replay slots `1..N` and recompute each round from its own record
+(Fast: BLS-verify `signature` on `message` under `groupKey`; Any-Honest: verify
+each output on `~rng@1.0`, then the value hash). To rebuild a process's state,
+read `compute&slot=N/<state key>` (`beaconstate` + `beaconhistory`;
+`timelockstate` + `timelockguards` + `timelockseen-*` + `timelockhistory`;
+`fairstate`; the token's `balances`/`transferstreams`): restore() takes exactly
+these keys. Files in `snapshots/` (e.g. the token balances at a time) are such
+reads saved for a cutover; a successor process starts from its own genesis, not
+from them.
+
 ## Any-Honest cracker
 
 Its own container, separate from HyperBEAM, pinned to one core the node does not use (on a shared host the node runs on cores 1-15, daemons on core 0).

@@ -1,5 +1,6 @@
 import { bls12_381 as bls } from "@noble/curves/bls12-381.js";
 import { env } from "cloudflare:workers";
+import { findRound, httpReader } from "./history";
 
 const encoder = new TextEncoder();
 
@@ -129,6 +130,18 @@ async function readAnyHonestStatus() {
     proofValid, checkedAt: new Date().toISOString() };
 }
 
+/**
+ * An Any-Honest round past the eight the beacon keeps (beaconround-<r % 8>):
+ * read at the slot that finalized it, through timelockhistory or a binary
+ * search over slots. A cracked round can finalize after later ones, hence the scan.
+ */
+export async function findAnyHonestRound(round: number) {
+  const cfg = extendedNetworkConfig();
+  if (!cfg.anyHonest) throw new Error("the Any-Honest beacon is not deployed");
+  return findRound<{ round: number; value: string; requests?: unknown }>(httpReader(cfg.node, cfg.anyHonest), {
+    round, indexKey: "timelockhistory", keys: (r) => [`beaconround-${r % 8}`, "beaconabandoned"], scan: 64 });
+}
+
 // The RNG DAO is a YapDAO stake-dao/1 process (docs/PERMISSIONLESS.md). It
 // publishes `daoinfo`, `proposals` and `stake-<address>`; voting happens in Yap.
 export async function getGovernanceStatus() {
@@ -199,12 +212,24 @@ export async function getNetworkStatus(requestedRound?: number) {
     readJson<TokenInfo>(`${tokenBase}/tokeninfo`),
   ]);
   const roundNumber = requestedRound ?? info.round;
-  const round = state.rounds[String(roundNumber)];
-  if (!round) throw new Error(`round ${roundNumber} is not available in retained history`);
+  // The state keeps the last few rounds; older ones are read at the slot that
+  // finalized them (beaconhistory, else a binary search over slots).
+  let round: Round & { groupKey?: string } | undefined = state.rounds[String(roundNumber)];
+  let slot: number | null = null;
+  if (!round) {
+    const found = await findRound<Round & { groupKey?: string }>(httpReader(cfg.node, cfg.beacon), {
+      round: roundNumber, indexKey: "beaconhistory", keys: () => ["beaconround", "beaconabandoned"] });
+    if (!found) throw new Error(`round ${roundNumber} was not found in the beacon's history`);
+    if (found.abandoned) throw new Error(`round ${roundNumber} was abandoned: its requests were refunded`);
+    round = found.record;
+    slot = found.slot;
+  }
   const message = `hyperbeam/rng/v1|${state.self}|${roundNumber}`;
   const expectedValue = await sha256Hex(`hyperbeam/rng/v1/round|${message}|${round.signature.toLowerCase()}`);
+  // A historical round verifies under the group key it was signed with.
+  const groupKey = round.groupKey ?? info.groupKey;
   let signatureValid = false;
-  try { signatureValid = verifySignature(info.groupKey, message, round.signature); } catch { signatureValid = false; }
+  try { signatureValid = verifySignature(groupKey, message, round.signature); } catch { signatureValid = false; }
   const denomination = 10 ** Number(tokenInfo.Denomination || 0);
   return {
     network: cfg.label,
@@ -220,8 +245,9 @@ export async function getNetworkStatus(requestedRound?: number) {
     pending: info.pendingCount,
     verificationMode: info.verification,
     nativeVerification: info.verification === "device",
-    groupKey: info.groupKey,
+    groupKey,
     message,
+    slot,
     signature: round.signature,
     value: round.value,
     signers: round.signers,

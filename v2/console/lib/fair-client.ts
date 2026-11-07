@@ -376,6 +376,23 @@ export class FairClient {
     return Array.isArray(all?.[game]) ? all[game] : [];
   }
 
+  /**
+   * A resolved session no longer in `fairsessions` (each game keeps its last
+   * `keep`): `fairhistory` names the slot whose output is its full view.
+   * Null once it has aged out of the index too (then scan the game's
+   * Fair-Result messages, deploy/README.md "History").
+   */
+  async history(game: string, session: string, player: string) {
+    const index = await this.read<{ entries?: Array<[string, number?]> }>("fairhistory").catch(() => null);
+    const id = `session:${game}|${session}|${player}`;
+    const entry = [...(index?.entries ?? [])].reverse().find((e) => e[0] === id);
+    if (entry?.[1] == null) return null;
+    const response = await this.http(`${this.node}/${this.fair}~process@1.0/compute&slot=${entry[1]}/results/output/data`);
+    if (!response.ok) return null;
+    const reply = JSON.parse(await response.text()) as { session?: FairSession };
+    return reply.session ? { slot: entry[1], view: reply.session } : null;
+  }
+
   /** The address the game must open sessions for (`fairOpenTags(session, player)`). */
   async player() { return (await this.key()).address; }
 
