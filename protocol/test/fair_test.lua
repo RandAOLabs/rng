@@ -677,17 +677,16 @@ local function runFairTests()
     process = SELF, slot = 900001 })
   check("one older than the last is refused, nothing changed", json.decode(base.results.output.data).error == "Time-Went-Back"
     and Fair.state.keep == 3)
-  -- requestPrice is money: it waits the floor.
-  local price0 = Fair.state.price
+  -- requestPrice is harmless (pay at deposit): on receipt.
   r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5" }))
-  check("a requestPrice change without Effective-At is refused", r.error == "Effective-At-Required" and Fair.state.price == price0, out())
-  eq("short of the floor", send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5",
+  check("a requestPrice change applies on receipt", r.ok == true and Fair.state.price == 5 * Fair.state.unit, out())
+  eq("bounds checked", send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "0" })).error, "Bad-Parameter")
+  -- The DAO seat is money: it waits the floor (re-naming the same DAO here).
+  eq("short of the floor", send(delivery(F.dao, { Action = "Gov.Set-Dao", Dao = F.dao,
     ["Effective-At"] = at(-1) })).error, "Effective-At-Too-Soon")
-  eq("bounds checked on proposal", send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "0",
-    ["Effective-At"] = at() })).error, "Bad-Parameter")
-  r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5", ["Effective-At"] = at() }))
+  r = send(delivery(F.dao, { Action = "Gov.Set-Dao", Dao = F.dao, ["Effective-At"] = at() }))
   local pid1 = r.pending and r.pending.id
-  check("pending and published", pid1 and Fair.state.price == price0 and finfo().govPending[1].id == pid1
+  check("pending and published", pid1 and finfo().govPending[1].id == pid1
     and finfo().hatch == true and json.decode(base.fairstate).gov.pending[tostring(pid1)] ~= nil, out())
   eq("apply before due refused", apply(pid1).error, "Too-Early")
   local gw = Fair.state.accounts[F.game] and Fair.state.accounts[F.game].balance or 0
@@ -697,13 +696,12 @@ local function runFairTests()
   end
   due(pid1)
   r = apply(pid1)
-  check("anyone applies it once due; the hatch closes", r.applied == pid1 and Fair.state.price == 5 * Fair.state.unit
+  check("anyone applies it once due; the hatch closes", r.applied == pid1 and finfo().gov.dao == F.dao
     and finfo().hatch == false and #finfo().govPending == 0, out())
-  check("the same price again is harmless", send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5" })).ok == true)
-  r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "6", ["Effective-At"] = at() }))
+  r = send(delivery(F.dao, { Action = "Gov.Set-Dao", Dao = F.dao, ["Effective-At"] = at() }))
   eq("the DAO cancels", send(delivery(F.dao, { Action = "Gov.Cancel", ["Gov-Id"] = tostring(r.pending.id) })).cancelled, r.pending.id)
   eq("a stranger cannot cancel", send(wallet(F.stranger, { Action = "Gov.Cancel", ["Gov-Id"] = "1" })).error, "Not authorised")
-  r = send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "6", ["Effective-At"] = at() }))
+  r = send(delivery(F.dao, { Action = "Gov.Set-Dao", Dao = F.dao, ["Effective-At"] = at() }))
   Fair.gov.pending[tostring(r.pending.id)].effectiveAt = clock - 14 * 86400000 - 1
   send(wallet(F.stranger, { Action = "Get-Info" }))
   check("a lapsed entry is dropped", #finfo().govPending == 0 and apply(r.pending.id).error == "Unknown-Gov-Id")

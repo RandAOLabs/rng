@@ -22,10 +22,11 @@
 --                    Max-Open, Min-Interval-Ms, Max-Games, Max-Per-Game }  or the DAO);
 --     as tags (any spelling of case, - and _), or in Data (JSON) from the
 --     wallet only. beacon and token are fixed once set; requestPrice is the
---     beacon's (whole RNG) and must follow a governance change of it (the DAO
---     gives both the same Effective-At). From the DAO, a change of
---     requestPrice, or naming the beacon or token, is money: it waits for
---     Effective-At >= receipt + 24 h (Gov.Apply); the rest applies at once.
+--     beacon's (whole RNG) and must follow a governance change of it. Pay at
+--     deposit: a game's balance opens sessions at the price it was credited
+--     at, so a requestPrice change is harmless. From the DAO, naming the
+--     beacon or token is money: it waits for Effective-At >= receipt + 24 h
+--     (Gov.Apply); the rest applies at once.
 --   Gov.Set-Dao / Gov.Renounce-Wallet / Gov.Approve-Code / Gov.Upgrade
 --     vendor/gov.lua. The launch wallet bootstraps and renounces; then the
 --     DAO (a from-process our scheduler attests) is the only owner. Its
@@ -308,16 +309,14 @@ local function configure(raw, who)
     maxPerGame = st.maxPerGame }, {}
 end
 
---- Money: requestPrice (what every session reserves from a game) changed,
---- or the beacon or token named while unset. Gov.Set-Dao is money too.
+--- Money: the beacon or token named while unset, and Gov.Set-Dao. A
+--- requestPrice change is harmless: game balances keep the price they were
+--- credited at (pay at deposit, lib/fair.lua).
 local function fairClass(verb, raw)
   if verb == "gov.setdao" then return "money" end
   local d = configArgs(raw, "dao")
   if not d then return "harmless" end -- refused on the dry run
   local st = Fair.state
-  if d.requestPrice ~= nil and math.tointeger(d.requestPrice) ~= (st.price or 0) // math.max(1, st.unit or 1) then
-    return "money"
-  end
   if (d.beacon ~= nil and st.beacon == "") or (d.token ~= nil and st.token == "") then return "money" end
   return "harmless"
 end

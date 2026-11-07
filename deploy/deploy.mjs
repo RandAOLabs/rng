@@ -259,7 +259,7 @@ const MONEY_TAGS = {
   beacon: ['Stake', 'Slash', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Crack-Bounty', 'Max-In-Flight', 'Cadence-Ms',
     'Target-Interval-Ms', 'Round-Price', 'Max-Active', 'Max-Validators', 'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
   'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'].map(word),
-  fair: ['Request-Price', 'Beacon', 'Token'].map(word),
+  fair: ['Beacon', 'Token'].map(word),
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
   'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',

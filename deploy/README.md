@@ -202,8 +202,8 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    `X-Fair-Game = <game>`); an unfunded game gets `Game-Unfunded`, and a game
    takes back its free balance with `Fair.Withdraw { Nonce }`. Re-run
    `configure-fair` before the handover; after it the DAO changes both prices
-   by proposal (`002-configure.json` and `015-fair-configure.json` with the
-   same `EFFECTIVE_AT=`).
+   by proposal (`002-configure.json` and `015-fair-configure.json`; prices
+   are harmless, applied on receipt: balances keep their deposit price).
 5. **Validators bond and migrate, after step 9.** Bonding waits for
    `dao-handover`: validators bond only once the wallet is renounced (`plan`
    runs `bond-for` after it). Each launch validator receives 100,000 RNG

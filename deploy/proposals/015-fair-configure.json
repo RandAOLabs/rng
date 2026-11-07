@@ -1,11 +1,10 @@
 {
   "title": "Tune fair play",
-  "body": "Fair.Configure on the fair-play process, inside its bounds. Request-Price must follow the beacon's request price (whole RNG): give both proposals the same Effective-At. A Request-Price change is money; the window, sizes and limits are harmless. The beacon and token are fixed. It moves money or code, so it carries Effective-At (filled by dao-propose: the vote's end + 24 h + 1 day of margin); it takes effect only then, when anyone sends Gov.Apply, and until then validators may leave by the exit hatch (Exit-Now) and the DAO may cancel it (Gov.Cancel).",
+  "body": "Fair.Configure on the fair-play process, inside its bounds. Request-Price should follow the beacon's request price (whole RNG). Harmless, so it applies on receipt: game balances keep the price they were credited at (pay at deposit), and the window, sizes and limits are harmless too. The beacon and token are fixed.",
   "execProcess": "$FAIR",
   "execTags": {
     "Action": "Fair.Configure",
     "Request-Price": "4",
-    "Fair-Window-Ms": "60000",
-    "Effective-At": "$EFFECTIVE_AT"
+    "Fair-Window-Ms": "60000"
   }
 }
