@@ -5,7 +5,10 @@ FROM node:22-bookworm-slim
 WORKDIR /app/site
 # Run as the image's unprivileged node user; it owns /app so the build output
 # and wrangler's .wrangler/state persistence stay writable.
-RUN chown node:node /app /app/site
+# workerd (wrangler 4.15x) needs system CA certificates for outbound TLS.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && chown node:node /app /app/site
 USER node
 
 COPY --chown=node:node site/package.json site/package-lock.json ./
