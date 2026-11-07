@@ -181,7 +181,7 @@ local function walletTests()
   r = send(wallet(F.stranger, {
     Action = "Transfer", Recipient = F.recipient, Quantity = "1", ["from-process"] = F.user,
   }))
-  eq("wallet cannot forge a process payer", r.error, "Insufficient balance")
+  eq("wallet cannot forge a process payer", r.error, "Unsigned messages cannot transfer")
   eq("forged transfer leaves user balance", Balances[F.user], 999990)
 
   r = send({ Action = "Transfer", Recipient = F.recipient, Quantity = "1", ["from-process"] = F.user })
@@ -266,6 +266,63 @@ local function walletTests()
   local total = 0
   for _, v in pairs(Balances) do total = total + v end
   eq("supply invariant holds", total, SUPPLY)
+end
+
+--- Paralith's identity rule (rune.lua `actor`): own-scheduler + from-process
+--- is that process; any other from-* push, or our scheduler alone, is nobody.
+local function identityTests()
+  boot()
+  local foreignSched = F.stranger
+  send(wallet(F.user, { Action = "Transfer", Recipient = F.stranger, Quantity = "50" }))
+  send(wallet(F.user, { Action = "Transfer", Recipient = F.sched, Quantity = "50" }))
+  local processBefore, strangerBefore = Balances[F.process], Balances[F.stranger]
+  eq("signer funded", strangerBefore, 50)
+  local foreign = wallet(foreignSched, { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
+    ["X-Transfer-Sequence"] = "1" })
+  foreign["from-process"] = F.process
+  local r = send(foreign)
+  eq("foreign-scheduler push is nobody", r.error, "Unsigned messages cannot transfer")
+  check("foreign push debits neither process nor signer",
+    Balances[F.process] == processBefore and Balances[F.stranger] == strangerBefore)
+  for _, stamp in ipairs({ "FromProcess", "From_Process", "from-slot", "From-Base" }) do
+    local m = wallet(F.stranger, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" })
+    m[stamp] = F.process
+    r = send(m)
+    eq("foreign " .. stamp .. " stamp is nobody", r.error, "Unsigned messages cannot transfer")
+  end
+  eq("stamped pushes debit the signer nothing", Balances[F.stranger], strangerBefore)
+
+  r = send(wallet(F.sched, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" }))
+  eq("own scheduler without from-process is nobody", r.error, "Unsigned messages cannot transfer")
+  eq("own scheduler balance untouched", Balances[F.sched], 50)
+  Owner = F.sched
+  r = send(wallet(F.sched, { Action = "Admin.Checkpoint" }))
+  eq("own scheduler is never the owner", r.error, "Not authorised")
+  r = send(delivery(F.process, { Action = "Admin.Checkpoint" }))
+  eq("a delivery is never the owner", r.error, "Not authorised")
+  Owner = F.owner
+  local stampedOwner = wallet(F.owner, { Action = "Admin.Checkpoint" })
+  stampedOwner["from-process"] = F.process
+  r = send(stampedOwner)
+  eq("a push signed with the owner key is not the owner", r.error, "Not authorised")
+
+  -- Vault withdrawal: our scheduler attests the vault process, sequenced.
+  r = pay("1")
+  eq("own-scheduler delivery is that process", r.From, F.process)
+  eq("vault withdrawal debits the process", Balances[F.process], processBefore - 1)
+  eq("vault withdrawal is sequenced", TransferStreams[F.process].floor, 1)
+
+  local userBefore = Balances[F.user]
+  r = send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" }))
+  eq("wallet unchanged", r.From, F.user)
+  eq("wallet debited once", Balances[F.user], userBefore - 1)
+
+  local dual = delivery(F.process, { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
+    ["X-Transfer-Sequence"] = "2" })
+  dual.commitments.w = { type = "rsa-pss-sha512", committer = F.user, committed = { "target" } }
+  r = send(dual)
+  eq("dual signer is nobody", r.error, "Unsigned messages cannot transfer")
+  eq("dual signer moves nothing", Balances[F.process], processBefore - 1)
 end
 
 local function sequenceTests()
@@ -435,7 +492,7 @@ local function patchModeTests()
 end
 
 function runTokenTests()
-  local suites = { genesisTests, sealTests, walletTests, sequenceTests, receiptBoundTests,
+  local suites = { genesisTests, sealTests, walletTests, identityTests, sequenceTests, receiptBoundTests,
                    restoreTests, patchModeTests }
   for i, suite in ipairs(suites) do
     local ok, err = pcall(suite)

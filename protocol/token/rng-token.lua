@@ -117,30 +117,43 @@ local function schedulerAddress(base)
   return nil
 end
 
---- A process can spend only its own account.
----
---- A signature from OUR OWN scheduler means "this is a delivery" and the
---- attested `from-process` is the actor. Any other signature is an ordinary
---- wallet message and wins outright, which keeps a forged `from-process` tag
---- inert.
-local function actor(msg, base)
-  local signed = provenSigner(msg)
-  local fromProcess = msg["from-process"] or msg.FromProcess
-  if signed then
-    local scheduler = schedulerAddress(base)
-    if fromProcess and scheduler and signed == scheduler then return fromProcess end
-    return signed
+--- Any `from-*` origin stamp (`from-process`, `FromProcess`, `from_slot`, ...),
+--- compared without case or `-`/`_`. Same as rune.lua's `hasOriginStamp`.
+local function hasOriginStamp(msg)
+  for key in pairs(msg) do
+    if type(key) == "string" then
+      local name = key:lower():gsub("[-_]", "")
+      if #name > 4 and name:sub(1, 4) == "from" then return true end
+    end
   end
-  return nil
+  return false
 end
 
---- The attested process behind a scheduler-signed delivery, or nil for a
---- wallet message. Same rule as rune.lua's `processSource`.
+--- The attested process behind a delivery OUR OWN scheduler signed, or nil.
+--- Same rule as rune.lua's `processSource`.
 local function processSource(msg, base)
   local source = msg["from-process"] or msg.FromProcess
   if type(source) ~= "string" or #source ~= 43 then return nil end
   local signed = provenSigner(msg)
   return signed ~= nil and signed == schedulerAddress(base) and source or nil
+end
+
+--- A wallet speaking for itself: the one real signer of a message with no
+--- origin stamp. A stamped message some other node carried is that node's
+--- transport signature, not its word, so it is nobody (rune.lua `actor`,
+--- HYPERTOKEN_CRITIQUE item 6). Unlike rune.lua, our own scheduler is never a
+--- wallet either: its signature without `from-process` attests nothing.
+local function walletSigner(msg, base)
+  if hasOriginStamp(msg) then return nil end
+  local signed = provenSigner(msg)
+  if signed ~= nil and signed == schedulerAddress(base) then return nil end
+  return signed
+end
+
+--- Who is spending: the attested process of an own-scheduler delivery, else
+--- the wallet signer, else nobody.
+local function actor(msg, base)
+  return processSource(msg, base) or walletSigner(msg, base)
 end
 
 --- A wallet or process address: exactly 43 base64url characters. Every holder
@@ -502,7 +515,7 @@ end
 --- Ask for a full balance checkpoint on the next publish. The deployer only,
 --- and it moves nothing.
 H["Admin.Checkpoint"] = function(base, msg)
-  if not isOwner(provenSigner(msg)) then return fail(base, "Not authorised") end
+  if not isOwner(walletSigner(msg, base)) then return fail(base, "Not authorised") end
   ForceTokenCheckpoint = true
   return reply(base, { checkpoint = true, revision = asString(TokenRevision) })
 end
