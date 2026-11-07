@@ -183,14 +183,7 @@ function fair.pump(st, now)
   st.lastRequestAt = now
   touch(st)
   st.next = st.next + 1
-  local req = { target = st.beacon, Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = requestId }
-  -- Metered: never pay the beacon more than a session reserved (Max-Price,
-  -- whole RNG). A beacon price above it is refused and retried with backoff
-  -- until the DAO moves this process's requestPrice too.
-  if st.metered and (st.price or 0) > 0 then
-    req["Max-Price"] = string.format("%d", st.price // math.max(1, st.unit or 1))
-  end
-  return req
+  return { target = st.beacon, Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = requestId }
 end
 
 local function withPump(st, now, data, outbox)
