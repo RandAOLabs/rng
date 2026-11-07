@@ -38,12 +38,16 @@ end
 
 -- Every token Transfer this process sends, in order (sequence, recipient, atoms).
 local transfers = {}
+local assigned = {}
 local function send(body, advance)
+  -- The scheduler (dev_scheduler_server write_assignment) assigns a signed
+  -- message at most once per process: a copy (same id) is refused with 409
+  -- and never computed.
+  if body.id ~= nil and body.commitments ~= nil then
+    if assigned[body.id] then return { status = 409, error = "Message already scheduled." }, {} end
+    assigned[body.id] = true
+  end
   clock = clock + (advance or 1000)
-  -- Requests carry their own time (the beacon requires Request-Time); "none"
-  -- sends one without.
-  if body.Action == "Request-Random" and body["Request-Time"] == nil then body["Request-Time"] = tostring(clock) end
-  if body["Request-Time"] == "none" then body["Request-Time"] = nil end
   base = compute(base, { body = body, timestamp = clock, process = F.beacon, slot = slot })
   slot = slot + 1
   local out = base.results and base.results.output and base.results.output.data
@@ -411,12 +415,8 @@ function runBeaconTests()
   local earned = { Beacon.accrued[F.members[1]], Beacon.accrued[F.members[2]], Beacon.protocolAccrued }
   local open = info().nextRound
   local price = info().price.fast
-  r = send(wallet(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-none", ["Request-Time"] = "none" }))
-  check("a request without Request-Time is refused uncharged", r.error == "Missing-Request-Time"
-    and Beacon.balances[F.game] == bal0, r.error)
-  r, ob = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-old", ["Request-Time"] = tostring(clock - 700000) }))
-  check("a stale Request-Time is refused uncharged", r.error == "Stale-Request" and ob["rng-error"] ~= nil
-    and Beacon.balances[F.game] == bal0, r.error)
+  r = send({ target = F.beacon, Action = "Request-Random", ["Request-Id"] = "ab-unsigned" })
+  check("an unsigned request is refused uncharged", r.error == "Unsigned" and Beacon.balances[F.game] == bal0, r.error)
   r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "ab-1" }))
   check("bound to the open round", r.round == open and Beacon.balances[F.game] == bal0 - price, r.error)
   eq("abandonAt published", info().abandonAt, clock + 1800000)
@@ -466,24 +466,39 @@ function runBeaconTests()
   r = dao({ Action = "Gov.Configure", ["Abandon-After-Ms"] = "120000" })
   check("the DAO sets the abandon window", r.ok == true and r.abandonAfterMs == 120000, r.error)
 
-  -- Bounds. Request ids live GUARD_MS: after 400 requests 30 s apart `seen`
-  -- holds about 20, and a copy of a forgotten one is stale, never re-charged.
-  local firstAt, maxSeen = nil, 0
+  -- Bounds. Request ids live GUARD_MS of scheduler time: after 400 requests
+  -- 30 s apart `seen` holds about 20. A copy of a forgotten one's signed
+  -- message is the scheduler's to refuse (409 here).
+  local maxSeen, firstMsg = 0, nil
   for i = 1, 400 do
-    send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-" .. i }), 30000)
-    firstAt = firstAt or clock
+    local m = delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-" .. i, id = "msg-b-" .. i })
+    firstMsg = firstMsg or m
+    send(m, 30000)
     maxSeen = math.max(maxSeen, count(Beacon.seen))
   end
   check("seen stays within the guard window", maxSeen <= 25 and count(Beacon.seen) == #Beacon.seenQueue, maxSeen)
   check("pending stays bounded by the abandon window", info().pendingCount <= 5, info().pendingCount)
   check("a forgotten id is gone", Beacon.seen[F.game .. "|b-1"] == nil)
   local before = Beacon.balances[F.game]
-  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-1", ["Request-Time"] = tostring(firstAt) }))
-  check("a replay of a forgotten id is refused, uncharged", r.error == "Stale-Request" and Beacon.balances[F.game] == before, r.error)
+  r = send(firstMsg)
+  check("a replayed signed message is refused by the scheduler, uncharged", r.status == 409 and Beacon.balances[F.game] == before, r.error)
   r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-400" }))
   check("a remembered id is a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
   check("history bounded", #json.decode(base.beaconhistory).rounds <= 1024 and #Beacon.history > 100, #Beacon.history)
   check("rounds bounded", count(Beacon.rounds) <= 32)
+
+  -- The window is scheduler time, whatever the message rate: dense slots
+  -- (1500 in 15 s) keep an id remembered, 10 minutes forget it.
+  local function tick(ms) return send(wallet(F.stranger, { Action = "Get-Info" }), ms) end
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "w-1" }))
+  check("w-1 bound", r.round ~= nil, r.error)
+  for _ = 1, 1500 do tick(10) end
+  before = Beacon.balances[F.game]
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "w-1" }))
+  check("dense slots: the same id within the window is a duplicate, uncharged",
+    r.duplicate == true and Beacon.balances[F.game] == before, r.error)
+  tick(600001)
+  check("past GUARD_MS of scheduler time it is forgotten", Beacon.seen[F.game .. "|w-1"] == nil)
 
   -- Token references: the newest 1000, older ones below the floor.
   for i = 1, 1500 do credit(F.game, U, "t" .. (100 + i), nil) end

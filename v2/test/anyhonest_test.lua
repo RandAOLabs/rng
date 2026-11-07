@@ -38,12 +38,16 @@ local function delivery(pid, fields)
   return body
 end
 local slot = 1
+local assigned = {}
 local function send(body, advance)
+  -- The scheduler (dev_scheduler_server write_assignment) assigns a signed
+  -- message at most once per process: a copy (same id) is refused with 409
+  -- and never computed.
+  if body.id ~= nil and body.commitments ~= nil then
+    if assigned[body.id] then return { status = 409, error = "Message already scheduled." }, {} end
+    assigned[body.id] = true
+  end
   clock = clock + (advance or 100)
-  -- Requests carry their own time (the beacon requires Request-Time); "none"
-  -- sends one without.
-  if body.Action == "Request-Random" and body["Request-Time"] == nil then body["Request-Time"] = tostring(clock) end
-  if body["Request-Time"] == "none" then body["Request-Time"] = nil end
   base = compute(base, { body = body, timestamp = clock, process = SELF, slot = slot })
   slot = slot + 1
   local ok, d = pcall(json.decode, base.results.output.data or "")
@@ -404,8 +408,8 @@ function runTimelockTests()
   local bal = Timelock.balances[F.game]
   r, ob = request("req-1")
   check("duplicate request: no RNG-Error, not charged", r.duplicate == true and ob["rng-error"] == nil and Timelock.balances[F.game] == bal)
-  r, ob = send(delivery(F.game, { Action = "Request-Random", Tier = "timelock", ["Request-Id"] = "old", ["Request-Time"] = tostring(clock - 700000) }))
-  check("stale Request-Time refused uncharged", r.error == "Stale-Request" and ob["rng-error"] ~= nil and Timelock.balances[F.game] == bal)
+  r = send({ target = SELF, Action = "Request-Random", Tier = "timelock", ["Request-Id"] = "unsigned" })
+  check("an unsigned request is refused uncharged", r.error == "Unsigned" and Timelock.balances[F.game] == bal, r.error)
   r = send(wallet(F.stranger, { Action = "Withdraw", Quantity = "1.5" }))
   eq("withdraw needs an integer quantity", r.error, "Bad-Quantity")
   local owed = Timelock.accruedAtoms[A]
@@ -978,32 +982,37 @@ function runTimelockTests()
   for k = 2, #seqs do if not (seqs[k] > seqs[k - 1]) then increasing = false end end
   check("X-Transfer-Sequence strictly increasing", increasing and seqs[#seqs] == Timelock.transferSeq, table.concat(seqs, ","))
 
-  -- State bounds (docs/PERMISSIONLESS.md). Request ids live GUARD_MS, by
-  -- time, whether or not rounds run; a copy of a forgotten one is stale.
+  -- State bounds (docs/PERMISSIONLESS.md). Request ids live GUARD_MS of
+  -- scheduler time, whether or not rounds run; a copy of a signed request is
+  -- the scheduler's to refuse.
   local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
   local function int(v, d) return math.tointeger(tonumber(v) or d) or d end
   dao({ Action = "Gov.Configure", ["Abandon-After-Ms"] = "60000" })
   local function fund(rng, ref) return send(delivery(F.token, { Action = "Credit-Notice", Sender = F.game,
     Quantity = tostring(rng * U), Reference = ref })) end
   fund(5000, "t900")
-  r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "nt-1", ["Request-Time"] = "none" }))
-  eq("a request without Request-Time is refused", r.error, "Missing-Request-Time")
-  local firstAt, maxSeen, accepted = nil, 0, 0
+  local copy = delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "nt-1", id = "msg-nt-1" })
+  r = send(copy)
+  check("a request needs no time of its own", r.round ~= nil, r.error)
+  local charged = Timelock.balances[F.game]
+  r = send(copy)
+  check("its replayed signed message is refused by the scheduler", r.status == 409 and Timelock.balances[F.game] == charged)
+  r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "nt-1" }))
+  check("the same id in a new message within the window is a duplicate", r.duplicate == true
+    and Timelock.balances[F.game] == charged, r.error)
+  local maxSeen, accepted = 0, 0
   for i = 1, 100 do
     r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "g-" .. i }), 30000)
     if r.round then accepted = accepted + 1 end
-    firstAt = firstAt or clock
     maxSeen = math.max(maxSeen, seenCount())
   end
   check("requests accepted while bounding", accepted == 100, accepted)
   check("seen stays within the guard window", maxSeen <= 30, maxSeen)
   check("a forgotten id is gone", seenOf(F.game .. "|g-1") == nil)
-  local before = Timelock.balances[F.game]
-  r = send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = "g-1", ["Request-Time"] = tostring(firstAt) }))
-  check("a replay of a forgotten id is refused, uncharged", r.error == "Stale-Request" and Timelock.balances[F.game] == before, r.error)
+  check("forgotten by scheduler time, not by slot count", seenOf(F.game .. "|g-90") ~= nil and seenOf(F.game .. "|g-70") == nil)
   local nShards = 0
   for k in pairs(base) do if type(k) == "string" and k:match("^timelockseen%-") then nShards = nShards + 1 end end
-  check("published seen buckets stay bounded ((GUARD + SKEW) / bucket + 2)", nShards <= 14, nShards)
+  check("published seen buckets stay bounded (GUARD / bucket + 2)", nShards <= 12, nShards)
 
   -- Abandoned rounds are listed with their slot and published in it.
   local hist = json.decode(base.timelockhistory).rounds

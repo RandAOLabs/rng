@@ -67,9 +67,12 @@ test('verifySession checks revealed and forfeit sessions', async () => {
 
 test('pay-and-request is one Transfer with X-Request-Id', async () => {
   const beacon = addr('beacon');
-  assert.deepEqual(fair.payAndRequestTags(beacon, 4_000_000n, 'req-1', 1700000000000.7), {
-    Action: 'Transfer', Recipient: beacon, Quantity: '4000000', 'X-Request-Id': 'req-1', 'X-Request-Time': '1700000000000' });
-  assert.throws(() => fair.payAndRequestTags(beacon, 1, '', 0));
+  assert.deepEqual(fair.payAndRequestTags(beacon, 4_000_000n, 'req-1'), {
+    Action: 'Transfer', Recipient: beacon, Quantity: '4000000', 'X-Request-Id': 'req-1' }, 'no user time');
+  assert.throws(() => fair.payAndRequestTags(beacon, 1, ''));
+  const commitTags = fair.fairCommitTags(addr('game'), 's', '0'.repeat(64));
+  assert.equal(Object.keys(commitTags).some((k) => /time/i.test(k)), false, 'no user time on a commit');
+  assert.equal(fair.FAIR_ERRORS['Stale-Commit'], undefined);
   const who = addr('wallet'), rv = sha('round');
   const records = [{ round: 7, value: sha('other'), requests: {} },
     { round: 8, value: rv, requests: [{ requester: who, requestId: 'req-1', value: ref.request(rv, who, 'req-1') }] }];
@@ -97,7 +100,7 @@ test('signDataItem matches the vendored ANS-104 layout and verifies', async () =
   const webKey = await crypto.subtle.importKey('jwk', { ...jwk, alg: 'PS256' }, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['sign']);
   const key = { privateKey: webKey, owner: jwk.n, address: await fair.addressOf(jwk.n) };
   const target = addr('fair-process').replace(/_/g, 'A');
-  const tags = fair.fairCommitTags(addr('game'), 'demo', '0'.repeat(64), 1700000000000);
+  const tags = fair.fairCommitTags(addr('game'), 'demo', '0'.repeat(64));
   const ours = Buffer.from(await fair.signDataItem(key, { target, tags }));
   const theirs = await vendorSign(jwk, { target, tags: Object.entries(tags).map(([name, value]) => ({ name, value })), data: '' });
   // Signature is randomized (PSS); everything after it must be identical.

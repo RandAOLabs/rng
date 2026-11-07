@@ -141,9 +141,9 @@ function runRngTests()
     eq("action", sent[1].Action, "Request-Random")
     eq("tier tag", sent[1].Tier, "beacon")
     eq("request id tag", sent[1]["Request-Id"], id)
-    eq("no time on the message: no Request-Time", sent[1]["Request-Time"], nil)
+    eq("no time on the request", sent[1]["Request-Time"], nil)
     rng.request({ Id = "m-10", Target = "game", Timestamp = 1700000000123 }, { tier = "beacon", on = "Loot" })
-    eq("Request-Time is the message's time", sent[2]["Request-Time"], "1700000000123")
+    eq("nor with a message timestamp: the beacon uses its scheduler's", sent[2]["Request-Time"], nil)
     eq("nothing ran yet", #ran, 0)
 
     local result = { From = "beacon-pid", Data = { results = { { requestId = id, value = "ab12", round = 7 } } } }

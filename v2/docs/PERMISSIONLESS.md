@@ -51,19 +51,28 @@ since its deterministic signature may already be public.
 
 Every map is bounded; history is read from the per-slot results
 (`<pid>~process@1.0/compute&slot=<n>/<key>`, deploy/README.md "History").
-`Request-Random` now requires `Request-Time` (pay-and-request defaults it to the
-slot time, the token reference being its guard).
+
+**No user time.** Every time a process uses is its scheduler's: the
+timestamp on the message's assignment (`now`). No message carries a time of
+its own (`Request-Time`, `Commit-Time`, `X-Request-Time` are gone). Replays
+are the scheduler's job: it assigns a signed message at most once per
+process and refuses a copy with 409 "Message already scheduled."
+(`dev_scheduler_server` `write_assignment`, paralith/v0.11 lineage; the node
+must run such a build, deploy/README.md "Launch prerequisites"). The
+processes' own windows below are belt and braces. Unsigned messages can be
+posted again, so nothing that moves value or opens or commits a session
+accepts one.
 
 | Process | Map | Bound | Why a pruned entry cannot be replayed |
 |---|---|---|---|
-| Fast, Any-Honest | `seen` (request ids) | `GUARD_MS` (10 min) + skew of requests, by time | a copy is refused unless its `Request-Time` is within `GUARD_MS`, and an id is kept past `Request-Time + GUARD_MS` |
+| Fast, Any-Honest | `seen` (request ids) | the last `GUARD_MS` (10 min) of requests, by scheduler time | a copy of the signed request is refused by the scheduler; the same id in a new message within `GUARD_MS` is a duplicate |
 | Fast, Any-Honest, fair | `credited` (token refs) | newest 1000 (fair 1024), the rest folded into `creditFloor` | `t<n>` is the token's ever-increasing seq; anything ≤ floor counts as credited (fail-closed) |
 | Fast, Any-Honest | `gov.executed` (DAO proposals) | newest 256, numeric ids folded into `executedFloor` | a redelivery follows its first copy; an id ≤ floor counts as run |
 | Fast | `rounds` | last 32 (was 256) | — (records stay readable at their slot) |
 | Any-Honest | `rounds`, `recent` | last 8 | — |
 | Fast, Any-Honest | `pending` | open rounds only; refunded after `abandonAfterMs` | — |
 | Fast, Any-Honest | `history` → `beaconhistory` / `timelockhistory` | last 1024 rounds `[round, slot, "abandoned"?]` | — (an index; older: binary search on `beaconinfo.round`) |
-| fair | `sessions`, `byGame` | unresolved + last `keep` per game | `done` refuses a pruned key until `Commit-Time + GUARD_MS`; a `Commit-Time` older than that is stale |
+| fair | `sessions`, `byGame` | unresolved + last `keep` per game | a session key is single-use while remembered (`Session-Taken`); `done` refuses a pruned key for `GUARD_MS` more; a copy of a signed Open or Commit is refused by the scheduler |
 | fair | `batches`, `bound` | last 16 bound | — |
 | fair | `history` → `fairhistory` | last 1024 `["session:<g|s|p>" / "batch:<b>", slot]` | — |
 | fair | `accounts` (nonce) | one per funded game | `Fair.Withdraw` nonce strictly increases per account; accounts are never pruned |
@@ -208,7 +217,7 @@ On a new beacon, `Successor-Ack` comes from its `Configure`/genesis outbox:
 - `beaconinfo.at = now` (scheduler time of this slot), for clock offset estimates.
 
 **One-off requests**
-- `Credit-Notice` with `X-Request-Id` (and optional `X-Request-Time`): credit `Sender`, then run
+- `Credit-Notice` with `X-Request-Id`: credit `Sender`, then run
   `Request-Random` for `Sender` in the same slot (one user message). On refusal the credit stays in the balance.
 - The finalized round record `beaconround-<r%8>` gains `requests = [{ requester, requestId, value }]`
   (only for this round's requests), so wallets read their value directly.

@@ -31,7 +31,7 @@ No `fast` or `max` tier is defined by this version.
   partials, finalizes signatures, and accounts for fees.
 - **Committee member:** holds one DKG secret share and an AO wallet used to
   authenticate partial and round submissions.
-- **Requester:** prepays a beacon balance and submits a unique `Request-Id` with its `Request-Time` (ms; accepted within 10 min).
+- **Requester:** prepays a beacon balance and submits a unique `Request-Id` (no time of its own: the beacon uses its scheduler's).
 - **Token process:** sends replay-identifiable `Credit-Notice` messages when a
   requester funds the beacon.
 
@@ -119,7 +119,10 @@ round value.
   signers identify nobody.
 - A funding notice must come from the configured token, carry a non-empty
   replay reference, and transfer a whole number of RNG units.
-- Funding references and requester/request-id pairs are accepted once.
+- Funding references and requester/request-id pairs are accepted once. A
+  copy of a signed message is refused by the scheduler, which assigns a
+  signed message at most once per process; the beacon also remembers
+  request ids for 10 min of scheduler time. No message carries a time.
 - Round submissions are accepted only from configured committee wallets and
   only for the current round.
 

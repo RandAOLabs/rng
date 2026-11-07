@@ -210,6 +210,10 @@ consumer) is believed only through a `from-process` that this beacon's own
 scheduler signed, so the token, the DAO, the beacon and fair play run on one
 scheduler.
 
+No user time: request times are the scheduler's assignment timestamps, and a
+copy of a signed message is refused by the scheduler (assigned at most once
+per process; docs/PERMISSIONLESS.md, "State bounds").
+
 `health` is `ok`, `degraded` or `halted` (fewer eligible validators than
 `minCommits`); the console shows a banner when it is not `ok`.
 

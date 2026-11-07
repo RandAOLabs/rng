@@ -792,7 +792,7 @@ async function main(argv) {
     },
     'legacy-beacon-info': async () => console.log(JSON.stringify(await key(state.beacon, 'beaconinfo'), null, 1)),
     'legacy-request': async (id = `req-${Date.now()}`) => {
-      const r = await send(state.beacon, 'Request-Random', { tags: { Tier: 'beacon', 'Request-Id': id, 'Request-Time': String(Date.now()) } });
+      const r = await send(state.beacon, 'Request-Random', { tags: { Tier: 'beacon', 'Request-Id': id } });
       console.log(r.output);
     },
     'legacy-verify': async (roundArg) => {

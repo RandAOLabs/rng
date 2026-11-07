@@ -248,14 +248,11 @@ function rng.request(msg, opts)
   end
   assert(cfg.beacon, "rng: paid tiers need rng.config{ beacon = <process id> }")
   RngPending[requestId] = { on = opts.on, ctx = opts.ctx, tier = tier }
-  -- The beacons require Request-Time (this message's time): it bounds when a
-  -- copy can still arrive, so they can forget the id afterwards.
-  local at = field(msg, "Timestamp", "timestamp")
-  at = at ~= "" and at or nil
+  -- No time on the request: the beacon uses its scheduler's, and the
+  -- scheduler refuses a copy of this message.
   if cfg.outbox then
     cfg.outbox["rng-request-" .. requestId] = {
       target = cfg.beacon, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
-      ["Request-Time"] = at,
     }
     return requestId
   end
@@ -266,7 +263,6 @@ function rng.request(msg, opts)
     Action = "Request-Random",
     Tier = tier,
     ["Request-Id"] = requestId,
-    ["Request-Time"] = at,
   })
   return requestId
 end

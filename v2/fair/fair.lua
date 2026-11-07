@@ -8,7 +8,9 @@
 --                                                         lets key Player commit to Session (10 min);
 --                                                         any game, paying: reserves one request price
 --                                                         from its balance, else Game-Unfunded
---   Fair.Commit { Game, Session, Commit, Commit-Time }   signed by the player key P, after Fair.Open
+--   Fair.Commit { Game, Session, Commit }                signed by the player key P, after Fair.Open
+--     No message carries a time: every time is the scheduler's, and a copy
+--     of a signed message is refused by the scheduler (once per process).
 --   Fair.Reveal { Game, Session, Secret [, Player] }      anyone (Player defaults to the signer)
 --   Fair.Expire { Game, Session, Player }                 anyone, after revealBy
 --   RNG-Result / RNG-Error                                the configured beacon only (attested)

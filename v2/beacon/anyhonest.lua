@@ -19,8 +19,12 @@ local json = require(".json")
 local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
 local CHECKPOINT_EVERY = 1000 -- lua-patch@1.0: messages between full-state checkpoints
 local ROUND_HISTORY = 8      -- finalized round records kept in published state
-local GUARD_MS = 600000      -- a request is remembered (and a Request-Time accepted) this long
-local SKEW_MS = 120000       -- how far ahead of the scheduler's clock a Request-Time may be
+-- Replays: the scheduler assigns a signed message at most once per process
+-- (dev_scheduler_server write_assignment: a copy is refused 409 "Message
+-- already scheduled."), so a copy of a signed request never reaches us. The
+-- `seen` window below is only belt and braces, keyed by scheduler time (the
+-- assignment's timestamp, never a time the sender writes).
+local GUARD_MS = 600000      -- a request id is remembered this long (scheduler time)
 local CREDIT_KEEP = 1000     -- credit references kept before the oldest fold into `creditFloor`
 local HISTORY_KEEP = 1024    -- rounds listed in `timelockhistory` (round -> slot); older: see deploy/README.md
 local EXECUTED_KEEP = 256    -- DAO proposals remembered as executed (see executedBefore)
@@ -689,12 +693,11 @@ end
 --- unfinished abandonAfterMs after it (see abandonable). Rounds after a late
 --- one go on without waiting: only the late round's value waits for its crack.
 --- Forget every bucket of request ids whose guard has passed. An id goes in
---- bucket b = forget-at // SEEN_BUCKET_MS with forget-at = max(Request-Time,
---- arrival) + GUARD_MS, and a copy is refused once now > Request-Time +
---- GUARD_MS. Bucket b is dropped once now >= (b + 1) * SEEN_BUCKET_MS, past
---- every forget-at in it, so no forgotten id can be charged again. By time,
---- every message: `seen` holds only the last GUARD_MS + SKEW_MS of requests,
---- whether rounds run or not.
+--- bucket b = forget-at // SEEN_BUCKET_MS with forget-at = arrival +
+--- GUARD_MS (scheduler time). Bucket b is dropped once now >= (b + 1) *
+--- SEEN_BUCKET_MS, past every forget-at in it. By scheduler time, every
+--- message: `seen` holds only the last GUARD_MS of requests, whether rounds
+--- run or not. A copy of a signed request is the scheduler's to refuse.
 local function forgetExpired(now)
   for bucket, part in pairs(Timelock.seen) do
     if (int(bucket, 0) + 1) * SEEN_BUCKET_MS <= now then
@@ -951,14 +954,12 @@ H["Credit-Notice"] = function(base, msg, from, now)
   if msg["X-Request-Id"] then
     -- Pay and request in one message: credit the payer, then request for it
     -- as its own Request-Random would. A refused request leaves the credit.
-    -- X-Request-Time is optional here: the token reference already makes
-    -- this notice count once, so the request's time defaults to now.
+    -- The token reference already makes this notice count once.
     local payer = msg.Sender
     if not isAoAddress(payer) then return fail(base, "Bad-Sender") end
     add(Timelock.balances, payer, amount)
     FromProcess = false -- the payer may be a wallet: its value is in the round record
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"],
-      ["Request-Time"] = msg["X-Request-Time"] or string.format("%d", now) }, payer, now)
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"] }, payer, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, payer, int(Timelock.balances[payer], 0)
@@ -994,14 +995,8 @@ H["Request-Random"] = function(base, msg, from, now)
   -- A redelivery: the first copy was charged and is (or was) answered. No
   -- RNG-Error, which a consumer would read as its request failing.
   if seenRound(key) then return reply(base, { duplicate = true, requestId = requestId }) end
-  -- Request-Time (the requester's message time) bounds when a copy can still
-  -- arrive: a copy is accepted only within GUARD_MS of it, and the id is
-  -- remembered past that (forgetExpired), so forgetting it later lets no copy be
-  -- charged twice. Required: an id with no time would have to be kept forever.
-  local at = msg["Request-Time"]
-  if at == nil then return fail(base, "Missing-Request-Time", from, ctx) end
-  at = int(at, nil)
-  if not at or at < now - GUARD_MS or at > now + SKEW_MS then return fail(base, "Stale-Request", from, ctx) end
+  -- No sender time: a copy of this signed message is refused by the
+  -- scheduler; the same id in a new message within GUARD_MS is a duplicate.
   if Timelock.params.h == "" then return fail(base, "Not-Configured", from, ctx) end
   if Timelock.paused then return fail(base, "Paused", from, ctx) end
   if #activeValidators() < int(Timelock.params.minCommits, 2) then return fail(base, "Too-Few-Validators", from, ctx) end
@@ -1012,7 +1007,7 @@ H["Request-Random"] = function(base, msg, from, now)
   -- commits close, so nobody can know its value yet.
   local r = current().round
   Timelock.balances[from] = bal - cost
-  setSeen(tostring((math.max(at, now) + GUARD_MS) // SEEN_BUCKET_MS), key, r)
+  setSeen(tostring((now + GUARD_MS) // SEEN_BUCKET_MS), key, r)
   GuardsChanged = true
   local list = Timelock.pending[tostring(r)] or {}
   list[#list + 1] = { requester = from, requestId = requestId, charged = cost, process = FromProcess or nil, at = now }

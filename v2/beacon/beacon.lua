@@ -24,7 +24,7 @@
 -- refunded in full and requesting processes get RNG-Error Round-Abandoned.
 --
 -- State is bounded (docs/PERMISSIONLESS.md, "State bounds"): request ids are
--- remembered GUARD_MS, token references CREDIT_KEEP, finalized rounds
+-- remembered GUARD_MS of scheduler time, token references CREDIT_KEEP, finalized rounds
 -- ROUND_HISTORY. History lives in the per-slot results: every finalized or
 -- abandoned round publishes `beaconround` in its own slot, and
 -- `beaconhistory` maps the last HISTORY_KEEP rounds to their slots
@@ -54,8 +54,12 @@ local json = require(".json")
 -- (readable at their slot, see `beaconhistory`).
 local ROUND_HISTORY = 32
 local HISTORY_KEEP = 1024    -- rounds listed in `beaconhistory` (round -> slot)
-local GUARD_MS = 600000      -- a request id is remembered (and a Request-Time accepted) this long
-local SKEW_MS = 120000       -- how far ahead of the scheduler's clock a Request-Time may be
+-- Replays: the scheduler assigns a signed message at most once per process
+-- (dev_scheduler_server write_assignment: a copy is refused 409 "Message
+-- already scheduled."), so a copy of a signed request never reaches us. The
+-- `seen` window below is only belt and braces, keyed by scheduler time (the
+-- assignment's timestamp, never a time the sender writes).
+local GUARD_MS = 600000      -- a request id is remembered this long (scheduler time)
 local CREDIT_KEEP = 1000     -- token references kept before the oldest fold into `creditFloor`
 local EXECUTED_KEEP = 256    -- DAO proposals remembered as executed (see markExecuted)
 -- A round left unsigned abandonAfterMs after its oldest request is abandoned
@@ -103,7 +107,7 @@ local function freshState()
     lockedRound = 0,      -- first Partial/Round closes this round to new requests
     lockedAt = 0,         -- when it did
     seen = {},            -- requester|requestId -> round it was bound to, for GUARD_MS
-    seenQueue = {},       -- { requester|requestId, forget-at ms }, in arrival order
+    seenQueue = {},       -- { requester|requestId, forget-at ms (now + GUARD_MS) }, in time order
     credited = {},        -- token reference seq -> true (notices may arrive twice)
     creditFloor = 0,      -- every reference seq at or below this counts as credited
     attest = {},          -- "r" -> { by = member -> sig, sigs = sig -> members }
@@ -463,13 +467,8 @@ H["Request-Random"] = function(base, msg, from, now)
   if Beacon.seen[key] then
     return reply(base, { duplicate = true, requestId = requestId, round = int(Beacon.seen[key], 0) })
   end
-  -- Request-Time (the requester's message time) bounds when a copy can still
-  -- arrive: a copy is accepted only within GUARD_MS of it, and the id is
-  -- remembered at least that long, so forgetting it later lets no copy be
-  -- charged twice. Required: an id with no time would have to be kept forever.
-  local at = int(msg["Request-Time"], nil)
-  if at == nil then return fail(base, "Missing-Request-Time", from, ctx) end
-  if at < now - GUARD_MS or at > now + SKEW_MS then return fail(base, "Stale-Request", from, ctx) end
+  -- No sender time: a copy of this signed message is refused by the
+  -- scheduler; the same id in a new message within GUARD_MS is a duplicate.
   if not configured() then return fail(base, "Not-Configured", from, ctx) end
   if Beacon.paused then return fail(base, "Paused", from, ctx) end
   local cost = price()
@@ -485,7 +484,7 @@ H["Request-Random"] = function(base, msg, from, now)
   if int(Beacon.lockedRound, 0) == r then r = r + 1 end
   Beacon.seen[key] = r
   local q = Beacon.seenQueue
-  q[#q + 1] = { key, math.max(at, now) + GUARD_MS }
+  q[#q + 1] = { key, now + GUARD_MS }
   local keyRound = tostring(r)
   local list = Beacon.pending[keyRound] or {}
   list[#list + 1] = { requester = from, requestId = requestId, charged = cost,
@@ -549,13 +548,11 @@ H["Credit-Notice"] = function(base, msg, from, now)
     -- as its own Request-Random would. A refused request leaves the credit
     -- (Withdraw takes it back). The payer may be a wallet, so no push: its
     -- round is in `seen`, its value derives from the round record.
-    -- X-Request-Time is optional here: the token reference already makes
-    -- this notice count once, so the request's time defaults to now.
+    -- The token reference already makes this notice count once.
     if not isAoAddress(sender) then return fail(base, "Bad-Sender") end
     add(Beacon.balances, sender, amount)
     FromProcess = false
-    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"],
-      ["Request-Time"] = msg["X-Request-Time"] or string.format("%d", now) }, sender, now)
+    local res = H["Request-Random"](base, { ["Request-Id"] = msg["X-Request-Id"], Tier = msg["X-Tier"] }, sender, now)
     local ok, out = pcall(json.decode, res.results.output.data or "")
     out = ok and type(out) == "table" and out or {}
     out.credited, out.account, out.balance = amount, sender, int(Beacon.balances[sender], 0)

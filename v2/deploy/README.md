@@ -94,6 +94,15 @@ Every spawn pins one scheduler (the node's), and `genesis-configure`,
 beacon believes the DAO and the token only through its own scheduler's
 `from-process`.
 
+## Launch prerequisites
+
+- **Scheduler dedupe.** The node must assign a signed message at most once
+  per process (409 "Message already scheduled." on a copy;
+  `dev_scheduler_server` `write_assignment`, paralith/v0.11 lineage). The old
+  prod-stage source lacks it. The processes take no user time and rely on it
+  for replay protection; their own 10-minute request-id windows (scheduler
+  time) are only belt and braces.
+
 ## Launch runbook (testnet cutover)
 
 ```bash

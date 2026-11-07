@@ -46,8 +46,10 @@ export function newSecret() {
 /** Sent by the GAME (its wallet or process) to the fair process: lets key `player` commit to `session`. */
 export const fairOpenTags = (session: string, player: string) =>
   ({ Action: "Fair.Open", Session: session, Player: player });
-export const fairCommitTags = (game: string, session: string, commit: string, now: number) =>
-  ({ Action: "Fair.Commit", Game: game, Session: session, Commit: commit, "Commit-Time": String(Math.floor(now)) });
+// No message carries a time: the process uses its scheduler's, and the
+// scheduler refuses a copy of a signed message.
+export const fairCommitTags = (game: string, session: string, commit: string) =>
+  ({ Action: "Fair.Commit", Game: game, Session: session, Commit: commit });
 export const fairRevealTags = (game: string, session: string, secret: string, player: string) =>
   ({ Action: "Fair.Reveal", Game: game, Session: session, Secret: secret, Player: player });
 export const fairExpireTags = (game: string, session: string, player: string) =>
@@ -76,10 +78,9 @@ export function fairWithdrawTags(nonce: number, quantityAtoms?: bigint | number 
  * Credit-Notice credits the sender and runs Request-Random in the same slot.
  * Send it to the beacon's token, signed by the requester.
  */
-export function payAndRequestTags(beacon: string, quantityAtoms: bigint | number | string, requestId: string, now: number) {
+export function payAndRequestTags(beacon: string, quantityAtoms: bigint | number | string, requestId: string) {
   if (!requestId || requestId.length > 128) throw new Error("requestId must be 1-128 characters");
-  return { Action: "Transfer", Recipient: beacon, Quantity: String(quantityAtoms),
-    "X-Request-Id": requestId, "X-Request-Time": String(Math.floor(now)) };
+  return { Action: "Transfer", Recipient: beacon, Quantity: String(quantityAtoms), "X-Request-Id": requestId };
 }
 
 export type RequestRecord = { round: number; value: string; requests?: Array<{ requester: string; requestId: string; value: string }> };
@@ -149,7 +150,6 @@ export const FAIR_ERRORS: Record<string, string> = {
   "Bad-Secret": "The secret does not match the commit.",
   "Session-Taken": "That session already has a different commit.",
   "Session-Done": "That session has already finished.",
-  "Stale-Commit": "The commit time is too far from the process clock.",
   "Fair-Full": "The fair process holds too many open sessions; try again shortly.",
   "Not-Expired": "The reveal window is still open.",
   "Not-Opened": "The game has not opened this session for this player key (or the allowance lapsed).",
@@ -412,7 +412,7 @@ export class FairClient {
     const retries = opts.retries ?? 5, delayMs = opts.delayMs ?? 2000;
     const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     for (let attempt = 0; ; attempt++) {
-      try { await this.send(fairCommitTags(game, session, commit, saved.committedAt)); return saved; }
+      try { await this.send(fairCommitTags(game, session, commit)); return saved; }
       catch (error) {
         if (error instanceof FairError && error.code === "Not-Opened" && attempt < retries) { await sleep(delayMs); continue; }
         if (error instanceof NotScheduledError || error instanceof FairError) await this.store.remove(saved);

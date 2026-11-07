@@ -124,7 +124,7 @@ export function TryConsole() {
     if (!status || !address) throw new Error("connect a wallet first");
     const requestId = `console-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     // Tier "beacon" is the fast tier's internal id, accepted by the old and the new process.
-    const reply = (await sendMessage(status.beacon, { Action: "Request-Random", Tier: "beacon", "Request-Id": requestId, "Request-Time": String(Date.now()) })).reply;
+    const reply = (await sendMessage(status.beacon, { Action: "Request-Random", Tier: "beacon", "Request-Id": requestId })).reply;
     rejectError(reply);
     const round = Number(reply.round);
     if (!Number.isSafeInteger(round) || round < 1) throw new Error("the fast tier did not assign a round");
@@ -154,7 +154,7 @@ export function TryConsole() {
     const price = beacon.price ?? beacon.priceSchedule?.request ?? 4;
     const requestId = `console-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     setPaid({ requestId });
-    rejectError((await sendMessage(beacon.token, payAndRequestTags(beacon.process, BigInt(price) * BigInt(beacon.unit), requestId, Date.now()))).reply);
+    rejectError((await sendMessage(beacon.token, payAndRequestTags(beacon.process, BigInt(price) * BigInt(beacon.unit), requestId))).reply);
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const body = await refreshAnyHonest().catch(() => null);
       const found = body ? await findRequest(body.requestRecords, who, requestId) : null;

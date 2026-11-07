@@ -14,7 +14,12 @@
 -- after the previous request (then by the next message, e.g. a Get-Info).
 --
 -- The game authorizes every session (Fair.Open { Session, Player }, sent by
--- the game itself) before the player's key may commit to it. Each game
+-- the game itself) before the player's key may commit to it. Every time here
+-- is the scheduler's (`now`, the assignment's timestamp); no message carries
+-- a time of its own. A copy of a signed Open or Commit is refused by the
+-- scheduler (once-per-process assignment); a session key is single-use while
+-- remembered (Session-Taken / Session-Done), and forgotten keys are kept in
+-- `done` GUARD_MS more as belt and braces. Each game
 -- holds at most `maxPerGame` open allowances plus unresolved sessions, and at
 -- most `maxGames` games are tracked (an idle game's history is evicted first).
 --
@@ -45,8 +50,7 @@
 local json = json or require(".json")
 local fair = {}
 
-local GUARD_MS = 600000  -- a Commit-Time is accepted this far back; resolved keys are remembered this long
-local SKEW_MS = 120000   -- and this far ahead of the scheduler's clock
+local GUARD_MS = 600000  -- allowances last this long; pruned keys are remembered this long (scheduler time)
 local BATCH_KEEP = 16    -- bound batches kept for `fairbatches`
 local HISTORY_KEEP = 1024 -- resolved sessions and bound batches listed in `history` (id -> slot)
 local RETRY_BASE_MS, RETRY_CAP_MS = 5000, 300000
@@ -99,7 +103,7 @@ function fair.new(opts)
     changes = 0,     -- bumped on every mutation: the process publishes only when it moved
     sessions = {},   -- key -> session (see commit)
     byGame = {},     -- game -> list of resolved keys, oldest first
-    done = {},       -- pruned key -> ms until which a replayed Commit is refused
+    done = {},       -- pruned key -> ms (scheduler time) until which it is refused as Session-Done
     open = 0,        -- unresolved session count
     next = 1,        -- the batch taking commits
     batches = {},    -- "b" -> { batch, keys, status = open|requested|bound, requestId, ... }
@@ -179,8 +183,7 @@ function fair.pump(st, now)
   st.lastRequestAt = now
   touch(st)
   st.next = st.next + 1
-  return { target = st.beacon, Action = "Request-Random", Tier = "any-honest",
-    ["Request-Id"] = requestId, ["Request-Time"] = string.format("%d", now) }
+  return { target = st.beacon, Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = requestId }
 end
 
 local function withPump(st, now, data, outbox)
@@ -213,7 +216,7 @@ local function gameEntry(st, game, now)
     for _, k in ipairs(st.byGame[idle] or {}) do
       local gone = st.sessions[k]
       st.sessions[k] = nil
-      if gone then st.done[k] = gone.commitTime + GUARD_MS end
+      if gone then st.done[k] = now + GUARD_MS end
     end
     for k, untilMs in pairs(st.done) do if untilMs < now then st.done[k] = nil end end
     st.byGame[idle] = nil
@@ -282,9 +285,6 @@ function fair.commit(st, p)
   if not isSession(p.session) then return nil, "Bad-Session" end
   if not isAddress(p.player) then return nil, "Unsigned" end
   if not isHex64(p.commit) then return nil, "Bad-Commit" end
-  local at = int(p.commitTime)
-  if not at then return nil, "Missing-Commit-Time" end
-  if at < now - GUARD_MS or at > now + SKEW_MS then return nil, "Stale-Commit" end
   local k = key(p.game, p.session, p.player)
   local prior = st.sessions[k]
   if prior then
@@ -302,7 +302,7 @@ function fair.commit(st, p)
   touch(st)
   local o = batch(st, st.next)
   local s = { game = p.game, session = p.session, player = p.player, commit = p.commit, status = "committed",
-    batch = o.batch, windowMs = st.windowMs, committedAt = now, commitTime = at, reserve = held }
+    batch = o.batch, windowMs = st.windowMs, committedAt = now, reserve = held }
   st.sessions[k] = s
   o.keys[#o.keys + 1] = k
   st.open = st.open + 1
@@ -421,7 +421,7 @@ local function resolve(st, s, now, status, secret, final, slot)
     local old = table.remove(list, 1)
     local gone = st.sessions[old]
     st.sessions[old] = nil
-    if gone then st.done[old] = gone.commitTime + GUARD_MS end
+    if gone then st.done[old] = now + GUARD_MS end
   end
   for k, untilMs in pairs(st.done) do if untilMs < now then st.done[k] = nil end end
   remember(st, "session:" .. key(s.game, s.session, s.player), slot)
@@ -560,8 +560,7 @@ function fair.dispatch(st, action, msg, from, fromProcess, now, slot)
   if a == "fair.open" then
     return fair.open(st, { game = from, session = msg.Session, player = msg.Player, now = now })
   elseif a == "fair.commit" then
-    return fair.commit(st, { game = msg.Game, session = msg.Session, player = from, commit = msg.Commit,
-      commitTime = msg["Commit-Time"], now = now })
+    return fair.commit(st, { game = msg.Game, session = msg.Session, player = from, commit = msg.Commit, now = now })
   elseif a == "fair.reveal" then
     return fair.reveal(st, { game = msg.Game, session = msg.Session, player = msg.Player or from,
       secret = msg.Secret, now = now, slot = slot })
