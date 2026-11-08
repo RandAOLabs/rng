@@ -1,0 +1,22 @@
+\section{Introduction}\label{sec:introduction}
+
+
+\subsection{Motivation}\label{sec:motivation}
+
+Random values have been a fundamental building block of Web2 applications, powering everything from gaming mechanics to cryptographic protocols. As we transition to Web3, we must maintain these essential capabilities while upholding our core principles of decentralization and security. However, blockchain's inherently deterministic and public nature presents a unique challenge in preserving the unpredictability of random values.
+
+This fundamental limitation creates what we term the ``\textbf{Onchain Randomness Problem}'': as soon as entropy becomes available on the blockchain, all outcomes dependent on that entropy become predictable by any observer. Traditional attempts to generate randomness within blockchain systems have led to various compromises in security, integrity, or decentralization, undermining the very principles Web3 aims to uphold.
+
+\subsection{Our Contribution}\label{sec:our_contribution}
+
+We present a novel protocol for decentralized randomness generation that operates through an offchain open participation provider network. Our key contribution is a protocol design that enables secure onchain randomness aggregation while maintaining strong security properties:
+
+\begin{itemize}
+    \item \textbf{Any-Honest Security}: The protocol remains secure as long as at least one participant in the network is honest.
+    
+    \item \textbf{Information Theoretic Security}: The protocol design ensures that randomness providers receive no additional information that could compromise the system's integrity or predictability.
+    
+    \item \textbf{Open Participation}: Any participant can join the provider network, fostering true decentralization while maintaining security through cryptographic guarantees rather than trust.
+\end{itemize}
+
+Through this design, RandAO achieves both the security properties of decentralized systems and the practical requirements for reliable randomness generation in blockchain environments.

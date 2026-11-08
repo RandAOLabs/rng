@@ -1,0 +1,39 @@
+# LaTeX auxiliary files
+*.aux
+*.lof
+*.log
+*.lot
+*.fls
+*.out
+*.toc
+*.fmt
+*.fot
+*.cb
+*.cb2
+*.ptc
+*.xdv
+
+# Bibliography auxiliary files
+*.bbl
+*.bcf
+*.blg
+*-blx.*
+*.run.xml
+
+# Build tool auxiliary files
+*.fdb_latexmk
+*.synctex
+*.synctex(busy)
+*.synctex.gz
+*.synctex.gz(busy)
+*.pdfsync
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor backup files
+*~
+*.bak
+*.swp

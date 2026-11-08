@@ -1,0 +1,40 @@
+\section{Future Developments}\label{sec:opportunities}
+
+This section explores enhancements to the RandAO protocol that, while not currently under development(yet), would provide significant additional value to RandAO.
+
+\subsection{Subscription RNG Service Layer}\label{sec:subscription_service}
+
+A subscription-based service layer would extend the protocol's utility for applications requiring frequent random values. This enhancement would introduce several key benefits:
+
+\begin{itemize}
+    \item \textbf{Message Optimization}: By establishing long-term relationships between providers and applications, the protocol can reduce the number of inter-process messages required to obtain random values. Instead of initiating a new request flow for each value, applications could receive streams random values, significantly reducing latency and network overhead.
+    
+    \item \textbf{Negotiated Pricing}: Long-term service agreements would enable negotiated pricing models, offering cost predictability for applications with consistent randomness needs. This could include:
+    \begin{itemize}
+        \item Volume-based discounts for high-frequency users
+        \item Fixed-rate packages for predictable budgeting
+    \end{itemize}
+\end{itemize}
+
+This enhancement would particularly benefit applications in gaming, DeFi, and other sectors requiring high-frequency random value generation, while maintaining the protocol's core security properties and decentralized nature.
+
+\subsection{Honey Pot Mechanism}\label{sec:honey_pot}
+
+A honey pot mechanism could be implemented to strengthen the protocol's security by incentivizing the entrapment of maliciously colluding providers. This mechanism would work as follows:
+
+\begin{itemize}
+    \item \textbf{Entrapment Opportunity}: Any party could attempt to prove that a provider set is colluding by demonstrating their ability to predict the entropy output before it is revealed.
+    
+    \item \textbf{Proof of Collusion}: The proof would involve submitting a predicted entropy value before the protocol's completion. If the prediction matches the final output, it serves as cryptographic evidence that the providers leaked information or coordinated their inputs.
+    
+    \item \textbf{Economic Penalties}: Upon successful proof of collusion:
+    \begin{itemize}
+        \item The colluding providers' staked collateral would be slashed
+        \item A significant portion of the slashed funds would be awarded to the party that exposed the collusion
+        \item Remaining funds could be burned or redistributed to honest providers
+    \end{itemize}
+    
+    \item \textbf{Preventive Effect}: The mere existence of this mechanism would serve as a powerful deterrent against provider collusion, as any participant in a collusion scheme could potentially turn whistleblower for the reward.
+\end{itemize}
+
+This enhancement would add an additional layer of security to the protocol by creating a financial incentive for monitoring and reporting malicious behavior, effectively making collusion attempts more risky and less likely to occur.

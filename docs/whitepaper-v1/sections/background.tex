@@ -1,0 +1,54 @@
+\section{Background}\label{sec:background}
+
+\subsection{Verifiable Delay Functions}\label{sec:vdf}
+A Verifiable Delay Function (VDF) is a cryptographic primitive that requires a specified number of sequential steps to evaluate (and hence a theoretical amount of time), yet produces a unique output that can be efficiently verified~\cite{boneh2018verifiable}.
+
+Two key properties make VDFs particularly useful:
+\begin{itemize}
+    \item \textbf{Sequential Computation}: The evaluation must be inherently sequential, meaning even with parallel processing, the computation cannot be significantly accelerated.
+    \item \textbf{Efficient Verification}: While evaluation is intentionally slow, verification of the result can be performed quickly, typically in logarithmic time relative to the evaluation time.
+\end{itemize}
+
+By their nature, VDFs require large amounts of compute steps both for their evaluation and verification. Prior to the introduction of \hyperref[sec:ao]{AO}, executing a VDF within a decentralized smart contract platform would have been impractical.
+
+\subsection{EVM Chains}\label{sec:evm}
+Ethereum revolutionized the decentralized world by introducing a first of its kind general purpose decentralized verifiable compute platform. This breakthrough unlocked the door for a variety of decentralized applications. However, like many layer-1 blockchains, it faces inherent scalability challenges. As noted in the original whitepaper, ``Like Bitcoin, Ethereum suffers from the flaw that every transaction needs to be processed by every node in the network''~\cite{buterin2014ethereum}.
+
+\subsection{AO}\label{sec:ao}
+AO introduces a novel approach to decentralized computing, establishing a smart contract platform that achieves unprecedented scalability through its unique architecture~\cite{williams2024ao}. Built on top of the Arweave network, AO distinguishes itself from traditional blockchain-based smart contract platforms through its actor-oriented design and message-passing paradigm.
+
+Unlike conventional smart contract platforms that face inherent scalability limitations, AO enables arbitrarily scaling parallel computation where processes communicate through message passing rather than shared state. This breakthrough enables, for the first time, trustless parallel processing at scale, unlocking an entirely new class of decentralized applications previously impossible on traditional blockchain platforms.
+
+The implications of this architecture are far-reaching: compute-intensive applications like \hyperref[sec:vdf]{Verifiable Delay Functions} and Large Language Models can now be executed efficiently in a fully decentralized manner. This represents a fundamental shift in what's possible in the decentralized world.
+\subsection{Pietrzak's VDF}\label{sec:pietrzak}
+Pietrzak~\cite{pietrzak:LIPIcs.ITCS.2019.60} presents an elegant yet simple implementation of a \hyperref[sec:vdf]{Verifiable Delay Function} using the RSW timelock puzzle~\cite{rivest1996timelock}. The construction is defined by:
+
+\begin{itemize}
+    \item $N$: An RSA modulus
+    \item $x$: Input value in $\mathbb{Z}_N^*$
+    \item $T$: Number of squaring operations (determines delay length)
+    \item $n$: Number of checkpoints (determines verification parallelization)
+    \item $y$: Final output value
+\end{itemize}
+
+The core computation follows the formula:
+\begin{align*}
+    y &= x^{2^T} \bmod N \\
+    \mu_i &= x^{2^{iT/(n+1)}} \bmod N \text{ for } i \in \{1,\ldots,n\}
+\end{align*}
+
+These $n$ checkpoints split the verification into $n+1$ equal segments, each requiring $T/(n+1)$ squaring operations that can be verified independently.
+
+To illustrate with the simplest case, consider a single checkpoint ($n=1$):
+\begin{align*}
+    \mu &= x^{2^{T/2}} \bmod N \\
+    y &= x^{2^T} \bmod N
+\end{align*}
+
+This splits the verification into two equal segments:
+\begin{itemize}
+    \item Segment 1: $x \rightarrow \mu$ (first $T/2$ squarings)
+    \item Segment 2: $\mu \rightarrow y$ (final $T/2$ squarings)
+\end{itemize}
+
+These segments can be verified in parallel, reducing verification time by approximately 50\%. This pattern extends naturally to any number of checkpoints $n$, with each additional checkpoint further subdividing the verification process.
