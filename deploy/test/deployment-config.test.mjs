@@ -673,6 +673,7 @@ test('spawn-dao --lua53b --dry-run builds the RNG DAO from PARALITH_MONO, named 
 test('relaunch: spawn-<role> --replace retires the old process; dao-handover takes a subset', () => {
   // Pure: the old id, its owners and build move to `retired`; the role starts fresh.
   const st = JSON.parse(JSON.stringify(live));
+  const before = (st.retired || []).length;
   const oldFast = st.fast;
   const e = retireRole(st, 'fast', '2026-11-07T00:00:00.000Z');
   assert.deepEqual([e.role, e.pid, e.owners.walletRenounced, e.expectedCode.version], ['fast', oldFast, true, 0]);
@@ -680,7 +681,7 @@ test('relaunch: spawn-<role> --replace retires the old process; dao-handover tak
   assert.equal(st.processes[oldFast].retired, '2026-11-07T00:00:00.000Z');
   assert.equal(st.owners.beacon.walletRenounced, true, 'other roles untouched');
   retireRole(st, 'fair');
-  assert.deepEqual(st.retired.map((r) => r.role), ['fast', 'fair']);
+  assert.deepEqual(st.retired.slice(before).map((r) => r.role), ['fast', 'fair']);
   assert.equal(retireRole(st, 'fair'), null, 'nothing to retire twice');
 
   // Dry runs over a copy of the live state: only the fast tier and fair process move.
