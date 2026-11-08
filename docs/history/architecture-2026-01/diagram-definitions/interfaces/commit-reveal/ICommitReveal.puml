@@ -1,0 +1,19 @@
+@startuml ICommitReveal
+!include ../../style.puml
+
+title ICommitReveal Interface
+
+interface ICommitReveal {
+    + commit(commitParams: CommitParams)
+    + reveal(revealParams: RevealParams)
+}
+
+note right of ICommitReveal
+  **ICommitReveal Interface**
+  
+  Base interface for commit-reveal
+  operations. Extended by other
+  interfaces for specific use cases.
+end note
+
+@enduml

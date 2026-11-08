@@ -1,0 +1,27 @@
+@startuml EntropyRequest
+!include ../../style.puml
+
+title EntropyRequest Struct
+
+class EntropyRequest <<struct>> {
+    + providerIds: Array<string>
+    + callbackId: string
+}
+
+note right of EntropyRequest
+  **EntropyRequest Struct**
+  
+  Parameter struct for entropy
+  request operations specifying
+  which providers should participate.
+end note
+
+note bottom of EntropyRequest
+  **Provider Selection**
+  
+  Array of provider IDs determines
+  which providers are chosen for
+  the entropy generation process.
+end note
+
+@enduml

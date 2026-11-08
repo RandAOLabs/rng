@@ -1,0 +1,31 @@
+@startuml Commitment
+!include ../../style.puml
+!include ./TimeLockPuzzle.puml
+
+title Commitment Struct
+
+class Commitment <<struct>> {
+    + requestId: string
+    + timeLockPuzzle: TimeLockPuzzle
+    + answerHash: bytes32
+}
+
+Commitment --> TimeLockPuzzle : contains
+
+note right of Commitment
+  **Commitment Struct**
+  
+  Contains request ID, timelock puzzle
+  and hash of expected output
+  for quick verification.
+end note
+
+note bottom of Commitment
+  **Request ID**
+  
+  Links commitment to specific
+  entropy request for tracking
+  and validation purposes.
+end note
+
+@enduml

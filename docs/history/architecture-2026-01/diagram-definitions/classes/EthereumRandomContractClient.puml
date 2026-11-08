@@ -1,0 +1,31 @@
+@startuml EthereumRandomContractClient
+!include ../style.puml
+!include ../interfaces/IRandomContract.puml
+
+title EthereumRandomContractClient Class
+
+class EthereumRandomContractClient {
+    - ethProvider: EthProvider
+    - contractAddress: string
+    - abi: ContractABI
+    --
+    + commit(commitParams: CommitParams)
+    + reveal(secretParams: ISecretParams)
+    + requestEntropy(requestParams: EntropyRequest): requestId
+    + statusEntropy(): EntropyStatus
+    --
+    - sendTransaction(data: bytes): txHash
+    - callContract(method: string, params: any[]): any
+}
+
+EthereumRandomContractClient ..|> RandomContract
+
+note right of EthereumRandomContractClient
+  **Ethereum Implementation**
+  
+  Implements RandomContract interface
+  for Ethereum blockchain using
+  Web3/Ethers provider pattern.
+end note
+
+@enduml

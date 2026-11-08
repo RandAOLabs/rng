@@ -1,0 +1,34 @@
+@startuml RandomProvider
+!include ../style.puml
+!include ../interfaces/commit-reveal/ICommitReveal.puml
+
+title RandomProvider Class
+
+class RandomProvider {
+    - contractClient: EthereumRandomContractClient
+    - whisperClient: RandomProviderWhisperNetworkClient
+    - providerId: string
+    - isLeadProvider: bool
+    --
+    + participateInConsensus(): bool
+    + commitToContract(finalEntropy: bytes32): txHash
+    + coordinateWithPeers(): bool
+    --
+    - aggregateCommitments(): bytes32
+    - validatePeerCommitments(): bool
+    - electLeadProvider(): string
+}
+
+RandomProvider --> EthereumRandomContractClient : uses
+RandomProvider --> RandomProviderWhisperNetworkClient : uses
+
+note right of RandomProvider
+  **RandomProvider Class**
+  
+  Orchestrates both whisper network
+  communication and blockchain
+  contract interactions for
+  distributed entropy generation.
+end note
+
+@enduml

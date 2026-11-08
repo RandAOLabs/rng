@@ -1,0 +1,29 @@
+@startuml RSAPrivateKey
+!include ../../style.puml
+
+title RSAPrivateKey Struct
+
+class RSAPrivateKey <<struct>> {
+    + p: PrimeInteger
+    + q: PrimeInteger
+}
+
+note right of RSAPrivateKey
+  **RSAPrivateKey Struct**
+  
+  Contains the prime factors P and Q
+  where P × Q = N (RSA modulus).
+  
+  Enables factorization shortcut
+  for timelock puzzle solving.
+end note
+
+note bottom of RSAPrivateKey
+  **Prime Factorization**
+  
+  Knowledge of P and Q allows
+  immediate solution of timelock
+  puzzle without computational delay.
+end note
+
+@enduml

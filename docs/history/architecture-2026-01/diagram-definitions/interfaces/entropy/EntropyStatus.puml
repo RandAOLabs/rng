@@ -1,0 +1,40 @@
+@startuml EntropyStatus
+!include ../../style.puml
+!include ./EntropyRequest.puml
+!include ../commit-reveal/SignedCommitment.puml
+!include ../commit-reveal/Reveal.puml
+
+title EntropyStatus Struct
+
+class EntropyStatus <<struct>> {
+    + requestId: string
+    + requestParams: EntropyRequest
+    + commitments: Array<SignedCommitment>
+    + reveals: Array<Reveal>
+    --
+    + calculateEntropy(): bytes32 | Error
+}
+
+EntropyStatus --> EntropyRequest : contains
+EntropyStatus --> SignedCommitment : contains array
+EntropyStatus --> Reveal : contains array
+
+note right of EntropyStatus
+  **EntropyStatus Struct**
+  
+  Complete status tracking for
+  entropy generation request
+  including all commitments,
+  reveals, and calculation method.
+end note
+
+note bottom of EntropyStatus
+  **Calculate Entropy**
+  
+  Method validates all timelock
+  puzzles and combines reveals
+  to generate final entropy
+  or return validation errors.
+end note
+
+@enduml

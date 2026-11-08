@@ -1,0 +1,66 @@
+@startuml RandomProviderNetwork
+!include ../style.puml
+
+title Random Provider Network Architecture - Commit-Reveal Protocol
+
+package "Provider Network" {
+    component "Provider A" as ProviderA <<RandomProvider>>
+    component "Provider B" as ProviderB <<RandomProvider>>
+    component "Provider C" as ProviderC <<RandomProvider>>
+}
+
+package "Whisper Network" {
+    component "Whisper Network" as WhisperNet
+}
+
+package "Blockchain" {
+    component "Contract Instance" as ContractInstance <<IRandomContract>>
+}
+
+' COMMIT PHASE - Whisper Network Socialization
+ProviderA -[#FF9900]-> WhisperNet : **COMMIT PHASE**\nshare commitments
+ProviderB -[#FF9900]-> WhisperNet : share commitments  
+ProviderC -[#FF9900]-> WhisperNet : share commitments
+
+WhisperNet .[#FF9900].> ProviderA : broadcast commitments
+WhisperNet .[#FF9900].> ProviderB : broadcast commitments
+WhisperNet .[#FF9900].> ProviderC : broadcast commitments
+
+' COMMIT PHASE - Blockchain Posting
+ProviderA -[#FF9900]-> ContractInstance : **1. commit()**\npost commitments
+ProviderB -[#FF9900]-> ContractInstance : commit()
+ProviderC -[#FF9900]-> ContractInstance : commit()
+
+' REVEAL PHASE - Whisper Network Socialization  
+ProviderA -[#4682B4]-> WhisperNet : **REVEAL PHASE**\nshare secrets
+ProviderB -[#4682B4]-> WhisperNet : share secrets
+ProviderC -[#4682B4]-> WhisperNet : share secrets
+
+WhisperNet .[#4682B4].> ProviderA : broadcast secrets
+WhisperNet .[#4682B4].> ProviderB : broadcast secrets  
+WhisperNet .[#4682B4].> ProviderC : broadcast secrets
+
+' REVEAL PHASE - Blockchain Posting
+ProviderA -[#4682B4]-> ContractInstance : **2. reveal()**\npost secrets
+ProviderB -[#4682B4]-> ContractInstance : reveal()
+ProviderC -[#4682B4]-> ContractInstance : reveal()
+
+note right of WhisperNet
+  **Whisper Network**
+  
+  **Phase 1 (Orange)**: Commitments
+  **Phase 2 (Blue)**: Secrets
+  
+  Secure P2P socialization
+  before blockchain posting
+end note
+
+note bottom of ContractInstance
+  **Smart Contract**
+  
+  **Phase 1**: Receive commitments
+  **Phase 2**: Receive reveals & 
+  generate final entropy
+end note
+
+@enduml

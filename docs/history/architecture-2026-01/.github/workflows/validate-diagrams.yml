@@ -1,0 +1,69 @@
+name: Validate UML Diagrams
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'diagram-definitions/**/*.puml'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'convert-diagrams.sh'
+
+jobs:
+  validate-diagrams:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Validate PlantUML diagrams
+      run: |
+        echo "🔍 Validating PlantUML diagrams..."
+        
+        # Use docker compose to validate all diagrams
+        docker compose up --build
+        
+        # Check if all diagrams compiled successfully
+        if [ $? -eq 0 ]; then
+          echo "✅ All PlantUML diagrams are valid and compile successfully"
+        else
+          echo "❌ Some PlantUML diagrams failed validation"
+          echo "   Please fix the compilation errors and run 'docker-compose up --build' locally"
+          exit 1
+        fi
+    
+    - name: Check for PNG files in PR
+      run: |
+        echo "📋 Checking if diagram images are included in PR..."
+        
+        if [ ! -d "diagram-images" ]; then
+          echo "❌ Missing diagram-images directory"
+          echo "   Please run 'docker-compose up --build' locally and commit the generated PNG files"
+          exit 1
+        fi
+        
+        png_count=$(find diagram-images -name "*.png" 2>/dev/null | wc -l)
+        puml_count=$(find diagram-definitions -name "*.puml" ! -name "style.puml" | wc -l)
+        
+        echo "📊 Found $png_count PNG files and $puml_count PUML diagrams"
+        
+        if [ "$png_count" -eq 0 ]; then
+          echo "❌ No PNG files found in diagram-images/"
+          echo "   Please run 'docker-compose up --build' locally and commit the generated images"
+          exit 1
+        fi
+        
+        echo "✅ Diagram images are present in the PR"
+    
+    - name: Validation summary
+      run: |
+        echo "🎉 UML Diagram Validation Complete!"
+        echo "========================================"
+        echo "✅ All PlantUML files compile successfully"
+        echo "✅ PNG diagram images are included in PR" 
+        echo "✅ Ready for merge"
+        echo "========================================"

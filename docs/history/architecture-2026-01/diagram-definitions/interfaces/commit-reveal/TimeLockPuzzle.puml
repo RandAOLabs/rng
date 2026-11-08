@@ -1,0 +1,27 @@
+@startuml TimeLockPuzzle
+!include ../../style.puml
+
+title TimeLockPuzzle Struct
+
+class TimeLockPuzzle <<struct>> {
+    + input: bytes
+    + rsaModulus: Integer
+}
+
+note right of TimeLockPuzzle
+  **TimeLockPuzzle Struct**
+  
+  Cryptographic timelock puzzle structure.
+  All puzzles share a common protocol
+  timing parameter 't'.
+end note
+
+note bottom of TimeLockPuzzle
+  **Protocol Parameter**
+  
+  Global timing parameter 't' defines
+  the computational difficulty for
+  all timelock puzzles in the system.
+end note
+
+@enduml

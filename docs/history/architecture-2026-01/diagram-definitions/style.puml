@@ -1,0 +1,265 @@
+@startuml
+' ============================================================================
+' CORPORATE STYLE GUIDE FOR ENTERPRISE UML DIAGRAMS
+' ============================================================================
+
+!ifndef CORPORATE_STYLE
+!define CORPORATE_STYLE
+
+' ----------------------------------------------------------------------------
+' CORPORATE COLOR PALETTE - BLACK BASE, WHITE TEXT, ORANGE ACCENT
+' ----------------------------------------------------------------------------
+
+' Primary Corporate Colors
+!define CORP_BLACK #000000
+!define CORP_WHITE #FFFFFF
+!define CORP_ACCENT #999999
+
+' Variations for different elements
+!define CORP_DARK_GRAY #333333
+!define CORP_LIGHT_GRAY #CCCCCC
+!define CORP_MEDIUM_GRAY #666666
+
+' Status Colors
+!define CORP_SUCCESS #228B22
+!define CORP_WARNING #FF9900
+!define CORP_DANGER #DC143C
+!define CORP_INFO #4682B4
+
+' System Colors
+!define CORP_SYSTEM #F5F5F5
+!define CORP_EXTERNAL #E8E8E8
+!define CORP_DATABASE #DCDCDC
+!define CORP_API #F0F0F0
+
+' ----------------------------------------------------------------------------
+' SKINPARAMS - GLOBAL DIAGRAM STYLING
+' ----------------------------------------------------------------------------
+
+skinparam backgroundColor transparent
+skinparam defaultFontSize 12
+skinparam defaultFontName "Segoe UI"
+skinparam dpi 300
+skinparam shadowing false
+
+' ----------------------------------------------------------------------------
+' COMPONENT STYLING
+' ----------------------------------------------------------------------------
+
+skinparam component {
+    BackgroundColor CORP_BLACK
+    BorderColor CORP_ACCENT
+    FontColor CORP_WHITE
+    FontSize 12
+    FontStyle bold
+}
+
+skinparam interface {
+    BackgroundColor CORP_WHITE
+    BorderColor CORP_ACCENT
+    FontColor CORP_WHITE
+    FontSize 10
+}
+
+' ----------------------------------------------------------------------------
+' SEQUENCE DIAGRAM STYLING
+' ----------------------------------------------------------------------------
+
+skinparam sequence {
+    ParticipantBackgroundColor CORP_BLACK
+    ParticipantBorderColor CORP_ACCENT
+    ParticipantFontColor CORP_WHITE
+    ParticipantFontSize 11
+    ParticipantFontStyle bold
+    
+    ArrowColor CORP_BLACK
+    ArrowFontColor CORP_BLACK
+    ArrowFontSize 10
+    
+    ActorBackgroundColor CORP_BLACK
+    ActorBorderColor CORP_ACCENT
+    ActorFontColor CORP_WHITE
+    ActorFontSize 11
+    
+    BoxBackgroundColor CORP_LIGHT_GRAY
+    BoxBorderColor CORP_BLACK
+    BoxFontColor CORP_BLACK
+    BoxFontSize 10
+    
+    LifeLineBackgroundColor CORP_LIGHT_GRAY
+    LifeLineBorderColor CORP_BLACK
+}
+
+' ----------------------------------------------------------------------------
+' CLASS DIAGRAM STYLING
+' ----------------------------------------------------------------------------
+
+skinparam class {
+    BackgroundColor CORP_LIGHT_GRAY
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 11
+    
+    HeaderBackgroundColor CORP_WHITE
+    HeaderFontColor CORP_WHITE
+    HeaderFontSize 12
+    HeaderFontStyle bold
+    
+    AttributeFontColor CORP_BLACK
+    AttributeFontSize 10
+    
+    StereotypeFontColor CORP_MEDIUM_GRAY
+    StereotypeFontSize 9
+}
+
+' ----------------------------------------------------------------------------
+' USE CASE STYLING
+' ----------------------------------------------------------------------------
+
+skinparam usecase {
+    BackgroundColor CORP_BLACK
+    BorderColor CORP_ACCENT
+    FontColor CORP_WHITE
+    FontSize 11
+    FontStyle bold
+}
+
+skinparam actor {
+    BackgroundColor CORP_BLACK
+    BorderColor CORP_ACCENT
+    FontColor CORP_WHITE
+    FontSize 11
+    FontStyle bold
+}
+
+' ----------------------------------------------------------------------------
+' STATE DIAGRAM STYLING
+' ----------------------------------------------------------------------------
+
+skinparam state {
+    BackgroundColor CORP_LIGHT_GRAY
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 11
+    
+    StartColor CORP_SUCCESS
+    EndColor CORP_DANGER
+    
+    ArrowColor CORP_BLACK
+    ArrowFontColor CORP_BLACK
+    ArrowFontSize 10
+}
+
+' ----------------------------------------------------------------------------
+' ACTIVITY DIAGRAM STYLING
+' ----------------------------------------------------------------------------
+
+skinparam activity {
+    BackgroundColor CORP_BLACK
+    BorderColor CORP_ACCENT
+    FontColor CORP_WHITE
+    FontSize 11
+    
+    StartColor CORP_SUCCESS
+    EndColor CORP_DANGER
+    
+    DiamondBackgroundColor CORP_ACCENT
+    DiamondBorderColor CORP_BLACK
+    DiamondFontColor CORP_BLACK
+    
+    ArrowColor CORP_BLACK
+    ArrowFontColor CORP_BLACK
+    ArrowFontSize 10
+}
+
+' ----------------------------------------------------------------------------
+' DATABASE AND STORAGE STYLING
+' ----------------------------------------------------------------------------
+
+skinparam database {
+    BackgroundColor CORP_DATABASE
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 11
+    FontStyle bold
+}
+
+skinparam storage {
+    BackgroundColor CORP_SYSTEM
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 11
+}
+
+' ----------------------------------------------------------------------------
+' PACKAGE AND NAMESPACE STYLING
+' ----------------------------------------------------------------------------
+
+skinparam package {
+    BackgroundColor CORP_LIGHT_GRAY
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 12
+    FontStyle bold
+}
+
+skinparam rectangle {
+    BackgroundColor CORP_LIGHT_GRAY
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 11
+}
+
+' ----------------------------------------------------------------------------
+' NOTE AND LEGEND STYLING
+' ----------------------------------------------------------------------------
+
+skinparam note {
+    BackgroundColor CORP_ACCENT
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 10
+}
+
+skinparam legend {
+    BackgroundColor CORP_LIGHT_GRAY
+    BorderColor CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 10
+}
+
+' ----------------------------------------------------------------------------
+' ARROW AND LINE STYLING
+' ----------------------------------------------------------------------------
+
+skinparam arrow {
+    Color CORP_BLACK
+    FontColor CORP_BLACK
+    FontSize 10
+    Thickness 2
+}
+
+' ----------------------------------------------------------------------------
+' CUSTOM MACROS FOR ENTERPRISE ELEMENTS
+' ----------------------------------------------------------------------------
+
+' External System Macro
+!define EXTERNAL_SYSTEM(name, desc) rectangle name as "**name**\n//desc//" CORP_EXTERNAL
+
+' Internal System Macro
+!define INTERNAL_SYSTEM(name, desc) rectangle name as "**name**\n//desc//" CORP_SYSTEM
+
+' API Gateway Macro
+!define API_GATEWAY(name) rectangle name as "**🔗 name**\n//API Gateway//" CORP_API
+
+' Database Macro
+!define DATABASE_ENTITY(name) database name as "**💾 name**\n//Database//" CORP_DATABASE
+
+' Microservice Macro
+!define MICROSERVICE(name, desc) component name as "**⚙️ name**\n//desc//" CORP_BLACK
+
+' User Interface Macro
+!define USER_INTERFACE(name) rectangle name as "**🖥️ name**\n//User Interface//" CORP_LIGHT_GRAY
+
+!endif
+@enduml

@@ -1,0 +1,61 @@
+@startuml RandomProviderNetworkReveal
+!include ../style.puml
+
+title Random Provider Network - REVEAL PHASE
+
+package "Provider Network" {
+    component "Provider A (Lead)" as ProviderA <<RandomProvider>>
+    component "Provider B" as ProviderB <<RandomProvider>>
+    component "Provider C" as ProviderC <<RandomProvider>>
+}
+
+package "Whisper Network" {
+    component "Whisper Network" as WhisperNet
+}
+
+package "Blockchain" {
+    component "Contract Instance" as ContractInstance <<IRandomContract>>
+}
+
+' REVEAL PHASE - Whisper Network Socialization
+ProviderA -[#4682B4]-> WhisperNet : broadcast reveals
+ProviderB -[#4682B4]-> WhisperNet : broadcast reveals
+ProviderC -[#4682B4]-> WhisperNet : broadcast reveals
+
+WhisperNet .[#4682B4].> ProviderA : **1. Receive all reveals**
+WhisperNet .[#4682B4].> ProviderB : receive all reveals
+WhisperNet .[#4682B4].> ProviderC : receive all reveals
+
+' REVEAL PHASE - Single Provider Posts All (Lead Provider)
+ProviderA -[#4682B4]-> ContractInstance : **2. reveal(allRevealParams)**\nBATCH POST all reveals
+
+' Final entropy generation
+ContractInstance -[#228B22]-> ContractInstance : **3. Generate Entropy**\nfinal randomness
+
+note right of WhisperNet
+  **WHISPER SOCIALIZATION**
+  
+  1. Each provider broadcasts reveals
+  2. All providers receive all reveals
+  3. Lead provider validates ALL reveals
+  4. Only lead provider posts to chain
+end note
+
+note bottom of ContractInstance
+  **BATCH REVEAL**
+  
+  Single transaction contains
+  reveals from ALL providers.
+  Contract validates and generates
+  final entropy efficiently.
+end note
+
+note left of ProviderA
+  **Lead Provider**
+  
+  Validates all reveals match
+  commitments, then posts
+  batch reveal transaction
+end note
+
+@enduml

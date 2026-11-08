@@ -1,0 +1,34 @@
+@startuml EthereumRandomContract
+!include ../style.puml
+!include ../interfaces/IRandomContract.puml
+
+title EthereumRandomContract Class
+
+class EthereumRandomContract {
+    - commitments: mapping(address => bytes32)
+    - secrets: mapping(address => bytes32)
+    - providers: mapping(address => bool)
+    - requestCounter: uint256
+    - entropyRequests: mapping(uint256 => EntropyRequest)
+    --
+    + commit(commitParams: CommitParams)
+    + reveal(secretParams: ISecretParams)
+    + requestEntropy(requestParams: EntropyRequest): requestId
+    + statusEntropy(): EntropyStatus
+    --
+    - validateCommitment(commitment: bytes32): bool
+    - generateEntropy(secrets: bytes32[]): bytes32
+    - updateRequestStatus(requestId: uint256, status: uint8)
+}
+
+EthereumRandomContract ..|> RandomContract
+
+note right of EthereumRandomContract
+  **Ethereum Smart Contract**
+  
+  Solidity implementation of
+  RandomContract for Ethereum
+  blockchain with state storage.
+end note
+
+@enduml

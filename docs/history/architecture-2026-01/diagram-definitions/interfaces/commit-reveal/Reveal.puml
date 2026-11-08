@@ -1,0 +1,31 @@
+@startuml Reveal
+!include ../../style.puml
+!include ./RSAPrivateKey.puml
+
+title Reveal Struct
+
+class Reveal <<struct>> {
+    + requestId: string
+    + answer: bytes
+    + rsaPrivateKey: RSAPrivateKey
+}
+
+Reveal --> RSAPrivateKey : contains
+
+note right of Reveal
+  **Reveal Struct**
+  
+  Contains the solution to timelock
+  puzzle: answer value and RSA
+  private key for verification.
+end note
+
+note bottom of Reveal
+  **Timelock Solution**
+  
+  Answer is the puzzle output.
+  RSA private key (P,Q) proves
+  legitimate puzzle generation.
+end note
+
+@enduml

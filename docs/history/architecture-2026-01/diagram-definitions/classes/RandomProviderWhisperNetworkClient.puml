@@ -1,0 +1,31 @@
+@startuml RandomProviderWhisperNetworkClient
+!include ../style.puml
+!include ../interfaces/commit-reveal/ICommitReveal.puml
+
+title RandomProviderWhisperNetworkClient Class
+
+class RandomProviderWhisperNetworkClient {
+    - networkEndpoint: string
+    - providerId: string
+    - whisperClient: WhisperClient
+    - encryptionKey: PrivateKey
+    --
+    + commit(commitParams: CommitParams)
+    + reveal(secretParams: ISecretParams)
+    --
+    - sendWhisperMessage(recipient: string, message: EncryptedMessage): messageId
+    - encryptMessage(data: any, recipientKey: PublicKey): EncryptedMessage
+    - authenticateProvider(providerId: string): bool
+}
+
+RandomProviderWhisperNetworkClient ..|> ICommitReveal
+
+note right of RandomProviderWhisperNetworkClient
+  **Whisper Network Client**
+  
+  Implements commit-reveal operations
+  over encrypted whisper network for
+  secure provider communication.
+end note
+
+@enduml

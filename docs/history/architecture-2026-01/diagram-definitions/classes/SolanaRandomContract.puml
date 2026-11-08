@@ -1,0 +1,35 @@
+@startuml SolanaRandomContract
+!include ../style.puml
+!include ../interfaces/IRandomContract.puml
+
+title SolanaRandomContract Class
+
+class SolanaRandomContract {
+    - commitmentAccount: Account
+    - secretAccount: Account
+    - providerAccount: Account
+    - requestAccount: Account
+    - programData: ProgramData
+    --
+    + commit(commitParams: CommitParams)
+    + reveal(secretParams: ISecretParams)
+    + requestEntropy(requestParams: EntropyRequest): requestId
+    + statusEntropy(): EntropyStatus
+    --
+    - processInstruction(instruction: Instruction): Result
+    - validateAccountOwnership(account: PublicKey): bool
+    - serializeAccountData(data: any): Buffer
+    - deserializeAccountData(buffer: Buffer): any
+}
+
+SolanaRandomContract ..|> RandomContract
+
+note right of SolanaRandomContract
+  **Solana Program**
+  
+  Rust implementation of
+  RandomContract for Solana
+  blockchain with account storage.
+end note
+
+@enduml

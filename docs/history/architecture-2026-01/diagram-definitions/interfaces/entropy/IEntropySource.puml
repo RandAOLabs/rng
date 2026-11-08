@@ -1,0 +1,20 @@
+@startuml IEntropySource
+!include ../../style.puml
+
+title IEntropySource Interface
+
+interface IEntropySource {
+    + requestEntropy(requestParams: EntropyRequest): requestId
+    + statusEntropy(requestId: string): EntropyStatus
+}
+
+note right of IEntropySource
+  **IEntropySource Interface**
+  
+  Interface for entropy generation
+  operations: requesting entropy
+  and checking generation status
+  for specific requests.
+end note
+
+@enduml

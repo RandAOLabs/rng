@@ -1,0 +1,32 @@
+@startuml SolanaRandomContractClient
+!include ../style.puml
+!include ../interfaces/IRandomContract.puml
+
+title SolanaRandomContractClient Class
+
+class SolanaRandomContractClient {
+    - connection: Connection
+    - programId: PublicKey
+    - wallet: Wallet
+    --
+    + commit(commitParams: CommitParams)
+    + reveal(secretParams: ISecretParams)
+    + requestEntropy(requestParams: EntropyRequest): requestId
+    + statusEntropy(): EntropyStatus
+    --
+    - sendTransaction(instruction: TransactionInstruction): signature
+    - getAccountInfo(address: PublicKey): AccountInfo
+    - buildInstruction(method: string, data: Buffer): TransactionInstruction
+}
+
+SolanaRandomContractClient ..|> RandomContract
+
+note right of SolanaRandomContractClient
+  **Solana Implementation**
+  
+  Implements RandomContract interface
+  for Solana blockchain using
+  @solana/web3.js client pattern.
+end note
+
+@enduml

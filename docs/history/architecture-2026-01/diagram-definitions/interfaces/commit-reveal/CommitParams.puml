@@ -1,0 +1,30 @@
+@startuml CommitParams
+!include ../../style.puml
+!include ./SignedCommitment.puml
+
+title CommitParams Struct
+
+class CommitParams <<struct>> {
+    + signedCommitments: Array<SignedCommitment>
+}
+
+CommitParams --> SignedCommitment : contains array
+
+note right of CommitParams
+  **CommitParams Struct**
+  
+  Parameter struct for commit
+  operations containing an array
+  of signed commitments from
+  multiple providers.
+end note
+
+note bottom of CommitParams
+  **Batch Commitments**
+  
+  Array enables batch posting
+  of multiple provider commitments
+  in a single transaction.
+end note
+
+@enduml

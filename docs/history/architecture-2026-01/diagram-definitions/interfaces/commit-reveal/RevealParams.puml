@@ -1,0 +1,29 @@
+@startuml RevealParams
+!include ../../style.puml
+!include ./Reveal.puml
+
+title RevealParams Struct
+
+class RevealParams <<struct>> {
+    + reveals: Array<Reveal>
+}
+
+RevealParams --> Reveal : contains array
+
+note right of RevealParams
+  **RevealParams Struct**
+  
+  Parameter struct for reveal
+  operations containing an array
+  of reveals from multiple providers.
+end note
+
+note bottom of RevealParams
+  **Batch Reveals**
+  
+  Array enables batch posting
+  of multiple provider reveals
+  in a single transaction.
+end note
+
+@enduml

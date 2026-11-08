@@ -1,0 +1,11 @@
+services:
+  plantuml-converter:
+    build: .
+    container_name: plantuml-diagram-converter
+    volumes:
+      - ./diagram-definitions:/diagrams/diagram-definitions:ro
+      - ./diagram-images:/diagrams/diagram-images
+    environment:
+      - JAVA_OPTS=-Xmx512m
+    working_dir: /diagrams
+    command: /usr/src/plantuml/convert-diagrams.sh

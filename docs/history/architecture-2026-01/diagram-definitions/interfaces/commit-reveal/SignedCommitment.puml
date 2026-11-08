@@ -1,0 +1,30 @@
+@startuml SignedCommitment
+!include ../../style.puml
+!include ./Commitment.puml
+
+title SignedCommitment Struct
+
+class SignedCommitment <<struct>> {
+    + signature: bytes
+    + commitment: Commitment
+}
+
+SignedCommitment --> Commitment : contains
+
+note right of SignedCommitment
+  **SignedCommitment Struct**
+  
+  Cryptographically signed commitment
+  ensuring authenticity and 
+  non-repudiation of the commitment.
+end note
+
+note bottom of SignedCommitment
+  **Digital Signature**
+  
+  Proves the commitment originates
+  from the claimed provider and
+  prevents tampering.
+end note
+
+@enduml

@@ -1,0 +1,19 @@
+@startuml IRandomContract
+!include ../style.puml
+!include ./commit-reveal/ICommitReveal.puml
+!include ./entropy/IEntropySource.puml
+
+title IRandomContract Interface
+
+interface IRandomContract extends ICommitReveal, IEntropySource {
+}
+
+note right of IRandomContract
+  **IRandomContract Interface**
+  
+  Core contract interface combining
+  commit-reveal operations with
+  entropy generation capabilities.
+end note
+
+@enduml
