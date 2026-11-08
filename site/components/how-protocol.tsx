@@ -13,7 +13,7 @@ const surfaces = [
   ["01", "LOCAL", "LIVE", "derive", "free"],
   ["02", "FAST", "LIVE / ON DEMAND", "verify-bls", "3 RNG"],
   ["03", "BEACON", "LIVE / 1 SEC", "beacon", "read free"],
-  ["04", "ANY-HONEST", "LIVE", "verify-reveal + verify-crack", "4 TEST-RNG"],
+  ["04", "ANY-HONEST", "LIVE", "verify-reveal + verify-crack", "4 RNG"],
   ["05", "PROOF", "LIVE", "verify", "free"],
 ];
 

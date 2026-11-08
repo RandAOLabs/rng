@@ -140,7 +140,7 @@ export function ValidatorGuide() {
         <p className="m-0">The config file is JSON: <code>{"{ beacon, hbNode, dataDir }"}</code>. Exact flags may change; see the repo README.</p>
         <ol className="m-0 list-decimal space-y-4 pl-5">
           <li><p className="m-0 mb-2">Create the validator wallet. It prints your address.</p><Command text="node validator/anyhonest-validator.mjs init validator.json" /></li>
-          <li><p className="m-0">Buy at least {fmt(p.stake)} RNG and send it to that address. RNG will trade on the Paralith orderbook (RNG/GOLD), <span className="text-[var(--white)]">coming soon</span>. RNG has a fixed supply and no faucet.</p></li>
+          <li><p className="m-0">Buy at least {fmt(p.stake)} RNG and send it to that address. Buy it on the <a className="text-[var(--white)] underline" href="https://trade.paralithmarkets.com/orderbook" target="_blank" rel="noreferrer">Paralith RNG/PUSD orderbook</a>. RNG has a fixed supply and no faucet.</p></li>
           <li><p className="m-0 mb-2">Bond: transfer the stake to the beacon with the <code>X-Bond</code> tag. A first bond below {fmt(p.stake)} RNG is refunded. The validator&apos;s bond command sends this for you (see repo README for flags).</p><Command text={`Transfer { Recipient = <beacon>, Quantity = ${stakeUnits}, X-Bond = "true" }`} /></li>
           <li><p className="m-0 mb-2">Run it. The validator sends <code>Ready</code> once its connection is healthy and then works every round it is in the active set.</p><Command text="node validator/anyhonest-validator.mjs run validator.json" /></li>
         </ol>
