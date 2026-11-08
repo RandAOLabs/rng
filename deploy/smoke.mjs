@@ -686,8 +686,10 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
       check(sc, `all ${LOAD} served`, sc.runs.filter((r) => r.ok).length === LOAD, { served: sc.runs.filter((r) => r.ok).length, wallMs: Date.now() - t0 });
       check(sc, 'rounds/s during the burst >= 1.8', burst >= 1.8, { rate: Number(burst.toFixed(3)), rounds: after.round - before.round, ms: after.at - before.at });
       const vb = validatorView(before), va = validatorView(after);
-      const moved = Object.keys({ ...vb, ...va }).filter((a) => JSON.stringify(vb[a]) !== JSON.stringify(va[a]) || va[a]?.faults || va[a]?.strikes || va[a]?.suspended);
-      check(sc, 'no validator faults, strikes or suspensions', moved.length === 0, { before: vb, after: va });
+      // Only what the burst caused: faults earlier in the beacon's life are not this run's.
+      const moved = Object.keys({ ...vb, ...va }).filter((a) => (va[a]?.faults ?? 0) > (vb[a]?.faults ?? 0)
+        || (va[a]?.strikes ?? 0) > (vb[a]?.strikes ?? 0) || (va[a]?.suspended && !vb[a]?.suspended));
+      check(sc, 'no new validator faults, strikes or suspensions during the burst', moved.length === 0, { before: vb, after: va });
       check(sc, 'beacon health ok', after.health?.status === 'ok', after.health);
       const r = await liveRate();
       check(sc, `ON_PACE (5-min average in ${ON_PACE.join('-')} rounds/s)`, r.rate >= ON_PACE[0] && r.rate <= ON_PACE[1],
