@@ -46,6 +46,7 @@ import { signDataItem } from '../validator/vendor/ans104.mjs';
 import * as ah from '../validator/anyhonest.mjs';
 import * as bls from '../validator/bls.mjs';
 import { findRound, httpReader } from '../lib/js/history.ts';
+import { fastRequestPreimage } from '../lib/js/derive.ts';
 import {
   FairClient, FairError, memoryStore, fairOpenTags, fairExpireTags, fairWithdrawTags, fairFundTags,
   payAndRequestTags, findRequest, verifySession, sessionValue, finalValue, forfeitValue, requestValue, fairRevealTags,
@@ -291,7 +292,7 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
     }
     const mine = (rec.requests || []).filter((r) => r.requester === requester && r.requestId === id);
     if (mine.length !== 1) problems.push(`request ${id} listed ${mine.length} times`);
-    else if (mine[0].value !== sha256(`hyperbeam/rng/v1/request|${rec.value}|${id}`)) problems.push('request value is not H(request|value|id)');
+    else if (mine[0].value !== sha256(fastRequestPreimage(rec, requester, id))) problems.push(`request value is not ${rec.derivation ?? 'v1'} H(...)`);
     if (problems.length) throw new ProtocolIssue(`fast round ${round}: ${problems.join('; ')}`);
     return { round, value: mine[0].value, signers: rec.signers.join(','), slot: hit.slot };
   }

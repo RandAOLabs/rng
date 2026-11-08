@@ -77,11 +77,25 @@ For lowercase group signature hex `S`, the round value is:
 SHA-256("hyperbeam/rng/v1/round|" || signed_message || "|" || S)
 ```
 
-For round value hex `V` and request id `Q`, the request value is:
+For round value hex `V`, requester address `A` and request id `Q`, the
+request value (`derivation = "hyperbeam/rng/fast/v2/request"`) is:
+
+```text
+SHA-256("hyperbeam/rng/fast/v2/request|" || V || "|" || A || "|" || Q)
+```
+
+It binds the requester, as Any-Honest's
+`hyperbeam/rng/any-honest/v1/request|V|A|Q` does. Every round record (state
+`rounds`, `beaconround`) and RNG-Result names its rule in `derivation`. A record
+without the field predates v2 and uses v1, under which two requesters with the
+same `Q` in one round got the same value:
 
 ```text
 SHA-256("hyperbeam/rng/v1/request|" || V || "|" || Q)
 ```
+
+`lib/js/derive.ts` `fastRequestValue(record, requester, requestId)` picks the
+rule from the record.
 
 The `rng@1.0/derive` primitive expands an arbitrary byte seed using blocks:
 

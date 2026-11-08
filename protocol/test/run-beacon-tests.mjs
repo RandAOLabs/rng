@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
 import * as bls from '../../validator/bls.mjs';
+import { fastRequestValue } from '../../lib/js/derive.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -42,9 +43,17 @@ F.fake1 = bls.combine([0, 1].map((i) => ({ index: forged.shares[i].index, signat
 F.fake3 = bls.combine([0, 1].map((i) => ({ index: forged.shares[i].index, signature: bls.partialSign(forged.shares[i], roundMessage(3)) })));
 F.value1 = sha(`hyperbeam/rng/v1/round|${roundMessage(1)}|${F.sig1}`);
 F.value3 = sha(`hyperbeam/rng/v1/round|${roundMessage(3)}|${F.sig3}`);
-F.out1 = sha(`hyperbeam/rng/v1/request|${F.value1}|${F.req1}`);
-F.out2 = sha(`hyperbeam/rng/v1/request|${F.value1}|${F.req2}`);
-F.outPay = sha(`hyperbeam/rng/v1/request|${F.value3}|pay-1`);
+// Per-request value, rng/fast v2: the requester is bound, as in Any-Honest.
+const requestValue = (value, requester, id) => sha(`hyperbeam/rng/fast/v2/request|${value}|${requester}|${id}`);
+F.out1 = requestValue(F.value1, F.game, F.req1);
+F.out2 = requestValue(F.value1, F.game, F.req2);
+F.outPay = requestValue(F.value3, F.wallet, 'pay-1');
+F.outPayGame = requestValue(F.value3, F.game, 'pay-1');
+// The client verifier (lib/js/derive.ts) picks the rule from the round record.
+if (await fastRequestValue({ value: F.value3, derivation: 'hyperbeam/rng/fast/v2/request' }, F.wallet, 'pay-1') !== F.outPay
+  || await fastRequestValue({ value: F.value3 }, F.wallet, 'pay-1') !== sha(`hyperbeam/rng/v1/request|${F.value3}|pay-1`)) {
+  throw new Error('lib/js fastRequestValue disagrees with the v1/v2 rules');
+}
 F.groupKey2 = bls.dealerKeygen(2, 2).groupKey;
 F.config = JSON.stringify({ self: F.beacon, token: F.token, threshold: 2,
   groupKey: shares[0].groupKey, committee: F.members, sharePublicKeys: F.sharePublicKeys, unit: F.unit });

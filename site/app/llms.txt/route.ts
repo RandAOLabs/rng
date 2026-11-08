@@ -63,7 +63,9 @@ review. The DAO cannot upgrade contracts or move funds automatically.
 
 Committee message: hyperbeam/rng/v1|<beacon>|<round>
 Round value: SHA-256("hyperbeam/rng/v1/round|" || message || "|" || signature_hex)
-Request value: SHA-256("hyperbeam/rng/v1/request|" || round_value || "|" || request_id)
+Request value: SHA-256("hyperbeam/rng/fast/v2/request|" || round_value || "|" || requester || "|" || request_id)
+  (the round record's "derivation" field names the rule; a record without it uses
+  v1: SHA-256("hyperbeam/rng/v1/request|" || round_value || "|" || request_id))
 
 RNG Labs is a product of CipherPlay Inc. and maintains the canonical protocol,
 reference network, and provider implementation.

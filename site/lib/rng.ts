@@ -1,12 +1,13 @@
 import { bls12_381 as bls } from "@noble/curves/bls12-381.js";
 import { env } from "cloudflare:workers";
 import { findRound, httpReader } from "../../lib/js/history";
-export { deriveBytes } from "../../lib/js/derive";
+export { deriveBytes, fastRequestValue } from "../../lib/js/derive";
 
 const encoder = new TextEncoder();
 
 export type Member = { address: string; index: number; "public-key"?: string };
-export type Round = { signature: string; value: string; signers: string[] };
+// `derivation` names the per-request rule (lib/js/derive.ts fastRequestValue); absent: v1.
+export type Round = { signature: string; value: string; signers: string[]; derivation?: string };
 export type BeaconInfo = {
   committee: Member[];
   groupKey: string;
@@ -203,7 +204,7 @@ export async function getNetworkStatus(requestedRound?: number) {
       threshold: info.threshold, committeeSize: info.committee.length, committee: info.committee,
       price: info.price.fast ?? info.price.beacon, unit: info.unit, pending: info.pendingCount,
       verificationMode: info.verification, nativeVerification: info.verification === "device",
-      groupKey: info.groupKey, message: null, slot: null, signature: null, value: null, signers: [],
+      groupKey: info.groupKey, message: null, slot: null, signature: null, value: null, derivation: null, signers: [],
       signatureValid: null, valueValid: null, verified: null,
       tokenInfo: { ticker: tokenInfo.Ticker, denomination }, checkedAt: new Date().toISOString(),
     };
@@ -245,6 +246,7 @@ export async function getNetworkStatus(requestedRound?: number) {
     slot,
     signature: round.signature,
     value: round.value,
+    derivation: round.derivation ?? null,
     signers: round.signers,
     signatureValid,
     valueValid: expectedValue === round.value,

@@ -225,6 +225,7 @@ function runBeaconTests()
   eq("round value", r.value, F.value1)
   eq("result 1 value", data.results[1].value, F.out1)
   eq("result 2 value", data.results[2].value, F.out2)
+  eq("RNG-Result names the derivation", data.derivation, "hyperbeam/rng/fast/v2/request")
   eq("signer 2 paid 2", Beacon.accrued[F.members[2]], 2)
   eq("signer 3 paid 2", Beacon.accrued[F.members[3]], 2)
   eq("forger paid nothing", Beacon.accrued[F.members[1]], nil)
@@ -278,6 +279,10 @@ function runBeaconTests()
   eq("the wallet's round is in seen", Beacon.seen[F.wallet .. "|pay-1"], 3)
   r = credit(F.wallet, 3 * U, "t3", { ["X-Request-Id"] = "pay-1" })
   eq("the same notice again is a duplicate", r.duplicate, true)
+  -- Another requester with the same Request-Id in the same round.
+  r = credit(F.game, 3 * U, "t31", { ["X-Request-Id"] = "pay-1" })
+  credited = credited + 3
+  check("a second requester's pay-1 binds round 3 too", r.round == 3, encode(r))
 
   -- Production mode: rng@1.0 verifies one group signature, while the beacon
   -- requires threshold published partials and pays their members.
@@ -305,10 +310,18 @@ function runBeaconTests()
   r, ob = send(wallet(F.members[3], { Action = "Round", Data = encode({ round = 3, signature = F.sig3 }) }))
   eq("device mode finalizes from one verified submission", r.value, F.value3)
   check("no RNG-Result pushed to a wallet", not targets(ob, F.wallet))
-  eq("the wallet's value derives from the round", rng.hex(rng.sha256("hyperbeam/rng/v1/request|"
-    .. Beacon.rounds["3"].value .. "|pay-1")), F.outPay)
-  eq("device mode pays published partial member 1", Beacon.accrued[F.members[1]], 2)
-  eq("device mode pays published partial member 2", Beacon.accrued[F.members[2]], 4)
+  local rec3 = json.decode(base.beaconround)
+  eq("the round record names its derivation", rec3.derivation, "hyperbeam/rng/fast/v2/request")
+  eq("so does the state's round", Beacon.rounds["3"].derivation, "hyperbeam/rng/fast/v2/request")
+  local byReq = {}
+  for _, q in ipairs(rec3.requests) do byReq[q.requester] = q.value end
+  eq("the wallet's value derives from the round and the requester", byReq[F.wallet], F.outPay)
+  eq("the game's same Request-Id gets its own value", byReq[F.game], F.outPayGame)
+  check("same Request-Id, two requesters, two values", byReq[F.wallet] ~= byReq[F.game])
+  check("v2 differs from the v1 rule", F.outPay ~= rng.hex(rng.sha256("hyperbeam/rng/v1/request|"
+    .. Beacon.rounds["3"].value .. "|pay-1")))
+  eq("device mode pays published partial member 1", Beacon.accrued[F.members[1]], 3)
+  eq("device mode pays published partial member 2", Beacon.accrued[F.members[2]], 5)
   eq("device mode does not pay the submitting non-participant", Beacon.accrued[F.members[3]], 2)
   ao = savedAo
 
@@ -454,11 +467,11 @@ function runBeaconTests()
   eq("a stranger cannot claim", send(wallet(F.stranger, { Action = "Gov.Claim-Protocol", Recipient = F.stranger })).error,
     "Not authorised")
   r, ob = enact({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
-  paidOut = paidOut + 4
-  eq("protocol fees paid once applied (raw)", out(), '{"applied":' .. r.applied .. ',"claimed":4,"recipient":"' .. F.owner
+  paidOut = paidOut + 5 -- round 3 served two requests (pay-1 twice)
+  eq("protocol fees paid once applied (raw)", out(), '{"applied":' .. r.applied .. ',"claimed":5,"recipient":"' .. F.owner
     .. '","verb":"Gov.Claim-Protocol"}')
   check("the claim is one Transfer", ob["rng-protocol"] and ob["rng-protocol"].Recipient == F.owner
-    and ob["rng-protocol"].Quantity == string.format("%d", 4 * U) and Beacon.protocolAccrued == 0)
+    and ob["rng-protocol"].Quantity == string.format("%d", 5 * U) and Beacon.protocolAccrued == 0)
   r, ob = enact({ Action = "Gov.Claim-Protocol", Recipient = F.owner })
   check("nothing accrued: no transfer", r.claimed == 0 and next(ob) == nil, encode(r))
 
@@ -597,12 +610,12 @@ function runBeaconTests()
   r, ob = send(wallet(F.members[2], { Action = "Claim" }))
   encode = realEncode
   check("a failed handler rolls back", r.error ~= nil and next(ob) == nil and #transfers == nTransfers
-    and Beacon.transferSeq == seqBefore and Beacon.accrued[F.members[2]] == 4, r.error)
+    and Beacon.transferSeq == seqBefore and Beacon.accrued[F.members[2]] == 5, r.error)
   r, ob = send(wallet(F.members[2], { Action = "Claim" }))
-  paidOut = paidOut + 4
+  paidOut = paidOut + 5
   local t = ob["rng-claim"]
   check("claim pays out through the token", t and t.target == F.token and t.Recipient == F.members[2]
-    and t.Quantity == string.format("%d", 4 * U) and t["X-Transfer-Sequence"] == string.format("%d", seqBefore + 1),
+    and t.Quantity == string.format("%d", 5 * U) and t["X-Transfer-Sequence"] == string.format("%d", seqBefore + 1),
     t and t["X-Transfer-Sequence"])
   eq("accrued reset", Beacon.accrued[F.members[2]], 0)
   eq("claim twice pays nothing", send(wallet(F.members[2], { Action = "Claim" })).error, "Nothing-To-Claim")

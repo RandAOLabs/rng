@@ -327,6 +327,16 @@ local function dataOf(msg)
   return type(d) == "table" and deflate(d) or {}
 end
 
+--- Each request's value, from the round value. v2 binds the requester, as
+--- Any-Honest does (`hyperbeam/rng/any-honest/v1/request|value|requester|id`):
+--- under v1, H("hyperbeam/rng/v1/request|" .. value .. "|" .. requestId), two
+--- requesters using the same Request-Id in one round got the same value. A
+--- round record names its rule in `derivation`; one without it is v1.
+local REQUEST_DERIVATION = "hyperbeam/rng/fast/v2/request"
+local function requestValue(value, requester, requestId)
+  return rng.hex(rng.sha256(REQUEST_DERIVATION .. "|" .. value .. "|" .. requester .. "|" .. requestId))
+end
+
 --- What the committee signs for round r.
 local function roundMessage(r)
   return "hyperbeam/rng/v1|" .. tostring(Beacon.self) .. "|" .. tostring(r)
@@ -432,7 +442,7 @@ local function info()
   local roundPending = #(Beacon.pending[tostring(nextRound)] or {})
   local p = price()
   return {
-    tier = "fast", mode = Beacon.paused and "paused" or "on-demand",
+    tier = "fast", derivation = REQUEST_DERIVATION, mode = Beacon.paused and "paused" or "on-demand",
     round = r, nextRound = nextRound, requestRound = requestRound,
     -- No cadence: a round opens as soon as a request waits for it. Kept at 0
     -- for provider daemons that still compare against it.
@@ -638,7 +648,7 @@ local function finalize(base, r, sig, signers, now)
   local value = rng.hex(rng.sha256("hyperbeam/rng/v1/round|" .. roundMessage(r) .. "|" .. sig))
   local key = tostring(r)
   Beacon.round, Beacon.lastRoundAt = r, now
-  Beacon.rounds[key] = { signature = sig, value = value, signers = signers }
+  Beacon.rounds[key] = { signature = sig, value = value, signers = signers, derivation = REQUEST_DERIVATION }
   Beacon.rounds[tostring(r - ROUND_HISTORY)] = nil
   Beacon.attest[key] = nil
   Beacon.lockedRound, Beacon.lockedAt = 0, 0
@@ -651,8 +661,8 @@ local function finalize(base, r, sig, signers, now)
   for _, s in ipairs(signers) do if Beacon.committee[s] then paid[#paid + 1] = s end end
   local n = #paid
   for _, p in ipairs(Beacon.pending[key] or {}) do
-    requests[#requests + 1] = { requester = p.requester, requestId = p.requestId,
-      value = rng.hex(rng.sha256("hyperbeam/rng/v1/request|" .. value .. "|" .. p.requestId)) }
+    local v = requestValue(value, p.requester, p.requestId)
+    requests[#requests + 1] = { requester = p.requester, requestId = p.requestId, value = v }
     if p.process then
       local out = byRequester[p.requester]
       if not out then
@@ -660,8 +670,7 @@ local function finalize(base, r, sig, signers, now)
         byRequester[p.requester] = out
         order[#order + 1] = p.requester
       end
-      out[#out + 1] = { requestId = p.requestId, round = r,
-        value = rng.hex(rng.sha256("hyperbeam/rng/v1/request|" .. value .. "|" .. p.requestId)) }
+      out[#out + 1] = { requestId = p.requestId, round = r, value = v }
     end
     -- Pay out exactly what this request was charged: the protocol's share as
     -- recorded, the rest split between this round's signers (any remainder to
@@ -675,16 +684,16 @@ local function finalize(base, r, sig, signers, now)
   local outbox = {}
   for i, requester in ipairs(order) do
     outbox["rng-result-" .. i] = { target = requester, Action = "RNG-Result",
-      Data = encode({ round = r, signature = sig, results = byRequester[requester] }) }
+      Data = encode({ round = r, signature = sig, derivation = REQUEST_DERIVATION, results = byRequester[requester] }) }
   end
   Beacon.pending[key] = nil
   Beacon.pendingCount = int(Beacon.pendingCount, 0) - served
   -- This slot's record: checkable on its own (BLS-verify `signature` on
   -- `message` under `groupKey`; value = H(round | message | signature); each
-  -- request's value = H(request | value | requestId)), and readable later at
+  -- request's value = H(derivation | value | requester | requestId)), and readable later at
   -- compute&slot=<slot>/beaconround.
   Finalized = { round = r, message = roundMessage(r), signature = sig, value = value,
-    signers = signers, groupKey = Beacon.groupKey, finalizedAt = now, slot = Slot, requests = requests }
+    derivation = REQUEST_DERIVATION, signers = signers, groupKey = Beacon.groupKey, finalizedAt = now, slot = Slot, requests = requests }
   HistoryNew[#HistoryNew + 1] = { r, Slot }
   return reply(base, { round = r, served = served, value = value }, outbox)
 end

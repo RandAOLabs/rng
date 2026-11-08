@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useLivePoll } from "../hooks/use-live-poll";
 import { findRequest, payAndRequestTags, type RequestRecord } from "../../lib/js/fair-client";
+import { fastRequestValue } from "../../lib/js/derive";
 import { connectWallet, hasWallet, sendMessage } from "../lib/wallet";
 import { SiteFooter, SiteHeader } from "./site-header";
 
@@ -11,6 +12,7 @@ type Status = {
   network: string; beacon: string; token: string; round: number; price: number;
   unit: number; threshold: number; committeeSize: number; nativeVerification: boolean;
   groupKey: string; signature: string; message: string; value: string; verified: boolean;
+  derivation?: string | null;
 };
 type Account = { address: string; tokenBalance: number; beaconBalance: number; price: number; unit: number };
 type Draw = { requestId: string; round: number; value?: string; verified?: boolean };
@@ -132,9 +134,7 @@ export function TryConsole() {
     for (let attempt = 0; attempt < 60; attempt += 1) {
       try {
         const nextProof = await refreshStatus(round);
-        const framed = new TextEncoder().encode(`hyperbeam/rng/v1/request|${nextProof.value}|${requestId}`);
-        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", framed as unknown as BufferSource));
-        const value = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+        const value = await fastRequestValue(nextProof, address, requestId);
         setDraw({ requestId, round, value, verified: nextProof.verified });
         await Promise.all([refreshStatus(), refreshAccount()]);
         return;
