@@ -13,7 +13,7 @@
 //
 // <dir> defaults to ./rng-validator and holds config.json, the wallet and the
 // secrets. A config file path may be given instead of --dir (older deploys):
-// { beacon, hbNode, dataDir, listen?, topUp?, interval? }.
+// { beacon, hbNode, dataDir, listen?, topUp?, interval?, lanes? }.
 //
 // Clocks: the validator never compares its own clock with the beacon's
 // timestamps directly. Beacon times (nextRoundAt, rejoinAt) are compared with
@@ -157,6 +157,18 @@ export const due = (sent, key, atSlot, now, ms) => {
   return !s || (s.slot <= atSlot && now - s.at > ms);
 };
 
+/** Whether a round's commits are closed, so revealing into it is safe: its
+ *  whole active set has committed, or the beacon clock is past commitDeadline.
+ *  The beacon closes the commit phase the moment the set is complete
+ *  (closeIfDue), after which nobody can commit, so revealing then cannot be
+ *  front-run. Waiting for the deadline as well held every round to the full
+ *  commit window (~0.6 rounds/s; protocol/test/throughput.test.mjs guards it). */
+export function shouldReveal(round, beaconNow) {
+  const set = list(round.active), done = obj(round.committed);
+  const complete = set.length > 0 && set.every((v) => done[v] !== undefined);
+  return complete || beaconNow >= num(round.commitDeadline);
+}
+
 /**
  * The actions for one pass, as [{ kind, round, data }], and the oldest round
  * still shown. ctx: { me, sent, atSlot, now (local), beaconNow, healthy,
@@ -205,19 +217,19 @@ export function plan(info, ctx) {
     secrets.save(openRound, c, alpha);
     actions.push({ kind: 'Commit', round: openRound, data: { round: openRound, c } });
   }
+  // The beacon only moves on a message: a round whose set has a silent member
+  // would sit in its commit phase past commitDeadline until someone sends
+  // something. A member that has committed nudges it with Close.
+  if (open.phase === 'commit' && obj(open.committed)[me] !== undefined && num(open.commitDeadline) > 0
+      && beaconNow >= num(open.commitDeadline) && D('Close', openRound, 1000)) {
+    actions.push({ kind: 'Close', round: openRound, data: { round: openRound } });
+  }
   // Rounds overlap: the open round takes commits while older ones reveal.
   const rounds = [...list(info.revealing), open];
   for (const x of rounds) {
     const shown = obj(x.committed)[me], r = num(x.round);
     if (x.phase !== 'reveal' || typeof shown !== 'string' || list(x.revealed).includes(me) || !D('Reveal', r, 3000)) continue;
-    // Reveal once commits are closed: the round's whole active set has
-    // committed, or the beacon clock is past commitDeadline. The beacon closes
-    // the commit phase the moment the set is complete (closeIfDue), after which
-    // nobody can commit, so revealing then cannot be front-run; waiting for the
-    // deadline as well held every round to the full commit window.
-    const set = list(x.active), done = obj(x.committed);
-    const complete = set.length > 0 && set.every((v) => done[v] !== undefined);
-    if (!complete && beaconNow < num(x.commitDeadline)) continue;
+    if (!shouldReveal(x, beaconNow)) continue;
     const alpha = secrets.secretFor(r, shown);
     if (alpha) actions.push({ kind: 'Reveal', round: r, data: { round: r, alpha } });
     else ctx.log?.(`round ${r}: no secret on disk for our commit; cannot reveal`);
@@ -287,13 +299,15 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
     me, sent: new Map(), clock: new Clock(), health: new Health(),
     backoff: { faults: null, n: 0, until: 0, readySince: 0 },
     registry: { at: -Infinity, entry: null }, successor: { at: -Infinity, id: null },
-    lastProbe: -Infinity, lastTopUp: -Infinity, wasExiting: false, done: false, status: { address: me },
+    lastProbe: -Infinity, lastTopUp: -Infinity, latestAt: 0, wasExiting: false, done: false, status: { address: me },
     get beacon() { return beacon; },
     get token() { return pinnedToken; },
   };
 
   async function send(action, data, keys, now) {
     const t0 = io.now();
+    // In flight: not due again until the post says which slot it took.
+    for (const k of keys) st.sent.set(k, { at: now, slot: Infinity });
     let slot = -1;
     try { slot = await io.post(beacon, action, data); } catch (e) { log(`${action}: ${e.message}`); }
     st.health.sent(t0, slot);
@@ -302,9 +316,15 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
   }
 
   async function pass() {
-    // at-slot first, so the state read is at least that far along.
-    const atSlot = num(await io.readAtSlot(beacon));
-    const info = await io.readInfo(beacon);
+    // Both reads at once (one round trip, not two). at-slot may then be a
+    // little ahead of the state read, which due() tolerates: it resends only
+    // a message computed and still without effect `ms` (>= 1 s) after it was
+    // sent, and a copy of a commit or reveal that did land is refused.
+    const [rawSlot, info] = await Promise.all([io.readAtSlot(beacon), io.readInfo(beacon)]);
+    const atSlot = num(rawSlot);
+    // Lanes overlap (runLoop): a read older than one already acted on is dropped.
+    if (num(info.at) < st.latestAt) return { actions: [], info };
+    st.latestAt = num(info.at);
     const now = io.now();
     if (!pinnedToken && beacon === cfg.beacon && isPid(info.token)) pinnedToken = info.token;
     st.clock.observe(now, info.at);
@@ -328,9 +348,15 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
     const ctx = { me, sent: st.sent, atSlot, now, beaconNow, healthy, backoffUntil: st.backoff.until,
       exit, pause, moving, mine, secrets, log };
     const { actions, oldest } = plan(info, ctx);
+    // Commits and reveals are posted without waiting: the next read starts
+    // now, not a round trip later (a pass was three serial round trips, which
+    // held 150-400 ms links to ~1 round/s; protocol/test/throughput.test.mjs).
+    // Their keys are in flight until the post returns, so nothing is resent.
     for (const m of batch(actions, info)) {
-      if (m.action !== 'Act' && m.action !== 'Commit' && m.action !== 'Reveal') log(`${m.action} -> ${beacon}`);
-      await send(m.action, m.data, m.keys, now);
+      if (m.action !== 'Act' && m.action !== 'Commit' && m.action !== 'Reveal') {
+        log(`${m.action} -> ${beacon}`);
+        await send(m.action, m.data, m.keys, now);
+      } else void send(m.action, m.data, m.keys, now); // never rejects: send() logs a failed post
     }
 
     // Before Ready a validator sends nothing, so it probes: a no-op Get-Info
@@ -378,6 +404,7 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
       fs.renameSync(`${followFile}.tmp`, followFile);
       beacon = next;
       st.sent.clear(); st.successor = { at: -Infinity, id: null }; st.registry = { at: -Infinity, entry: null };
+      st.latestAt = 0;
     }
 
     if (mine && truthy(mine.exiting)) st.wasExiting = true;
@@ -555,19 +582,36 @@ export async function main(argv = process.argv.slice(2)) {
       .listen(cfg.listen, '127.0.0.1');
   }
   log(`validator ${me} watching ${v.state.beacon} on ${cfg.hbNode}`);
-  const interval = num(cfg.interval, 100);
   let wrote = 0;
-  for (;;) {
-    try {
-      await v.pass();
+  await runLoop(v, { interval: num(cfg.interval, 100), lanes: num(cfg.lanes, 2),
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    onPass: () => {
       if (Date.now() - wrote > 2000) {
         wrote = Date.now();
         fs.writeFileSync(path.join(cfg.dataDir, 'status.json'), JSON.stringify(v.state.status));
       }
-      if (v.state.done) { setFlag('exit', false); return 0; }
-    } catch (e) { log('loop error:', e.message); }
-    await new Promise((r) => setTimeout(r, interval));
-  }
+    },
+    onError: (e) => log('loop error:', e.message) });
+  setFlag('exit', false);
+  return 0;
+}
+
+/** `run`'s loop: `lanes` loops of pass() then `interval`, started `interval`
+ *  apart, until the validator is done. One lane reacts a read round trip plus
+ *  `interval` late; at 150-400 ms round trips that held the beacon to ~1.6
+ *  rounds/s, two lanes reach its 2 rounds/s (protocol/test/throughput.test.mjs),
+ *  at twice the reads. Passes may overlap: every send is marked in flight
+ *  before it leaves (send()), so overlapping passes never send it twice. */
+export function runLoop(v, { interval = 100, lanes = 2, wait, onPass = () => {}, onError = () => {}, until = () => false }) {
+  const lane = async (k) => {
+    await wait(k * interval);
+    while (!v.state.done && !until()) {
+      try { await v.pass(); onPass(); } catch (e) { onError(e); }
+      if (v.state.done || until()) break;
+      await wait(interval);
+    }
+  };
+  return Promise.all(Array.from({ length: Math.max(1, lanes) }, (_, k) => lane(k)));
 }
 
 /** Bond `amount` RNG (default: what brings the bond to the full stake). A first

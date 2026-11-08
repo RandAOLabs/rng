@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as tl from '../anyhonest.mjs';
 import {
-  plan, batch, Clock, Health, backoff, secretStore, createValidator, bondCommand, checkSuccessor, bondTags,
+  plan, batch, Clock, Health, backoff, secretStore, createValidator, bondCommand, checkSuccessor, bondTags, runLoop,
 } from '../anyhonest-validator.mjs';
 
 const ME = 'me'.padEnd(43, '0');
@@ -154,6 +154,39 @@ test('reveals before commitDeadline once the whole active set has committed', ()
   delete r3.committed.v3;
   assert.deepEqual(plan(info, ctx(dir, { beaconNow: 104999 })).actions, []);
   assert.deepEqual(kinds(plan(info, ctx(dir, { beaconNow: 105000 }))), ['Reveal']);
+});
+
+test('a committed member nudges a round stuck past commitDeadline with Close', () => {
+  const dir = tmp();
+  const info = baseInfo({ open: { round: 4, phase: 'commit', commitDeadline: 105000, committed: { [ME]: 'x' }, active: [ME, OTHER] } });
+  assert.deepEqual(plan(info, ctx(dir, { beaconNow: 104999 })).actions, []);
+  assert.deepEqual(plan(info, ctx(dir, { beaconNow: 105000 })).actions, [{ kind: 'Close', round: 4, data: { round: 4 } }]);
+  info.open.committed = { [OTHER]: 'y' };
+  assert.deepEqual(kinds(plan(info, ctx(dir, { beaconNow: 105000 }))), ['Commit'], 'not committed: commit, no Close');
+});
+
+test('commits and reveals post without blocking the pass, and overlapping passes never send twice', async () => {
+  const node = mockNode();
+  node.infos[BEACON].open = { round: 7, phase: 'commit', committed: { [OTHER]: 'y' }, active: [ME, OTHER] };
+  const post = node.io.post;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  node.io.post = async (...a) => { const slot = await post(...a); await gate; return slot; };
+  const { v } = make(node);
+  await Promise.all([v.pass(), v.pass()]); // both return while the commit is still in flight
+  assert.deepEqual(node.sentActions(), ['Commit']);
+  release();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(v.state.sent.get('Commit:7').slot, 1, 'the slot is recorded once the post returns');
+});
+
+test('runLoop runs `lanes` loops, `interval` apart, until done', async () => {
+  const waits = [];
+  let passes = 0;
+  const v = { state: { done: false }, pass: async () => { if (++passes === 6) v.state.done = true; } };
+  await runLoop(v, { interval: 100, lanes: 2, wait: async (ms) => { waits.push(ms); } });
+  assert.ok(passes >= 6 && passes <= 7);
+  assert.deepEqual(waits.slice(0, 2), [0, 100], 'lanes start interval apart');
 });
 
 test('Act batches the commit and every reveal into one message', () => {
