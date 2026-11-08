@@ -26,14 +26,16 @@
       "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
       "executionDevice": "lua@5.3a",
       "sourceSha256": "95446aa72d07ea0b9b031aaab319d1d39bfcf64e490068397ad779c11e695ea5",
-      "at": "2026-11-07T22:48:43.399Z"
+      "at": "2026-11-07T22:48:43.399Z",
+      "retired": "2026-11-08T01:40:31.141Z"
     },
     "VIsVLEi6l36vLaV_iitEnswNuiNGTjQSoCEEjg9mUMg": {
       "role": "fast",
       "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
       "executionDevice": "lua@5.3a",
       "sourceSha256": "8a570ec07e30769218b9ccda42e91ee9c5262ae9d8cc190e68ea57d7e98b3666",
-      "at": "2026-11-07T22:49:18.881Z"
+      "at": "2026-11-07T22:49:18.881Z",
+      "retired": "2026-11-08T01:40:27.154Z"
     },
     "qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c": {
       "role": "subscriptionConsumer",
@@ -41,6 +43,20 @@
       "executionDevice": "lua@5.3a",
       "sourceSha256": "d47fdee91f7e251a0c40cf4f00e868b1f64bd36c73a0edeafc1c3e9d0471dfa8",
       "at": "2026-11-08T00:24:56.811Z"
+    },
+    "NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY": {
+      "role": "fast",
+      "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "cebcceae64d42a85893349eba3eda18e9c5d6b45be2d07ff6843fcf457d62688",
+      "at": "2026-11-08T01:40:28.117Z"
+    },
+    "zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE": {
+      "role": "fair",
+      "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "3d909969ebaabf4b4ee4a5cf41c731f06ac4be0a1986cb2c944fe4c20dac5eac",
+      "at": "2026-11-08T01:40:32.120Z"
     }
   },
   "deployer": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
@@ -82,33 +98,63 @@
       "version": 0,
       "sourceSha256": "0a4b117b78b4a8baa8c8ea70eeb7ee465072f136091c02b98d74eea576ec27a9"
     },
-    "fair": {
-      "code": "",
-      "version": 0,
-      "sourceSha256": "95446aa72d07ea0b9b031aaab319d1d39bfcf64e490068397ad779c11e695ea5"
-    },
     "fast": {
       "code": "",
       "version": 0,
-      "sourceSha256": "8a570ec07e30769218b9ccda42e91ee9c5262ae9d8cc190e68ea57d7e98b3666"
+      "sourceSha256": "cebcceae64d42a85893349eba3eda18e9c5d6b45be2d07ff6843fcf457d62688"
+    },
+    "fair": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "3d909969ebaabf4b4ee4a5cf41c731f06ac4be0a1986cb2c944fe4c20dac5eac"
     }
   },
   "predecessor": "",
-  "fair": "QsKxU7KZ6x6ooh5Ar3sWexsX7AhumC4qhqVXvneH4_U",
-  "fast": "VIsVLEi6l36vLaV_iitEnswNuiNGTjQSoCEEjg9mUMg",
   "owners": {
     "beacon": {
       "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
       "walletRenounced": true
     },
-    "fair": {
+    "fast": {
       "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
       "walletRenounced": true
     },
-    "fast": {
+    "fair": {
       "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
       "walletRenounced": true
     }
   },
-  "subscriptionConsumer": "qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c"
+  "subscriptionConsumer": "qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c",
+  "retired": [
+    {
+      "role": "fast",
+      "pid": "VIsVLEi6l36vLaV_iitEnswNuiNGTjQSoCEEjg9mUMg",
+      "retiredAt": "2026-11-08T01:40:27.154Z",
+      "owners": {
+        "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
+        "walletRenounced": true
+      },
+      "expectedCode": {
+        "code": "",
+        "version": 0,
+        "sourceSha256": "8a570ec07e30769218b9ccda42e91ee9c5262ae9d8cc190e68ea57d7e98b3666"
+      }
+    },
+    {
+      "role": "fair",
+      "pid": "QsKxU7KZ6x6ooh5Ar3sWexsX7AhumC4qhqVXvneH4_U",
+      "retiredAt": "2026-11-08T01:40:31.141Z",
+      "owners": {
+        "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
+        "walletRenounced": true
+      },
+      "expectedCode": {
+        "code": "",
+        "version": 0,
+        "sourceSha256": "95446aa72d07ea0b9b031aaab319d1d39bfcf64e490068397ad779c11e695ea5"
+      }
+    }
+  ],
+  "fast": "NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY",
+  "fair": "zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE"
 }
