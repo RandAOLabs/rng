@@ -1,0 +1,92 @@
+services:
+
+  peer1:
+    build: .
+    image: whisper-mvp-go:latest
+    environment:
+      - NODE_NAME=peer1
+      - PROVIDER_ID=peer1
+      - ROUND_ID=${ROUND_ID}
+      - LISTEN_PORT=${LISTEN_PORT}
+      - NEIGHBOR_K=${NEIGHBOR_K}
+      - COMMITTEE_ORDER=${COMMITTEE_ORDER}
+      - IDENTITY_SEED=${IDENTITY_SEED}
+      - TOPIC_NAME=${TOPIC_NAME}
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - peer1_data:/data
+
+  peer2:
+    image: whisper-mvp-go:latest
+    environment:
+      - NODE_NAME=peer2
+      - PROVIDER_ID=peer2
+      - ROUND_ID=${ROUND_ID}
+      - LISTEN_PORT=${LISTEN_PORT}
+      - NEIGHBOR_K=${NEIGHBOR_K}
+      - COMMITTEE_ORDER=${COMMITTEE_ORDER}
+      - IDENTITY_SEED=${IDENTITY_SEED}
+      - TOPIC_NAME=${TOPIC_NAME}
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - peer2_data:/data
+    depends_on:
+      - peer1
+
+  peer3:
+    image: whisper-mvp-go:latest
+    environment:
+      - NODE_NAME=peer3
+      - PROVIDER_ID=peer3
+      - ROUND_ID=${ROUND_ID}
+      - LISTEN_PORT=${LISTEN_PORT}
+      - NEIGHBOR_K=${NEIGHBOR_K}
+      - COMMITTEE_ORDER=${COMMITTEE_ORDER}
+      - IDENTITY_SEED=${IDENTITY_SEED}
+      - TOPIC_NAME=${TOPIC_NAME}
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - peer3_data:/data
+    depends_on:
+      - peer1
+
+  peer4:
+    image: whisper-mvp-go:latest
+    environment:
+      - NODE_NAME=peer4
+      - PROVIDER_ID=peer4
+      - ROUND_ID=${ROUND_ID}
+      - LISTEN_PORT=${LISTEN_PORT}
+      - NEIGHBOR_K=${NEIGHBOR_K}
+      - COMMITTEE_ORDER=${COMMITTEE_ORDER}
+      - IDENTITY_SEED=${IDENTITY_SEED}
+      - TOPIC_NAME=${TOPIC_NAME}
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - peer4_data:/data
+    depends_on:
+      - peer1
+
+  peer5:
+    image: whisper-mvp-go:latest
+    environment:
+      - NODE_NAME=peer5
+      - PROVIDER_ID=peer5
+      - ROUND_ID=${ROUND_ID}
+      - LISTEN_PORT=${LISTEN_PORT}
+      - NEIGHBOR_K=${NEIGHBOR_K}
+      - COMMITTEE_ORDER=${COMMITTEE_ORDER}
+      - IDENTITY_SEED=${IDENTITY_SEED}
+      - TOPIC_NAME=${TOPIC_NAME}
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - peer5_data:/data
+    depends_on:
+      - peer1
+
+volumes:
+  peer1_data:
+  peer2_data:
+  peer3_data:
+  peer4_data:
+  peer5_data:
