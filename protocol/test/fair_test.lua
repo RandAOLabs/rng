@@ -376,6 +376,43 @@ local function runFairTests()
   eq("full", commit(F.p1, "full", F.c1).error, "Fair-Full")
   configure({ maxOpen = 8 })
 
+  -- A wallet game: no Fair-Result is pushed to it (a node cannot push to a
+  -- wallet, and the target would stall the slot's whole outbox, the next
+  -- beacon request with it). It reads its result from the published state.
+  -- A process game still gets its Fair-Result. The game's kind survives a
+  -- VM rebuild between Fair.Open and Fair.Commit.
+  configure({ maxOpen = 64 })
+  r = result(batches().outstanding.requestId, F.round2, nil, 1000)
+  local wg = F.stranger -- a wallet, funded above with X-For
+  local cw = fair.commitHash(wg, "w1", F.s1)
+  r = send(wallet(wg, { Action = "Fair.Open", Session = "w1", Player = F.p1 }))
+  check("a wallet game opens", r.opened == true and r.game == wg, r.error)
+  open(F.p2, "pg")
+  Fair = { rev = 0, owner = "", state = fair.new() }
+  send(wallet(F.stranger, { Action = "Get-Info" }))
+  check("the game's kind is restored", Fair.state.games[F.game].process == true
+    and Fair.state.games[wg].process == nil)
+  send(wallet(F.p1, { Action = "Fair.Commit", Game = wg, Session = "w1", Commit = cw }), 1000)
+  commit(F.p2, "pg", fair.commitHash(F.game, "pg", F.s2), true) -- waits for the next batch
+  local wReq = batches().outstanding.requestId
+  commit(F.p3, "q1", F.c3)
+  r, ob = result(wReq, F.round3) -- inside minIntervalMs: the next request waits
+  eq("next request waits for the interval", ob["fair-request"], nil)
+  r, ob = send(wallet(F.p1, { Action = "Fair.Reveal", Game = wg, Session = "w1", Secret = F.s1 }), 1000)
+  check("wallet game revealed", r.revealed == true, r.error)
+  eq("no Fair-Result to a wallet game", ob["fair-result"], nil)
+  check("the slot's beacon request still goes out", ob["fair-request"] ~= nil and ob["fair-request"].target == F.beacon)
+  for name, m in pairs(ob) do check("no outbox message targets the wallet game: " .. name, m.target ~= wg) end
+  local ws = sessionOf("w1", F.p1, wg)
+  check("the wallet game reads its result from fairsessions", ws and ws.status == "revealed"
+    and ws.final == fair.finalValue(fair.sessionValue(ws.beaconValue, wg, "w1"), F.s1), ws and ws.status)
+  local wh = json.decode(base.fairhistory).entries
+  eq("and fairhistory names the slot", wh[#wh][1], "session:" .. wg .. "|w1|" .. F.p1)
+  result(ob["fair-request"]["Request-Id"], F.round1) -- binds pg (and q1)
+  r, ob = reveal(F.p2, "pg", F.s2)
+  check("a process game still gets its Fair-Result", ob["fair-result"] and ob["fair-result"].target == F.game, encode(r))
+  configure({ maxOpen = 8 })
+
   -- Restore: a fresh VM rebuilds from fairstate.
   local before = base.fairsessions
   local gamesBefore = Fair.state.gameCount

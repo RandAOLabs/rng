@@ -38,7 +38,8 @@
 -- Sends: Request-Random -> beacon (from this process's beacon balance, a float
 --        topped up from the games' payment after every bound batch),
 --        Transfer -> token (top-up, refund, withdrawal; X-Transfer-Sequence),
---        Fair-Result -> Game.
+--        Fair-Result -> Game, only a process game (its Fair.Open attested by our
+--        scheduler); a wallet game reads fairsessions / fairhistory instead.
 -- Publishes: fairsessions, fairbatches, fairaccounts, fairinfo, fairstate, fairrev,
 --   fairhistory (resolved session / bound batch -> slot, the last 1024).
 --
@@ -402,7 +403,8 @@ end
 local function gamesState(games)
   local out = {}
   for name, g in pairs(games or {}) do
-    out[name] = { live = g.live, last = g.last, allow = jsonObject(g.allow), held = jsonObject(g.held or {}) }
+    out[name] = { live = g.live, last = g.last, allow = jsonObject(g.allow), held = jsonObject(g.held or {}),
+      process = g.process }
   end
   return out
 end

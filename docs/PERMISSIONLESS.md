@@ -447,8 +447,12 @@ The counter only increases and never resets, as in dao.lua's payouts.
 | 1 | `Fair.Commit { Game, Session (≤64), Commit = hex sha256("rng/fair/v1/commit|"‖Game‖"|"‖Session‖"|"‖s) }` | player key P | session `committed`, joins `batch[next]` |
 | 2 | fair → beacon `Request-Random { Request-Id = "fair-<b>" }` | fair (attested) | sent when no request is outstanding; otherwise waits for the current result |
 | 3 | beacon → fair `RNG-Result` (value v_b) | beacon (attested, checked `== beacon`) | each session gets `v = H("rng/fair/v1/beacon|"‖v_b‖"|"‖Game‖"|"‖Session)`, status `reveal-due`, `revealBy = now + fairWindowMs` (60 s). The next batch's request goes out in the same slot. |
-| 4 | `Fair.Reveal { Game, Session, Secret = s }` | anyone | checks the hash; `final = H("rng/fair/v1/final|"‖v‖"|"‖s)`; `Fair-Result` → Game |
-| 5 | `Fair.Expire { Game, Session }` after `revealBy` | anyone | `final = H("rng/fair/v1/forfeit|"‖v)`, status `forfeit` → Game |
+| 4 | `Fair.Reveal { Game, Session, Secret = s }` | anyone | checks the hash; `final = H("rng/fair/v1/final|"‖v‖"|"‖s)`; `Fair-Result` → Game (a process game only) |
+| 5 | `Fair.Expire { Game, Session }` after `revealBy` | anyone | `final = H("rng/fair/v1/forfeit|"‖v)`, status `forfeit` → Game (a process game only) |
+
+- `Fair-Result` goes only to a game whose `Fair.Open` came from a process our scheduler attests. A node
+  cannot push to a wallet, and a wallet target stalls the slot's whole outbox (the next beacon request
+  with it), so a wallet game reads its results from `fairsessions` / `fairhistory`.
 
 - Published: one key `fairsessions` holding the last N per game (bounded), plus `fairbatches`.
   The player checks its own `Commit`, bound round and inputs, then recomputes `final`.

@@ -480,8 +480,8 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
     await scenario('E', `fair play: ${GAMES} games in parallel (this wallet + game processes), throwaway player keys`, async (sc) => {
       const fairPrice = BigInt(fairInfo.requestPriceAtoms);
       // Game 0 is this wallet; the others are game processes this run spawns
-      // (protocol/test/fair-game.lua). Not throwaway wallets: the fair process sends
-      // Fair-Result to the game, and a push to a wallet the node has never seen stalls.
+      // (protocol/test/fair-game.lua), which also get the Fair-Result push; a wallet
+      // game reads its result from fairsessions.
       const games = [{ address: me }];
       for (let g = 1; g < GAMES; g++) {
         const lua = testSource('fair-game.lua');

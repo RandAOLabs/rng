@@ -14,7 +14,11 @@
 -- after the previous request (then by the next message, e.g. a Get-Info).
 --
 -- The game authorizes every session (Fair.Open { Session, Player }, sent by
--- the game itself) before the player's key may commit to it. Every time here
+-- the game itself) before the player's key may commit to it. Fair-Result goes
+-- only to a game whose Fair.Open came from a process our scheduler attests
+-- (`process`): a node cannot push to a wallet, and a message to one stalls
+-- the whole slot's outbox (the next beacon request with it). A wallet game
+-- reads its results from the published state (fairsessions, fairhistory). Every time here
 -- is the scheduler's (`now`, the assignment's timestamp); no message carries
 -- a time of its own. A copy of a signed Open or Commit is refused by the
 -- scheduler (once-per-process assignment); a session key is single-use while
@@ -291,6 +295,8 @@ function fair.open(st, p)
   if g.live >= st.maxPerGame then return unpaid(nil, "Game-Full") end
   g.allow[sp] = now + GUARD_MS
   g.live = g.live + 1
+  -- The game's kind, as its latest Fair.Open proved it: only a process gets Fair-Result.
+  g.process = p.process == true or nil
   if st.metered then
     a.reserved = a.reserved + cost
     g.held = g.held or {}
@@ -325,7 +331,7 @@ function fair.commit(st, p)
   touch(st)
   local o = batch(st, st.next)
   local s = { game = p.game, session = p.session, player = p.player, commit = p.commit, status = "committed",
-    batch = o.batch, windowMs = st.windowMs, committedAt = now, reserve = held }
+    batch = o.batch, windowMs = st.windowMs, committedAt = now, reserve = held, notify = g.process == true or nil }
   st.sessions[k] = s
   o.keys[#o.keys + 1] = k
   st.open = st.open + 1
@@ -448,6 +454,8 @@ local function resolve(st, s, now, status, secret, final, slot)
   end
   for k, untilMs in pairs(st.done) do if untilMs < now then st.done[k] = nil end end
   remember(st, "session:" .. key(s.game, s.session, s.player), slot)
+  -- A wallet game (or a session from before `notify` existed) is not pushed to.
+  if s.notify ~= true then return nil end
   local notice = { target = s.game, Action = "Fair-Result", Session = s.session, Player = s.player,
     Status = status, Final = final, Round = tostring(s.round), Data = fair.view(s) }
   return notice
@@ -587,7 +595,8 @@ function fair.dispatch(st, action, msg, from, fromProcess, now, slot)
     return ok and t or nil
   end
   if a == "fair.open" then
-    return fair.open(st, { game = from, session = msg.Session, player = msg.Player, now = now })
+    return fair.open(st, { game = from, session = msg.Session, player = msg.Player, now = now,
+      process = fromProcess == true })
   elseif a == "fair.commit" then
     return fair.commit(st, { game = msg.Game, session = msg.Session, player = from, commit = msg.Commit, now = now })
   elseif a == "fair.reveal" then
