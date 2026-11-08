@@ -130,9 +130,10 @@ function rand(seed) {
  * loop (createValidator().pass(), then intervalMs, as `run` does). Every HTTP
  * call (read or post) takes a round trip drawn from rtt(t) = [min, max] ms; the
  * node serves it halfway. opts: { silent: [index...] (never run), hold (a read
- * filter standing in for another reveal rule), seed, intervalMs }.
+ * filter standing in for another reveal rule), seed, intervalMs, holdMs (the
+ * validator's reveal hold; 0 is the old send-each-step-at-once) }.
  */
-async function simulate({ params = {}, durationMs = 60_000, silent = [], hold, seed = 7, rtt = () => [150, 400], intervalMs = 100, lanes = 2 } = {}) {
+async function simulate({ params = {}, durationMs = 60_000, silent = [], hold, seed = 7, rtt = () => [150, 400], intervalMs = 100, lanes = 2, holdMs } = {}) {
   const beacon = await loadBeacon();
   const rnd = rand(seed);
   let t = 1_700_000_000_000;
@@ -140,6 +141,7 @@ async function simulate({ params = {}, durationMs = 60_000, silent = [], hold, s
   // Whole ms, even: the beacon takes integer timestamps and serves each call halfway.
   const trip = () => { const [lo, hi] = rtt(t - t0); return 2 * Math.round((lo + rnd() * (hi - lo)) / 2); };
   let view = null, sends = 0;
+  const posts = []; // every validator message: { t, i, action }
   const refused = {};
   const finalized = new Map(); // round -> { opened, finalizedAt, commitDeadline }
   const deadlines = new Map();
@@ -201,12 +203,13 @@ async function simulate({ params = {}, durationMs = 60_000, silent = [], hold, s
           const c = action === 'Commit' ? data : data.commit;
           const dev = c ? [[`verify-reveal|${c.c}|${secretsOf(c.round)[c.c]}|${H}`, hexOf(`y|${c.c}`)]] : [];
           const v = await apply(me, { Action: action, Data: JSON.stringify(data) }, t, { dev });
+          posts.push({ t, i, action });
           if (process.env.SIM_LOG) console.log(i, t - start, action, JSON.stringify(data).slice(0, 80), JSON.stringify(v.out).slice(0, 300));
           at(t + rt / 2, () => res(v.slot));
         });
       }),
     };
-    const v = createValidator({ cfg: { beacon: F.beacon, dataDir }, me, io, log: (m) => process.env.SIM_LOG && console.log(i, t - start, m) });
+    const v = createValidator({ cfg: { beacon: F.beacon, dataDir, holdMs }, me, io, log: (m) => process.env.SIM_LOG && console.log(i, t - start, m) });
     at(start + i * 37, () => runLoop(v, { interval: intervalMs, lanes, wait, until: () => t >= stop,
       onError: (e) => errors.push(`${i}: ${e.stack}`) }));
   });
@@ -219,7 +222,7 @@ async function simulate({ params = {}, durationMs = 60_000, silent = [], hold, s
   fs.rmSync(dir, { recursive: true, force: true });
   assert.deepEqual(errors, [], 'validator loop errors');
   const rounds = [...finalized.values()].sort((x, y) => x.round - y.round);
-  return { rounds, sends, refused, info: view.info, t0: start, end: stop };
+  return { rounds, sends, posts, live: F.v.length - silent.length, refused, info: view.info, t0: start, end: stop };
 }
 
 /** Another reveal rule, by read filter: a revealing round reads as `held`
@@ -236,11 +239,22 @@ function measure(sim, { fromMs, toMs = sim.end - sim.t0 } = {}) {
   const rs = sim.rounds.filter((r) => r.finalizedAt >= from && r.finalizedAt < to);
   const lat = rs.map((r) => r.finalizedAt - r.opened).sort((x, y) => x - y);
   const pct = (q) => lat[Math.min(lat.length - 1, Math.floor(q * lat.length))] ?? NaN;
-  return { rounds: rs.length, rate: rs.length / ((to - from) / 1000), p50: pct(0.5), p95: pct(0.95), max: lat.at(-1) ?? NaN };
+  // Messages the running validators sent in the window, per validator per round.
+  const msgs = sim.posts.filter((x) => x.t >= from && x.t < to);
+  const kinds = {};
+  for (const x of msgs) kinds[x.action] = (kinds[x.action] ?? 0) + 1;
+  return { rounds: rs.length, rate: rs.length / ((to - from) / 1000), p50: pct(0.5), p95: pct(0.95), max: lat.at(-1) ?? NaN,
+    perValidatorRound: msgs.length / sim.live / Math.max(1, rs.length), slotsPerS: msgs.length / ((to - from) / 1000), kinds };
 }
 
-const fmt = (m) => `${m.rate.toFixed(2)} rounds/s over ${m.rounds} rounds, latency p50 ${Math.round(m.p50)} ms, p95 ${Math.round(m.p95)} ms, max ${Math.round(m.max)} ms`;
+const fmt = (m) => `${m.rate.toFixed(2)} rounds/s over ${m.rounds} rounds, latency p50 ${Math.round(m.p50)} ms, p95 ${Math.round(m.p95)} ms, max ${Math.round(m.max)} ms; `
+  + `${m.perValidatorRound.toFixed(2)} messages per validator per round (${m.slotsPerS.toFixed(1)} slots/s ${JSON.stringify(m.kinds)})`;
 const TARGET = 1000 / LIVE.targetIntervalMs; // 2 rounds/s, on average
+// Each message is a slot of permanent node storage (~21 KB): one per validator
+// per round (an Act: the commit plus the last round's reveal), not two.
+const MSGS_PER_ROUND = 1.1;
+const fewMessages = (m, what) => assert.ok(m.perValidatorRound <= MSGS_PER_ROUND,
+  `${what}: ${m.perValidatorRound.toFixed(2)} messages per validator per round, want <= ${MSGS_PER_ROUND}`);
 const onTarget = (m, what) => assert.ok(Math.abs(m.rate - TARGET) <= 0.1, `${what}: ${m.rate.toFixed(3)} rounds/s, want ${TARGET} +- 0.1`);
 
 if (process.env.SIM_SWEEP) test('sweep', async () => {
@@ -255,6 +269,7 @@ test('healthy, 100-250 ms round trips: 2 rounds/s on average, latency well under
   const m = measure(sim);
   console.log(`healthy 100-250 ms: ${fmt(m)}; ${sim.sends} messages; refused ${JSON.stringify(sim.refused)}`);
   onTarget(m, 'long-run average');
+  fewMessages(m, 'healthy 100-250 ms');
   assert.ok(m.p50 < COMMIT_WINDOW / 4, `p50 latency ${m.p50} ms not well below commitWindowMs ${COMMIT_WINDOW}`);
   assert.ok(m.max < COMMIT_WINDOW / 2, `max latency ${m.max} ms >= commitWindowMs / 2`);
   assert.equal(sim.info.health.status, 'ok', 'nobody faulted');
@@ -287,6 +302,7 @@ test('very fast validators do not overshoot 2 rounds/s', async () => {
   const m = measure(sim);
   console.log(`fast 10-30 ms: ${fmt(m)}`);
   assert.ok(m.rate <= TARGET + 0.05 && m.rate >= TARGET - 0.1, `fast: ${m.rate.toFixed(3)} rounds/s`);
+  fewMessages(m, 'fast 10-30 ms (an in-node validator)');
 });
 
 test('one validator silent: its round finalizes right after the commit deadline, the average holds', async () => {
@@ -309,6 +325,13 @@ test('the guard bites: revealing only at commitDeadline fails it', async () => {
   const m = measure(sim);
   console.log(`old rule (reveal at commitDeadline): ${fmt(m)}`);
   assert.ok(m.rate < 1.8 && m.p50 >= COMMIT_WINDOW, `the old rule should fail the guard: ${fmt(m)}`);
+});
+
+test('the message guard bites: sending each reveal as soon as it is due fails it', async () => {
+  const sim = await simulate({ durationMs: 30_000, rtt: () => [100, 250], holdMs: 0 });
+  const m = measure(sim);
+  console.log(`old rule (no reveal hold): ${fmt(m)}`);
+  assert.ok(m.perValidatorRound > MSGS_PER_ROUND, `the old rule should fail the message guard: ${fmt(m)}`);
 });
 
 test('shouldReveal: closed when the set is complete or the deadline passed', () => {
