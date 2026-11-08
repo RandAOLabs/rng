@@ -9,6 +9,7 @@ import {
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, setDaoErrors, renounceErrors, fundError,
   effectiveAt, isMoneyProposal, LABS_STAKE_RNG, floorFor, RESERVE_FLOOR_MS, buildErrors, watchAlerts,
   fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources, beaconRate, historyPoint, rateChecks, MIN_RATE,
+  retireRole,
 } from '../deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -666,5 +667,38 @@ test('spawn-dao --lua53b --dry-run builds the RNG DAO from PARALITH_MONO, named 
     assert.equal(l.definition['dao-token'], pid('token'));
     assert.equal(path.resolve(l.module.from), path.resolve(pm));
     assert.ok(l.module.sourceBytes > 10000 && /^[0-9a-f]{64}$/.test(l.module.sourceSha256));
+  } finally { fs.rmSync(tmp, { force: true }); }
+});
+
+test('relaunch: spawn-<role> --replace retires the old process; dao-handover takes a subset', () => {
+  // Pure: the old id, its owners and build move to `retired`; the role starts fresh.
+  const st = JSON.parse(JSON.stringify(live));
+  const oldFast = st.fast;
+  const e = retireRole(st, 'fast', '2026-11-07T00:00:00.000Z');
+  assert.deepEqual([e.role, e.pid, e.owners.walletRenounced, e.expectedCode.version], ['fast', oldFast, true, 0]);
+  assert.deepEqual([st.fast, st.owners.fast, st.expectedCode.fast], [undefined, undefined, undefined]);
+  assert.equal(st.processes[oldFast].retired, '2026-11-07T00:00:00.000Z');
+  assert.equal(st.owners.beacon.walletRenounced, true, 'other roles untouched');
+  retireRole(st, 'fair');
+  assert.deepEqual(st.retired.map((r) => r.role), ['fast', 'fair']);
+  assert.equal(retireRole(st, 'fair'), null, 'nothing to retire twice');
+
+  // Dry runs over a copy of the live state: only the fast tier and fair process move.
+  const tmp = path.join(ROOT, 'deploy', `.relaunch-test-${process.pid}.json`);
+  fs.writeFileSync(tmp, JSON.stringify(live));
+  try {
+    const run = (...args) => execFileSync(process.execPath, [path.join(ROOT, 'deploy/deploy.mjs'), ...args, '--dry-run'], {
+      env: { ...process.env, HB_NODE: 'http://127.0.0.1:9', HB_WALLET: '', RNG_DEPLOYER: live.deployer || DEPLOYER,
+        RNG_SCHEDULER: live.scheduler, RNG_STATE: tmp }, encoding: 'utf8', stdio: 'pipe' }).trim().split('\n').map((l) => JSON.parse(l));
+    assert.throws(() => run('spawn-fast'), /already deployed/);
+    const fast = run('spawn-fast', '--replace');
+    assert.deepEqual([fast[0].op, fast[0].pid], ['retire', live.fast]);
+    assert.equal(fast[1].op, 'spawn');
+    const fair = run('spawn-fair', '--replace');
+    assert.deepEqual([fair[0].op, fair[0].pid], ['retire', live.fair]);
+    const h = run('dao-handover', 'fast', 'fair', '--confirm');
+    assert.deepEqual(h.filter((l) => l.op === 'send').map((l) => [l.target, l.action]),
+      [[live.fast, 'Gov.Set-Dao'], [live.fair, 'Gov.Set-Dao'], [live.fast, 'Gov.Renounce-Wallet'], [live.fair, 'Gov.Renounce-Wallet']]);
+    assert.equal(fs.readFileSync(tmp, 'utf8'), JSON.stringify(live), 'dry runs write no state');
   } finally { fs.rmSync(tmp, { force: true }); }
 });

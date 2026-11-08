@@ -284,6 +284,26 @@ the install only drops the dead cadence check. A committee change later is a
 new DKG ceremony plus `012-fast-committee.json` (money: 24 h after the vote,
 with the exit hatch open meanwhile).
 
+**Relaunch the fast tier or fair process (fresh processes, same token, DAO and
+beacon).** `spawn-<role> --replace` moves the old id to `state.retired` (with its
+owner record and audited build) and records the new one; `dao-handover` takes a
+subset:
+
+```bash
+node deploy/deploy.mjs spawn-fast --replace
+node deploy/deploy.mjs genesis-configure-fast deploy/committee.json
+SSH_KEY=<committee key> deploy/nodes.sh beacon <new fast pid>       # repoint the rng-provider daemons
+node deploy/deploy.mjs spawn-fair --replace
+node deploy/deploy.mjs configure-fair
+node deploy/deploy.mjs fund-fair 40
+node deploy/deploy.mjs dao-handover fast fair --confirm
+```
+
+Then set `RNG_BEACON_ID` in `site/deploy/native-testnet.env` to the new fast pid.
+The old processes keep their balances: payers `Withdraw` from the old fast tier,
+signers `Claim` there, games `Fair.Withdraw` from the old fair process. The old
+fair process's beacon float stays with it (no withdraw path).
+
 **Verify after every step:** `node deploy/deploy.mjs status` (or `verify`,
 which exits 1 on any failed check: sealed token, DAO on RNG with no admin,
 beacon token/self/predecessor, health `ok`, reserve funded, owners (`gov`), fair

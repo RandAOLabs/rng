@@ -340,6 +340,25 @@ export function proposalErrors(p, { token, fast, fair, now, votingPeriodMs = DAY
   return errs;
 }
 
+/** A relaunch (`spawn-<role> --replace`): the old process goes to `state.retired`
+ * with its owners and audited build, and the role's owner record is cleared, so
+ * set-dao / renounce-wallet / dao-handover treat the new process as fresh. The
+ * old id stays in `state.processes`, marked retired. Returns the retired entry,
+ * or null when nothing was deployed under `role`. */
+export function retireRole(state, role, at = new Date().toISOString()) {
+  const pid = state[role];
+  if (!isPid(pid)) return null;
+  const entry = { role, pid, retiredAt: at };
+  if (state.owners?.[role]) entry.owners = state.owners[role];
+  if (state.expectedCode?.[role]) entry.expectedCode = state.expectedCode[role];
+  state.retired = [...(state.retired || []), entry];
+  if (state.owners) delete state.owners[role];
+  if (state.expectedCode) delete state.expectedCode[role];
+  if (state.processes?.[pid]) state.processes[pid] = { ...state.processes[pid], retired: at };
+  delete state[role];
+  return entry;
+}
+
 /** The governed protocols and the key each publishes its owners in (`gov`). */
 export const PROTOCOL_ROLES = ['beacon', 'fair', 'fast'];
 export const INFO_KEY = { beacon: 'beaconinfo', fair: 'fairinfo', fast: 'beaconinfo' };
@@ -642,6 +661,11 @@ async function main(argv) {
     const scheduler = await pinScheduler();
     const rec = { role, name, executionDevice, scheduler, sourceBytes: Buffer.byteLength(lua), sourceSha256: sha256(lua) };
     let pid;
+    // Only spawn-* --replace gets here with the role deployed: retire the old one.
+    if (isPid(state[role])) {
+      const old = DRY ? { role, pid: state[role] } : retireRole(state, role);
+      log({ op: 'retire', ...old });
+    }
     if (DRY) {
       pid = placeholder(role);
       log({ op: 'spawn', pid, ...rec, ...extra });
