@@ -27,8 +27,9 @@
 //   renounce-wallet <beacon|fair|fast ...> --confirm   Gov.Renounce-Wallet (one way). Refused unless the
 //                                           protocol already reads the recorded DAO as owner; reads back.
 //   gov-apply <beacon|fair|fast> <Gov-Id>   Gov.Apply: anyone runs a pending DAO action once it is due
-//   dao-watch                               every open DAO proposal (and whether Labs has voted on it) and every
-//                                           pending action on beacon, fair, fast; exits 1 when one needs a look
+//   watch (alias dao-watch)                 every open DAO proposal (and whether Labs has voted on it), every
+//                                           pending action on beacon, fair, fast, and a slow beacon (5-minute
+//                                           average < RNG_MIN_RATE, default 1.8 rounds/s); exits 1 when one needs a look
 //   expect-code <beacon|fair|fast> <root> <version>   record an upgrade the DAO installed as the build verify expects
 // Fast tier (on-demand 2-of-3 threshold BLS, beacon/beacon.lua; not a heartbeat):
 //   spawn-fast                              the fast-tier process (lua@5.3a)
@@ -38,7 +39,9 @@
 //   gov-fast <Gov.Action> [Tag=Value ...]   any wallet-path Gov.* on the fast tier
 //   dao-stake [rng] (default: Labs' launch stake) | dao-propose <template.json> [KEY=VALUE ...] | dao-vote <id> <Yes|No|NoWithVeto|Abstain>
 //   status | verify                         read and check token, DAO, beacon, fair (verify exits 1 on a failure;
-//                                           it checks each protocol runs the recorded build: gov.code/version)
+//                                           it checks each protocol runs the recorded build: gov.code/version,
+//                                           the beacon's 5-minute rate >= RNG_MIN_RATE (default 1.8 rounds/s)
+//                                           and its round latency p50 < commitWindowMs/2)
 //   test-subscription                       authenticated-push acceptance test against the v3 beacon
 //   plan <allocations.json> [params.json]   the whole v3 sequence, dry-run only
 //
@@ -409,8 +412,45 @@ export function renounceErrors({ state, role, info, daoinfo }) {
 
 /** What `dao-watch` flags: every open proposal (and whether Labs, `me`, has voted on it) and every
  * pending action on the protocols. Each { what, detail }. */
-export function watchAlerts({ proposals, stake, infos }) {
+/** The live-rate warning: the beacon's average over RATE_WINDOW_MS below this. */
+export const MIN_RATE = 1.8;
+export const RATE_WINDOW_MS = 300_000;
+
+/** The `timelockhistory` entry ([round, slot]) closest to `windowMs` of rounds
+ *  at `perSec` back from the newest, skipping abandoned rounds. */
+export function historyPoint(history, { windowMs = RATE_WINDOW_MS, perSec = 2 } = {}) {
+  const rounds = (Array.isArray(history?.rounds) ? history.rounds : []).filter((e) => Array.isArray(e) && e.length === 2);
+  if (rounds.length < 2) return null;
+  const want = rounds.at(-1)[0] - Math.round((windowMs / 1000) * perSec);
+  return rounds.reduce((best, e) => (Math.abs(e[0] - want) < Math.abs(best[0] - want) ? e : best));
+}
+
+/** Live rate: rounds per second between two beaconinfo reads ({ round, at },
+ *  beacon time), and the p50 of finalizedAt - opened over `recent`. */
+export function beaconRate({ then, now, recent }) {
+  const ms = Number(now?.at) - Number(then?.at);
+  const rate = ms > 0 && Number.isFinite(now?.round - then?.round) ? (now.round - then.round) / (ms / 1000) : null;
+  const lat = (Array.isArray(recent) ? recent : []).filter((r) => r.finalizedAt > 0 && r.opened > 0)
+    .map((r) => r.finalizedAt - r.opened).sort((a, b) => a - b);
+  return { rate, windowMs: ms > 0 ? ms : null, p50LatencyMs: lat.length ? lat[Math.floor(lat.length / 2)] : null };
+}
+
+/** The rate checks (verify, status) for beaconRate's result. */
+export function rateChecks(r, { minRate = MIN_RATE, commitWindowMs = 5000 } = {}) {
+  const known = (x) => x !== null && x !== undefined;
+  return [
+    { check: `beacon rate >= ${minRate} rounds/s`, ok: known(r?.rate) && r.rate >= minRate,
+      detail: known(r?.rate) ? `${r.rate.toFixed(2)} rounds/s over ${Math.round(r.windowMs / 1000)} s` : 'unknown' },
+    { check: 'round latency p50 < commitWindowMs/2', ok: known(r?.p50LatencyMs) && r.p50LatencyMs < commitWindowMs / 2,
+      detail: `${r?.p50LatencyMs ?? 'unknown'} ms, commitWindowMs ${commitWindowMs}` },
+  ];
+}
+
+export function watchAlerts({ proposals, stake, infos, rate, minRate = MIN_RATE }) {
   const out = [];
+  if (rate && !(rate.rate >= minRate)) {
+    out.push({ what: `beacon slow: ${rate.rate === null ? 'rate unknown' : `${rate.rate.toFixed(2)} rounds/s`} (want >= ${minRate})`, detail: rate });
+  }
   const votes = stake?.votes || {};
   for (const p of Array.isArray(proposals) ? proposals : []) {
     if (p.status !== 'active') continue;
@@ -452,7 +492,7 @@ export function fastGenesisConfig({ fast, token, committee, signerFee = 1, proto
 }
 
 /** Live checks over the published keys; each { check, ok, detail }. */
-export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo }) {
+export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo, rate, minRate = MIN_RATE }) {
   const out = [];
   const c = (check, ok, detail = '') => out.push({ check, ok: !!ok, detail });
   if (state.token) {
@@ -470,6 +510,7 @@ export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fasti
     if (state.predecessor !== undefined) c('beacon predecessor', (beaconinfo?.predecessor || '') === state.predecessor, beaconinfo?.predecessor);
     c('beacon health ok', beaconinfo?.health?.status === 'ok', JSON.stringify(beaconinfo?.health));
     c('beacon reserve funded', BigInt(beaconinfo?.foundationReserveAtoms || 0) > 0n, beaconinfo?.foundationReserveAtoms);
+    if (rate) out.push(...rateChecks(rate, { minRate, commitWindowMs: Number(beaconinfo?.params?.commitWindowMs) || 5000 }));
   }
   if (state.fast) {
     c('fast token', fastinfo?.token === state.token, fastinfo?.token);
@@ -635,6 +676,24 @@ async function main(argv) {
     const r = await hb.readState({ node: NODE, process: pid, path: `now/${k}` });
     if (r.status !== 200 || /^\s*</.test(r.value || '')) return null;
     try { return JSON.parse(r.value); } catch { return null; }
+  }
+
+  // RNG_MIN_RATE: rounds/s below which verify fails and watch alerts (default MIN_RATE).
+  const minRate = () => Number(process.env.RNG_MIN_RATE || MIN_RATE);
+  /** The beacon's average over the last ~5 minutes: the round timelockhistory
+   *  lists ~600 rounds back, read at its slot, against beaconinfo now. A dry
+   *  run reads nothing: null, no rate checked. */
+  async function liveRate() {
+    if (DRY || !isPid(state.beacon)) return null;
+    const [now, history, recent] = await Promise.all([key(state.beacon, 'beaconinfo'),
+      key(state.beacon, 'timelockhistory'), key(state.beacon, 'beaconrecent')]);
+    const point = historyPoint(history);
+    let then = null;
+    if (point) {
+      const r = await hb.readState({ node: NODE, process: state.beacon, path: `compute&slot=${point[1]}/beaconinfo` }).catch(() => null);
+      try { then = r?.status === 200 ? JSON.parse(r.value) : null; } catch { then = null; }
+    }
+    return beaconRate({ then, now, recent });
   }
 
   const transfer = (recipient, rng, extraTags = {}) => {
@@ -860,16 +919,19 @@ async function main(argv) {
       return send(state[role], 'Gov.Apply', { tags: { 'Gov-Id': String(id) } });
     },
     // Labs must watch and vote on every proposal (PERMISSIONLESS.md "Who governs the DAO"):
-    // run this at least once per voting period (1 day), e.g. from cron.
-    async 'dao-watch'() {
+    // run this at least once per voting period (1 day), e.g. from cron. It also
+    // flags a slow beacon (5-minute average under RNG_MIN_RATE, default 1.8/s).
+    async watch() {
       const roles = PROTOCOL_ROLES.filter((r) => state[r]);
-      const [proposals, stake, ...infos] = await Promise.all([key(state.dao, 'proposals'),
-        key(state.dao, `stake-${state.deployer || me}`), ...roles.map((r) => key(state[r], INFO_KEY[r]))]);
-      const alerts = watchAlerts({ proposals, stake, infos: Object.fromEntries(roles.map((r, i) => [r, infos[i]])) });
+      const [proposals, stake, rate, ...infos] = await Promise.all([key(state.dao, 'proposals'),
+        key(state.dao, `stake-${state.deployer || me}`), liveRate(), ...roles.map((r) => key(state[r], INFO_KEY[r]))]);
+      const alerts = watchAlerts({ proposals, stake, rate, minRate: minRate(),
+        infos: Object.fromEntries(roles.map((r, i) => [r, infos[i]])) });
       for (const a of alerts) log({ op: 'watch', ...a });
       if (!DRY && (alerts.length || !proposals)) process.exitCode = 1;
       return alerts;
     },
+    'dao-watch': () => v3.watch(),
     async 'expect-code'(role, root, version) {
       if (!PROTOCOL_ROLES.includes(role) || !/^[0-9a-f]{64}$/.test(root || '') || !Number.isSafeInteger(Number(version))) {
         throw new Error('expect-code <beacon|fair|fast> <64-hex root> <version>');
@@ -924,12 +986,12 @@ async function main(argv) {
     },
 
     async status() {
-      const [tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo] = await Promise.all([
+      const [tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo, rate] = await Promise.all([
         key(state.token, 'tokeninfo'), key(state.dao, 'daoinfo'), key(state.beacon, 'beaconinfo'), key(state.fair, 'fairinfo'),
-        key(state.fast, 'beaconinfo')]);
-      const checks = checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo });
+        key(state.fast, 'beaconinfo'), liveRate()]);
+      const checks = checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo, rate, minRate: minRate() });
       console.log(JSON.stringify({ token: state.token, dao: state.dao, beacon: state.beacon, fair: state.fair, fast: state.fast,
-        scheduler: state.scheduler, mode: beaconinfo?.mode, round: beaconinfo?.round, health: beaconinfo?.health,
+        scheduler: state.scheduler, mode: beaconinfo?.mode, round: beaconinfo?.round, health: beaconinfo?.health, rate,
         registered: beaconinfo?.registered, gov: { beacon: beaconinfo?.gov, fair: fairinfo?.gov, fast: fastinfo?.gov },
         fastRound: fastinfo?.round, checks }, null, 1));
       return checks;

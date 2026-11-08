@@ -254,9 +254,11 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    `dao-handover` refuses unless every protocol's `govPending` is empty,
    nothing is approved, `gov.code`/`gov.version` are the build `spawn`
    recorded, and the DAO is a configured `stake-dao/1` on our token. Then
-   step 5 (bonding). From now on run `dao-watch` at least once a day (cron):
-   it lists every open proposal, flags any Labs has not voted on, and every
-   pending action; it exits 1 when one needs a look. Labs votes on every
+   step 5 (bonding). From now on run `watch` (formerly `dao-watch`, still
+   accepted) at least once a day (cron): it lists every open proposal, flags
+   any Labs has not voted on, every pending action, and a slow beacon (5-minute
+   average under `RNG_MIN_RATE`, default 1.8 rounds/s); it exits 1 when one
+   needs a look. Labs votes on every
    proposal while its stake decides (docs/PERMISSIONLESS.md "Who governs the
    DAO").
 

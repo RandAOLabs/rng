@@ -8,7 +8,7 @@ import {
   loadAllocations, genesisPrelude, badParams, genesisConfig, daoRules, sameScheduler,
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, setDaoErrors, renounceErrors, fundError,
   effectiveAt, isMoneyProposal, LABS_STAKE_RNG, floorFor, RESERVE_FLOOR_MS, buildErrors, watchAlerts,
-  fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources,
+  fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources, beaconRate, historyPoint, rateChecks, MIN_RATE,
 } from '../deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -500,6 +500,24 @@ test('dao-watch flags every open proposal (and a missing Labs vote) and every pe
   assert.deepEqual(alerts.map((a) => a.what), ['proposal 3 open (Labs voted Yes)', 'proposal 4 open: Labs has NOT voted',
     'beacon pending 7 Gov.Treasury-Spend (money)']);
   assert.deepEqual(watchAlerts({ proposals: [], infos: {} }), []);
+});
+
+test('live rate: 5-minute average from timelockhistory, p50 latency, checks and the watch alert', () => {
+  const history = { keep: 1024, rounds: Array.from({ length: 1000 }, (_, i) => [i + 1, 10 * (i + 1)]) };
+  history.rounds[399] = [400, 4000, 'abandoned'];
+  assert.deepEqual(historyPoint(history), [399, 3990], '~600 rounds back, abandoned skipped');
+  assert.equal(historyPoint({ rounds: [[1, 1]] }), null);
+  const recent = [{ opened: 1000, finalizedAt: 1600 }, { opened: 2000, finalizedAt: 2800 }, { opened: 3000, finalizedAt: 3700 }];
+  const fast = beaconRate({ then: { round: 400, at: 0 }, now: { round: 1000, at: 300_000 }, recent });
+  assert.deepEqual(fast, { rate: 2, windowMs: 300_000, p50LatencyMs: 700 });
+  assert.deepEqual(rateChecks(fast).map((c) => c.ok), [true, true]);
+  assert.equal(MIN_RATE, 1.8);
+  const slow = beaconRate({ then: { round: 400, at: 0 }, now: { round: 580, at: 300_000 }, recent: [{ opened: 1, finalizedAt: 5201 }] });
+  assert.deepEqual(rateChecks(slow).map((c) => c.ok), [false, false], '0.6/s, latency 5.2 s');
+  assert.equal(rateChecks(slow, { minRate: 0.5 })[0].ok, true, 'threshold configurable');
+  assert.deepEqual(rateChecks(beaconRate({ then: null, now: { round: 1, at: 1 }, recent: [] })).map((c) => c.ok), [false, false], 'unknown fails');
+  assert.deepEqual(watchAlerts({ proposals: [], infos: {}, rate: slow }).map((a) => a.what), ['beacon slow: 0.60 rounds/s (want >= 1.8)']);
+  assert.deepEqual(watchAlerts({ proposals: [], infos: {}, rate: fast }), []);
 });
 
 test('the deployer allocation gives the whole supply to the deployer, ticker RNG', () => {
