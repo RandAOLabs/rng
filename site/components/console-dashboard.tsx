@@ -98,10 +98,13 @@ function RoundTrack({ track, ok }: { track: Track; ok: boolean }) {
   );
 }
 
-function BeaconPipeline({ validators, tracks, ok, total }: { validators: Validator[]; tracks: Track[]; ok: boolean; total?: number }) {
+function BeaconPipeline({ validators, tracks, ok, total, rate }: { validators: Validator[]; tracks: Track[]; ok: boolean; total?: number; rate?: number }) {
   return (
     <div className="pipe">
-      <div className="pipe-total"><span>TOTAL_ROUNDS</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
+      <div className="pipe-total">
+        <div><span>TOTAL_ROUNDS</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
+        <small className="pipe-pace">{rate ? `${rate.toFixed(1)}_PER_SEC ${paceScale(rate)}` : "MEASURING"}</small>
+      </div>
       <div className="pipe-head">
         <div><span>VALIDATORS</span><b>{validators.length || "—"}</b></div>
         {STAGES.map((stage) => <div key={stage}><span>{stage}</span></div>)}
@@ -170,11 +173,11 @@ export function ConsoleDashboard() {
         </div>
 
         <a className="rng-visual live-beacon" href="/how" aria-label="Live Any-Honest beacon. Open how it works.">
-          <BeaconPipeline validators={validators} tracks={tracks} ok={live} total={total} />
+          <BeaconPipeline validators={validators} tracks={tracks} ok={live} total={total} rate={rate} />
           <ul className="beacon-feed">
             {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b>{p.ms ? `${p.ms}ms` : ""}</b></li>)}
           </ul>
-          <div className="home-status"><span className={live ? "signal on" : "signal"} /><strong>{live ? "ANY_HONEST::PASS" : "CONNECTING"}</strong><small>{now ? `ROUND_${now.round} // ${validators.length}_VALIDATORS // ${rate ? `${rate.toFixed(1)}_PER_SEC ${paceScale(rate)}` : "MEASURING"} // HOW_IT_WORKS →` : "READING_NATIVE_TESTNET"}</small></div>
+          <div className="home-status"><span className={live ? "signal on" : "signal"} /><strong>{live ? "ANY_HONEST::PASS" : "CONNECTING"}</strong><small>{now ? "HOW_IT_WORKS →" : "READING_BEACON"}</small></div>
         </a>
       </section>
 
