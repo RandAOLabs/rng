@@ -195,6 +195,19 @@ export async function getNetworkStatus(requestedRound?: number) {
     readJson<TokenInfo>(`${tokenBase}/tokeninfo`),
   ]);
   const roundNumber = requestedRound ?? info.round;
+  const denomination = 10 ** Number(tokenInfo.Denomination || 0);
+  // The fast tier is on-demand: until its first paid request there is no round.
+  if (!(roundNumber >= 1)) {
+    return {
+      network: cfg.label, beacon: cfg.beacon, token: cfg.token, round: 0, latestRound: info.round,
+      threshold: info.threshold, committeeSize: info.committee.length, committee: info.committee,
+      price: info.price.fast ?? info.price.beacon, unit: info.unit, pending: info.pendingCount,
+      verificationMode: info.verification, nativeVerification: info.verification === "device",
+      groupKey: info.groupKey, message: null, slot: null, signature: null, value: null, signers: [],
+      signatureValid: null, valueValid: null, verified: null,
+      tokenInfo: { ticker: tokenInfo.Ticker, denomination }, checkedAt: new Date().toISOString(),
+    };
+  }
   // The state keeps the last few rounds; older ones are read at the slot that
   // finalized them (beaconhistory, else a binary search over slots).
   let round: Round & { groupKey?: string } | undefined = state.rounds[String(roundNumber)];
@@ -213,7 +226,6 @@ export async function getNetworkStatus(requestedRound?: number) {
   const groupKey = round.groupKey ?? info.groupKey;
   let signatureValid = false;
   try { signatureValid = verifySignature(groupKey, message, round.signature); } catch { signatureValid = false; }
-  const denomination = 10 ** Number(tokenInfo.Denomination || 0);
   return {
     network: cfg.label,
     beacon: cfg.beacon,

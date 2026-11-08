@@ -67,6 +67,17 @@ function roundRate(recent: Recent[]): number | undefined {
   return seconds > 0 ? (last.round - first.round) / seconds : undefined;
 }
 
+// A text gauge for the pace against the 2 rounds/s target:
+// `[··|··●··|··] ON_PACE`. Each side spans 1 round/s; the bars mark ±10%.
+export function paceScale(rate: number, target = 2): string {
+  const half = 5;
+  const offset = Math.max(-half, Math.min(half, Math.round(((rate - target) / target) * half * 2)));
+  const cells = Array.from({ length: half * 2 + 1 }, (_, i) => (i === half + offset ? "●" : "·"));
+  const bar = `[${cells.slice(0, half - 1).join("")}|${cells.slice(half - 1, half + 2).join("")}|${cells.slice(half + 2).join("")}]`;
+  const label = rate < target * 0.9 ? "SLOW" : rate > target * 1.1 ? "FAST" : "ON_PACE";
+  return `${bar} ${label}`;
+}
+
 function RoundTrack({ track, ok }: { track: Track; ok: boolean }) {
   const committed = track.commit.some((c) => c !== "empty");
   const revealed = track.done || track.reveal.every((c) => c !== "empty");
@@ -163,7 +174,7 @@ export function ConsoleDashboard() {
           <ul className="beacon-feed">
             {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b>{p.ms ? `${p.ms}ms` : ""}</b></li>)}
           </ul>
-          <div className="home-status"><span className={live ? "signal on" : "signal"} /><strong>{live ? "ANY_HONEST::PASS" : "CONNECTING"}</strong><small>{now ? `ROUND_${now.round} // ${validators.length}_VALIDATORS // ${rate ? `${rate.toFixed(1)}_PER_SEC` : "MEASURING"} // HOW_IT_WORKS →` : "READING_NATIVE_TESTNET"}</small></div>
+          <div className="home-status"><span className={live ? "signal on" : "signal"} /><strong>{live ? "ANY_HONEST::PASS" : "CONNECTING"}</strong><small>{now ? `ROUND_${now.round} // ${validators.length}_VALIDATORS // ${rate ? `${rate.toFixed(1)}_PER_SEC ${paceScale(rate)}` : "MEASURING"} // HOW_IT_WORKS →` : "READING_NATIVE_TESTNET"}</small></div>
         </a>
       </section>
 
