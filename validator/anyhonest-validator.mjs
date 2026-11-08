@@ -169,10 +169,15 @@ export function shouldReveal(round, beaconNow) {
   return complete || beaconNow >= num(round.commitDeadline);
 }
 
+/** Reveal batching (see plan), all on the beacon clock: wait for a commit this
+ *  close, at most this long after the round closed, and never this close to its
+ *  revealDeadline. */
+export const HOLD_MS = 500, HOLD_MAX_MS = 500, REVEAL_MARGIN_MS = 10_000;
+
 /**
  * The actions for one pass, as [{ kind, round, data }], and the oldest round
  * still shown. ctx: { me, sent, atSlot, now (local), beaconNow, healthy,
- * backoffUntil, exit, pause, moving, mine, secrets, newAlpha?, commit? }.
+ * backoffUntil, exit, pause, moving, mine, secrets, holdMs?, newAlpha?, commit? }.
  * Ready is said only by a member in good standing with a full stake (bond plus
  * the earnings the beacon refills it from), not before the beacon's cooldown,
  * nor our own backoff, nor while the local round trip is over half the commit
@@ -208,10 +213,13 @@ export function plan(info, ctx) {
   const active = list(info.validators).filter(isActive).length;
   const openRound = num(open.round);
   const wantsRound = num(open.pending) > 0 || (truthy(p.heartbeat) && info.mode !== 'request-driven');
-  const mayCommit = open.phase === 'collecting'
-    ? member && isActive(mine) && !stopping && active >= num(p.minCommits, 2) && wantsRound && beaconNow >= num(info.nextRoundAt)
-    : open.phase === 'commit' && list(open.active).includes(me);
-  if (mayCommit && !obj(open.committed)[me] && D('Commit', openRound, 1000)) {
+  // How long (beacon clock) until we may commit to the open round: 0 now, Infinity never.
+  const commitIn = open.phase === 'collecting'
+    ? (member && isActive(mine) && !stopping && active >= num(p.minCommits, 2) && wantsRound
+      ? Math.max(0, num(info.nextRoundAt) - beaconNow) : Infinity)
+    : open.phase === 'commit' && list(open.active).includes(me) ? 0 : Infinity;
+  const commitOwed = !obj(open.committed)[me] && D('Commit', openRound, 1000);
+  if (commitIn === 0 && commitOwed) {
     // A fresh secret on every send, a resend after a void included.
     const alpha = (ctx.newAlpha ?? tl.newAlpha)(), c = (ctx.commit ?? tl.commit)(alpha);
     secrets.save(openRound, c, alpha);
@@ -220,20 +228,29 @@ export function plan(info, ctx) {
   // The beacon only moves on a message: a round whose set has a silent member
   // would sit in its commit phase past commitDeadline until someone sends
   // something. A member that has committed nudges it with Close.
-  if (open.phase === 'commit' && obj(open.committed)[me] !== undefined && num(open.commitDeadline) > 0
-      && beaconNow >= num(open.commitDeadline) && D('Close', openRound, 1000)) {
-    actions.push({ kind: 'Close', round: openRound, data: { round: openRound } });
-  }
+  // Any message closes it as well, so no Close next to a commit or reveal.
+  const closeDue = open.phase === 'commit' && obj(open.committed)[me] !== undefined && num(open.commitDeadline) > 0
+      && beaconNow >= num(open.commitDeadline) && D('Close', openRound, 1000);
   // Rounds overlap: the open round takes commits while older ones reveal.
+  // A reveal due while our next commit is HOLD_MS or less away waits for it
+  // (at most HOLD_MAX_MS after the round closed, never within REVEAL_MARGIN_MS
+  // of revealDeadline) and goes in the same Act: one message per round instead
+  // of two (2026-11-07: ~6 slots a round, ~21 KB each).
+  const committing = actions.some((a) => a.kind === 'Commit');
+  const hold = list(info.features).includes('act') && !committing && commitOwed && commitIn <= (ctx.holdMs ?? HOLD_MS);
+  const revealWindowMs = num(p.revealWindowMs, 30_000);
   const rounds = [...list(info.revealing), open];
   for (const x of rounds) {
     const shown = obj(x.committed)[me], r = num(x.round);
     if (x.phase !== 'reveal' || typeof shown !== 'string' || list(x.revealed).includes(me) || !D('Reveal', r, 3000)) continue;
     if (!shouldReveal(x, beaconNow)) continue;
+    const deadline = num(x.revealDeadline);
+    if (hold && deadline - beaconNow > REVEAL_MARGIN_MS && beaconNow - (deadline - revealWindowMs) < HOLD_MAX_MS) continue;
     const alpha = secrets.secretFor(r, shown);
     if (alpha) actions.push({ kind: 'Reveal', round: r, data: { round: r, alpha } });
     else ctx.log?.(`round ${r}: no secret on disk for our commit; cannot reveal`);
   }
+  if (closeDue && actions.length === 0) actions.push({ kind: 'Close', round: openRound, data: { round: openRound } });
   return { actions, oldest: Math.min(...rounds.map((x) => num(x.round))) };
 }
 
@@ -279,7 +296,7 @@ export function registryEntry(raw, me) {
 /**
  * io: { readInfo(pid), readAtSlot(pid), readKey(pid, key) -> string|null,
  *       post(pid, action, data) -> slot, transfer(token, tags) -> slot, now() }.
- * cfg: { beacon, dataDir, topUp? }.
+ * cfg: { beacon, dataDir, topUp?, holdMs? (0: never hold a reveal for the next commit) }.
  */
 export function createValidator({ cfg, me, io, log = () => {} }) {
   const dir = cfg.dataDir;
@@ -346,7 +363,7 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
     const exit = flag('exit'), pause = flag('pause'), moving = !!st.successor.id;
     const healthy = st.health.healthy(now, commitWindowMs);
     const ctx = { me, sent: st.sent, atSlot, now, beaconNow, healthy, backoffUntil: st.backoff.until,
-      exit, pause, moving, mine, secrets, log };
+      exit, pause, moving, mine, secrets, log, holdMs: cfg.holdMs };
     const { actions, oldest } = plan(info, ctx);
     // Commits and reveals are posted without waiting: the next read starts
     // now, not a round trip later (a pass was three serial round trips, which
@@ -366,7 +383,7 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
     const earned = mine?.earnedAtoms !== undefined ? Math.floor(num(mine?.earnedAtoms) / unit) : 0;
     const shortfall = mine ? Math.max(0, stake - bond - earned) : stake;
     const waiting = mine && !truthy(mine.ready) && !truthy(mine.exiting) && !exit && !pause && !moving && !truthy(mine.overdue);
-    if (waiting && !healthy && !st.health.probing && now - st.lastProbe > 2000
+    if (waiting && !healthy && !st.health.probing && actions.length === 0 && now - st.lastProbe > 2000
         && beaconNow >= num(mine.rejoinAt) - 30_000 && now >= st.backoff.until - 30_000) {
       st.lastProbe = now;
       await send('Get-Info', {}, [], now);

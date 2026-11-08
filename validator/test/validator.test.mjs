@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as tl from '../anyhonest.mjs';
 import {
-  plan, batch, Clock, Health, backoff, secretStore, createValidator, bondCommand, checkSuccessor, bondTags, runLoop,
+  plan, batch, HOLD_MS, HOLD_MAX_MS, REVEAL_MARGIN_MS, Clock, Health, backoff, secretStore, createValidator, bondCommand, checkSuccessor, bondTags, runLoop,
 } from '../anyhonest-validator.mjs';
 
 const ME = 'me'.padEnd(43, '0');
@@ -202,6 +202,41 @@ test('Act batches the commit and every reveal into one message', () => {
   assert.deepEqual(m.data.reveals, secrets.map(({ r: round, a: alpha }) => ({ round, alpha })));
   assert.deepEqual(batch(r.actions, { features: ['ready'] }).map((x) => x.action), ['Commit', 'Reveal', 'Reveal']);
   assert.deepEqual(batch(r.actions.slice(0, 1), info).map((x) => x.action), ['Commit']);
+});
+
+test('a reveal waits briefly for the next commit and goes in the same Act', () => {
+  const dir = tmp(), s = secretStore(dir), a = tl.newAlpha(), c = tl.commit(a);
+  s.save(6, c, a);
+  // Round 6 closed at 99900 (revealDeadline - revealWindowMs).
+  const r6 = { round: 6, phase: 'reveal', active: [ME], committed: { [ME]: c.slice(0, 16) }, revealed: [], revealDeadline: 129900 };
+  const info = (o) => baseInfo({ revealing: [r6], nextRoundAt: 100300, ...o,
+    params: { ...baseInfo().params, revealWindowMs: 30000 } });
+  // The next round opens in 300 ms (beacon clock): hold the reveal.
+  assert.deepEqual(kinds(plan(info(), ctx(dir))), []);
+  // It opens: commit and reveal, one Act.
+  const r = plan(info(), ctx(dir, { now: 100300, beaconNow: 100300 }));
+  assert.deepEqual(kinds(r), ['Commit', 'Reveal']);
+  assert.deepEqual(batch(r.actions, info()).map((m) => m.action), ['Act']);
+  // Held no longer than HOLD_MAX_MS after the round closed, whatever nextRoundAt says.
+  const stuck = info({ nextRoundAt: 99900 + HOLD_MAX_MS + 100 });
+  assert.deepEqual(kinds(plan(stuck, ctx(dir, { beaconNow: 99900 + HOLD_MAX_MS - 1 }))), []);
+  assert.deepEqual(kinds(plan(stuck, ctx(dir, { beaconNow: 99900 + HOLD_MAX_MS }))), ['Reveal']);
+  // No hold: the next commit is far off, already sent, or the deadline is near, or no `act`.
+  assert.deepEqual(kinds(plan(info({ nextRoundAt: 100000 + HOLD_MS + 1 }), ctx(dir))), ['Reveal']);
+  assert.deepEqual(kinds(plan(info(), ctx(dir, { sent: new Map([['Commit:7', { at: 100000, slot: 99 }]]) }))), ['Reveal']);
+  const short = info({ revealing: [{ ...r6, revealDeadline: 99900 + REVEAL_MARGIN_MS - 1 }] });
+  short.params.revealWindowMs = REVEAL_MARGIN_MS - 1; // closed at 99900, deadline under the margin away
+  assert.deepEqual(kinds(plan(short, ctx(dir))), ['Reveal']);
+  assert.deepEqual(kinds(plan(info({ features: ['ready'] }), ctx(dir))), ['Reveal']);
+  assert.deepEqual(kinds(plan(info(), ctx(dir, { holdMs: 0 }))), ['Reveal']);
+});
+
+test('no Close beside a commit or reveal: any message closes the round', () => {
+  const dir = tmp(), s = secretStore(dir), a = tl.newAlpha(), c = tl.commit(a);
+  s.save(3, c, a);
+  const info = baseInfo({ revealing: [{ round: 3, phase: 'reveal', committed: { [ME]: c.slice(0, 16) }, revealed: [] }],
+    open: { round: 4, phase: 'commit', commitDeadline: 105000, committed: { [ME]: 'x' }, active: [ME, OTHER] } });
+  assert.deepEqual(kinds(plan(info, ctx(dir, { beaconNow: 105000 }))), ['Reveal']);
 });
 
 test('a commit-phase round is owed only by its set', () => {
