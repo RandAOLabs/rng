@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import crypto, { createHash } from 'node:crypto';
 import * as fair from '../../lib/js/fair-client.ts';
 import * as history from '../../lib/js/history.ts';
-import { beaconHealth } from '../components/health-banner.tsx';
+import { beaconHealth, trackRate, SLOW_MS } from '../components/health-banner.tsx';
 import { estimateEarnings } from '../components/validator-guide.tsx';
 import { describeAction, ownersLabel, tally, tokens } from '../app/api/dao/model.ts';
 import { signDataItem as vendorSign } from '../../validator/vendor/ans104.mjs';
@@ -242,6 +242,22 @@ test('WP6 beaconHealth: v3 health wins, v2 is derived', () => {
   assert.equal(beaconHealth({ validators: [{}, {}, {}, { suspended: true }, { suspended: true }, { suspended: true }, { suspended: true }] }).status, 'degraded');
   assert.equal(beaconHealth({ validators: [{}, {}] }, 120_000).status, 'degraded');
   assert.equal(beaconHealth({ validators: [{}, {}], mode: 'request-driven' }, 120_000).status, 'ok');
+});
+
+test('beaconHealth flags slow only after 3 minutes under 1.8 rounds/s', () => {
+  // Polls every 15 s: 2/s, then 0.6/s.
+  let r = null, at = 0, round = 0;
+  const poll = (perSec) => { at += 15_000; round += perSec * 15; r = trackRate(r, round, at); return beaconHealth({ validators: [{}, {}, {}] }, 0, r); };
+  poll(2);
+  assert.equal(poll(2).status, 'ok');
+  for (let i = 0; i < SLOW_MS / 15_000 - 1; i++) assert.equal(poll(0.6).status, 'ok', `not yet slow at poll ${i}`);
+  const slow = poll(0.6);
+  assert.equal(slow.status, 'slow');
+  assert.equal(slow.message, 'Rounds are slow: 0.6 per second for 3 min. Normal is 2.');
+  assert.equal(poll(2).status, 'ok', 'one fast poll clears it');
+  assert.equal(beaconHealth({ validators: [{}, {}], mode: 'request-driven' }, 0, { round: 9, at: SLOW_MS, rate: 0.1, slowSince: 0 }).status, 'ok',
+    'request-driven rounds have no rhythm');
+  assert.equal(trackRate({ round: 9, at: 10, rate: 1, slowSince: 0 }, 5, 20).slowSince, null, 'a new beacon (round went down) starts over');
 });
 
 test('WP6 estimateEarnings splits round pay across the active set', () => {
