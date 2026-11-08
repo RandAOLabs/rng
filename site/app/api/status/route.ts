@@ -12,6 +12,8 @@ export async function GET(request: Request) {
     }
     return Response.json(await getNetworkStatus(round), { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "status unavailable" }, { status: 502 });
+    // An old round on a node that no longer keeps its slot (lib/js/history.ts NotRetainedError).
+    const gone = error instanceof Error && error.name === "NotRetainedError";
+    return Response.json({ error: error instanceof Error ? error.message : "status unavailable" }, { status: gone ? 410 : 502 });
   }
 }

@@ -3,7 +3,8 @@
 // before n, as compute&slot=n/<key> does on HyperBEAM.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findRound, firstSlot, indexLookup } from '../history.mjs';
+import { findRound, firstSlot, indexLookup, httpReader, NotRetainedError } from '../history.mjs';
+import * as browser from '../../lib/js/history.ts';
 
 function slotStore() {
   const writes = new Map(); // key -> [[slot, value], ...] ascending
@@ -107,3 +108,29 @@ test('Any-Honest: a late (cracked) round is found by scanning past the binary se
   assert.equal(found.record.value, 'v20');
   assert.equal(found.slot, 3 * 23);
 });
+
+// The node keeps only recent computed slots: an older one answers 410.
+function retainingFetch(st, oldest) {
+  return async (url) => {
+    const m = url.match(/~process@1\.0\/(now|compute&slot=(\d+))\/(.+)$/);
+    const slot = m[2] === undefined ? null : Number(m[2]);
+    if (slot !== null && slot < oldest) return new Response('gone', { status: 410 });
+    const v = await st.read(slot, m[3]);
+    return v === null ? new Response('', { status: 404 }) : new Response(JSON.stringify(v), { status: 200 });
+  };
+}
+
+for (const [name, lib] of [['validator/history.mjs', { findRound, httpReader, NotRetainedError }], ['lib/js/history.ts', browser]]) {
+  test(`${name}: a 410 slot is "not retained by this node", a retained round is still found`, async () => {
+    const st = fastBeacon();
+    const read = lib.httpReader('http://hb.test', 'P'.repeat(43), retainingFetch(st, 2500));
+    await assert.rejects(read(10, 'beaconinfo'), lib.NotRetainedError);
+    const keys = () => ['beaconround', 'beaconabandoned'];
+    // Round 520 (slot 2600) is past the index but retained: the search steps over the 410s.
+    const found = await lib.findRound(read, { round: 520, indexKey: 'beaconhistory', keys });
+    assert.equal(found.slot, 2600);
+    await assert.rejects(lib.findRound(read, { round: 7, indexKey: 'beaconhistory', keys }),
+      (e) => e instanceof lib.NotRetainedError && /round 7 is not retained by this node/.test(e.message));
+    assert.equal(await lib.findRound(read, { round: 601, indexKey: 'beaconhistory', keys }), null, 'never happened: null');
+  });
+}

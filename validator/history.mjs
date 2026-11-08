@@ -11,12 +11,22 @@
 // null when there is none. `httpReader` builds one for a live node; tests pass
 // a mocked slot store.
 
+/** A slot the node no longer keeps (HTTP 410): it retains only recent computed
+ * slots. Not a protocol failure: the record may exist, this node cannot serve it. */
+export class NotRetainedError extends Error {
+  constructor(what) {
+    super(`${what} is not retained by this node (HTTP 410: it keeps only recent computed slots)`);
+    this.name = 'NotRetainedError';
+  }
+}
+
 /** A reader for a live node: GET .../now/<key> or .../compute&slot=<n>/<key>. */
 export function httpReader(node, pid, fetchImpl = fetch) {
   const base = `${node.replace(/\/$/, '')}/${pid}~process@1.0`;
   return async (slot, key) => {
     const at = slot == null ? 'now' : `compute&slot=${slot}`;
     const res = await fetchImpl(`${base}/${at}/${key}`, { headers: { accept: 'application/ao' } });
+    if (res.status === 410 && slot != null) throw new NotRetainedError(`slot ${slot}`);
     if (!res.ok) return null;
     const text = await res.text();
     try { return JSON.parse(text); } catch { return text; }
@@ -58,7 +68,17 @@ const recordFor = (value, round) => {
  * (a cracked Any-Honest round can finalize after later ones).
  * Returns { slot, record, abandoned } or null.
  */
-export async function findRound(read, { round, indexKey, keys, infoKey = 'beaconinfo', latest, scan = 0 }) {
+export async function findRound(read0, { round, indexKey, keys, infoKey = 'beaconinfo', latest, scan = 0 }) {
+  // Unretained (410) slots read as nothing; if the round is not found and the
+  // node dropped slots on the way, say so instead of "not found".
+  let gone = false;
+  const read = async (slot, key) => {
+    try { return await read0(slot, key); } catch (e) {
+      if (e instanceof NotRetainedError) { gone = true; return null; }
+      throw e;
+    }
+  };
+  const missing = () => { if (gone) throw new NotRetainedError(`round ${round}`); return null; };
   const look = async (slot) => {
     for (const key of keys(round)) {
       const record = recordFor(await read(slot, key), round);
@@ -74,10 +94,10 @@ export async function findRound(read, { round, indexKey, keys, infoKey = 'beacon
   const top = latest ?? Number(await read(null, 'at-slot'));
   if (!Number.isSafeInteger(top) || top < 1) return null;
   const start = await firstSlot(1, top, async (s) => Number((await read(s, infoKey))?.round ?? -1) >= round);
-  if (start == null) return null;
+  if (start == null) return null; // no slot reached the round: it has not happened
   for (let s = start; s <= Math.min(top, start + scan); s++) {
     const found = await look(s);
     if (found) return found;
   }
-  return null;
+  return missing();
 }

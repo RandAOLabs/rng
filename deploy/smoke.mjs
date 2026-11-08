@@ -51,7 +51,7 @@ import {
   FairClient, FairError, memoryStore, fairOpenTags, fairExpireTags, fairWithdrawTags, fairFundTags,
   payAndRequestTags, findRequest, verifySession, sessionValue, finalValue, forfeitValue, requestValue, fairRevealTags,
 } from '../lib/js/fair-client.ts';
-import { UNIT, historyPoint, beaconRate } from './deploy.mjs';
+import { UNIT, addRateSample, rateBase, beaconRate } from './deploy.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -298,16 +298,15 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
   }
 
   // ------------------------------------------------------------ pace and validator health
+  // The node keeps only ~5 minutes of computed slots (older reads answer 410), so the
+  // rate is measured between this run's own `now/beaconinfo` samples (the preflight's
+  // is the first), never by reading an old slot. Null until a sample is >= 60 s old.
+  let rateSamples = [];
   async function liveRate() {
-    const [now, history, recent] = await Promise.all([key(beacon, 'beaconinfo'), key(beacon, 'timelockhistory'), key(beacon, 'beaconrecent')]);
-    // The node keeps only a few thousand slots of history (older slots answer 410), which
-    // is about the 5-minute point: fall back to shorter windows and say which one was used.
-    for (const windowMs of [300_000, 240_000, 180_000, 120_000]) {
-      const point = historyPoint(history, { windowMs });
-      const then = point ? await readJson(beacon, `compute&slot=${point[1]}/beaconinfo`).catch(() => null) : null;
-      if (then && typeof then === 'object') return { ...beaconRate({ then, now, recent }), round: now?.round, at: now?.at, wantedWindowMs: windowMs };
-    }
-    return { ...beaconRate({ then: null, now, recent }), round: now?.round, at: now?.at, wantedWindowMs: null };
+    const [now, recent] = await Promise.all([key(beacon, 'beaconinfo'), key(beacon, 'beaconrecent')]);
+    rateSamples = addRateSample(rateSamples, now);
+    const then = rateBase(rateSamples, now);
+    return { ...beaconRate({ then, now, recent }), round: now?.round, at: now?.at, wantedWindowMs: 300_000 };
   }
   const validatorView = (info) => Object.fromEntries((info?.validators || []).map((v) => [v.address,
     { faults: v.faults, strikes: v.strikes, suspended: v.suspended, active: v.active, exiting: v.exiting }]));

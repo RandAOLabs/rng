@@ -380,7 +380,8 @@ export class FairClient {
    * A resolved session no longer in `fairsessions` (each game keeps its last
    * `keep`): `fairhistory` names the slot whose output is its full view.
    * Null once it has aged out of the index too (then scan the game's
-   * Fair-Result messages, deploy/README.md "History").
+   * Fair-Result messages, deploy/README.md "History"). NotRetainedError when
+   * the node no longer keeps that slot (HTTP 410).
    */
   async history(game: string, session: string, player: string) {
     const index = await this.read<{ entries?: Array<[string, number?]> }>("fairhistory").catch(() => null);
@@ -388,6 +389,11 @@ export class FairClient {
     const entry = [...(index?.entries ?? [])].reverse().find((e) => e[0] === id);
     if (entry?.[1] == null) return null;
     const response = await this.http(`${this.node}/${this.fair}~process@1.0/compute&slot=${entry[1]}/results/output/data`);
+    if (response.status === 410) {
+      // history.ts NotRetainedError's message and name (no imports here).
+      throw Object.assign(new Error(`session ${session} (slot ${entry[1]}) is not retained by this node (HTTP 410: it keeps only recent computed slots)`),
+        { name: "NotRetainedError" });
+    }
     if (!response.ok) return null;
     const reply = JSON.parse(await response.text()) as { session?: FairSession };
     return reply.session ? { slot: entry[1], view: reply.session } : null;

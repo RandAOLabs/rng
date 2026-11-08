@@ -446,6 +446,27 @@ export function historyPoint(history, { windowMs = RATE_WINDOW_MS, perSec = 2 } 
   return rounds.reduce((best, e) => (Math.abs(e[0] - want) < Math.abs(best[0] - want) ? e : best));
 }
 
+/** The node keeps only ~5 minutes of computed slots (older reads answer 410),
+ *  so the live rate never reads an old slot: callers sample `now/beaconinfo`
+ *  ({ round, at }, beacon time) over time and keep their own samples. */
+export const RATE_MIN_SPAN_MS = 60_000;
+/** `samples` plus `info` ({ round, at }), oldest first, the last `keepMs` only. */
+export function addRateSample(samples, info, keepMs = 3 * RATE_WINDOW_MS) {
+  const ok = (x) => x && Number.isFinite(Number(x.round)) && Number(x.at) > 0;
+  const list = (Array.isArray(samples) ? samples : []).filter(ok).map((x) => ({ round: Number(x.round), at: Number(x.at) }));
+  if (ok(info)) list.push({ round: Number(info.round), at: Number(info.at) });
+  const newest = Math.max(0, ...list.map((x) => x.at));
+  return list.filter((x) => x.at >= newest - keepMs).sort((a, b) => a.at - b.at);
+}
+/** The sample to measure `now` against: at least `minSpanMs` older, nearest to
+ *  `windowMs` back. Null when no sample is old enough yet. */
+export function rateBase(samples, now, { windowMs = RATE_WINDOW_MS, minSpanMs = RATE_MIN_SPAN_MS } = {}) {
+  const at = Number(now?.at);
+  const old = (Array.isArray(samples) ? samples : []).filter((x) => at - x.at >= minSpanMs && x.round <= Number(now.round));
+  if (!old.length) return null;
+  return old.reduce((best, x) => (Math.abs(at - windowMs - x.at) < Math.abs(at - windowMs - best.at) ? x : best));
+}
+
 /** Live rate: rounds per second between two beaconinfo reads ({ round, at },
  *  beacon time), and the p50 of finalizedAt - opened over `recent`. */
 export function beaconRate({ then, now, recent }) {
@@ -706,19 +727,30 @@ async function main(argv) {
 
   // RNG_MIN_RATE: rounds/s below which verify fails and watch alerts (default MIN_RATE).
   const minRate = () => Number(process.env.RNG_MIN_RATE || MIN_RATE);
-  /** The beacon's average over the last ~5 minutes: the round timelockhistory
-   *  lists ~600 rounds back, read at its slot, against beaconinfo now. A dry
-   *  run reads nothing: null, no rate checked. */
+  /** The beacon's average over the last ~5 minutes, from `now/beaconinfo`
+   *  samples only: the node does not keep old slots (410). Samples persist in
+   *  <state>.rate-samples.json, so a watch from cron measures against its last
+   *  run; with no sample at least RNG_RATE_SAMPLE_MS (default 60 s) old, it
+   *  reads once more after that long. A dry run reads nothing: null. */
   async function liveRate() {
     if (DRY || !isPid(state.beacon)) return null;
-    const [now, history, recent] = await Promise.all([key(state.beacon, 'beaconinfo'),
-      key(state.beacon, 'timelockhistory'), key(state.beacon, 'beaconrecent')]);
-    const point = historyPoint(history);
-    let then = null;
-    if (point) {
-      const r = await hb.readState({ node: NODE, process: state.beacon, path: `compute&slot=${point[1]}/beaconinfo` }).catch(() => null);
-      try { then = r?.status === 200 ? JSON.parse(r.value) : null; } catch { then = null; }
+    const file = STATE.replace(/\.json$/, '') + '.rate-samples.json';
+    let samples = [];
+    try {
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (saved.beacon === state.beacon) samples = saved.samples || [];
+    } catch { samples = []; }
+    const spanMs = Number(process.env.RNG_RATE_SAMPLE_MS ?? RATE_MIN_SPAN_MS);
+    let [now, recent] = await Promise.all([key(state.beacon, 'beaconinfo'), key(state.beacon, 'beaconrecent')]);
+    samples = addRateSample(samples, now);
+    let then = rateBase(samples, now, { minSpanMs: spanMs });
+    if (!then && now && spanMs > 0) {
+      await new Promise((r) => setTimeout(r, spanMs));
+      [now, recent] = await Promise.all([key(state.beacon, 'beaconinfo'), key(state.beacon, 'beaconrecent')]);
+      samples = addRateSample(samples, now);
+      then = rateBase(samples, now, { minSpanMs: 1 });
     }
+    try { fs.writeFileSync(file, JSON.stringify({ beacon: state.beacon, samples }) + '\n'); } catch { /* best effort */ }
     return beaconRate({ then, now, recent });
   }
 

@@ -14,12 +14,22 @@ export type SlotReader = (slot: number | null, key: string) => Promise<unknown>;
 export type IndexEntry = [string | number, number?, string?];
 export type RoundHit<T> = { slot: number; record: T; abandoned: boolean };
 
+/** A slot the node no longer keeps (HTTP 410): it retains only recent computed
+ * slots. Not a protocol failure: the record may exist, this node cannot serve it. */
+export class NotRetainedError extends Error {
+  constructor(what: string) {
+    super(`${what} is not retained by this node (HTTP 410: it keeps only recent computed slots)`);
+    this.name = "NotRetainedError";
+  }
+}
+
 /** A reader for a live node. */
 export function httpReader(node: string, pid: string, fetchImpl: typeof fetch = fetch): SlotReader {
   const base = `${node.replace(/\/$/, "")}/${pid}~process@1.0`;
   return async (slot, key) => {
     const at = slot == null ? "now" : `compute&slot=${slot}`;
     const response = await fetchImpl(`${base}/${at}/${key}`, { cache: "no-store", headers: { accept: "application/ao" } });
+    if (response.status === 410 && slot != null) throw new NotRetainedError(`slot ${slot}`);
     if (!response.ok) return null;
     const text = await response.text();
     try { return JSON.parse(text) as unknown; } catch { return text; }
@@ -57,9 +67,20 @@ function recordFor<T>(value: unknown, round: number): T | null {
  * for the first whose `infoKey` shows round >= `round`, checking it and the
  * next `scan` slots (a cracked Any-Honest round can finalize after later ones).
  */
-export async function findRound<T>(read: SlotReader, opts: { round: number; indexKey?: string;
+export async function findRound<T>(read0: SlotReader, opts: { round: number; indexKey?: string;
   keys: (round: number) => string[]; infoKey?: string; latest?: number; scan?: number }): Promise<RoundHit<T> | null> {
-  const { round, indexKey, keys, infoKey = "beaconinfo", scan = 0 } = opts;
+  const { indexKey, keys, infoKey = "beaconinfo", scan = 0 } = opts;
+  const round = opts.round;
+  // Unretained (410) slots read as nothing; if the round is not found and the
+  // node dropped slots on the way, say so instead of "not found".
+  let gone = false;
+  const read: SlotReader = async (slot, key) => {
+    try { return await read0(slot, key); } catch (e) {
+      if (e instanceof NotRetainedError) { gone = true; return null; }
+      throw e;
+    }
+  };
+  const missing = () => { if (gone) throw new NotRetainedError(`round ${round}`); return null; };
   const look = async (slot: number) => {
     for (const key of keys(round)) {
       const record = recordFor<T>(await read(slot, key), round);
@@ -75,10 +96,10 @@ export async function findRound<T>(read: SlotReader, opts: { round: number; inde
   const top = opts.latest ?? Number(await read(null, "at-slot"));
   if (!Number.isSafeInteger(top) || top < 1) return null;
   const start = await firstSlot(1, top, async (s) => Number((await read(s, infoKey) as { round?: unknown } | null)?.round ?? -1) >= round);
-  if (start == null) return null;
+  if (start == null) return null; // no slot reached the round: it has not happened
   for (let s = start; s <= Math.min(top, start + scan); s++) {
     const found = await look(s);
     if (found) return found;
   }
-  return null;
+  return missing();
 }

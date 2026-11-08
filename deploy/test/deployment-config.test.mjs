@@ -9,7 +9,7 @@ import {
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, setDaoErrors, renounceErrors, fundError,
   effectiveAt, isMoneyProposal, LABS_STAKE_RNG, floorFor, RESERVE_FLOOR_MS, buildErrors, watchAlerts,
   fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources, beaconRate, historyPoint, rateChecks, MIN_RATE,
-  retireRole,
+  retireRole, addRateSample, rateBase,
 } from '../deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -701,4 +701,21 @@ test('relaunch: spawn-<role> --replace retires the old process; dao-handover tak
       [[live.fast, 'Gov.Set-Dao'], [live.fair, 'Gov.Set-Dao'], [live.fast, 'Gov.Renounce-Wallet'], [live.fair, 'Gov.Renounce-Wallet']]);
     assert.equal(fs.readFileSync(tmp, 'utf8'), JSON.stringify(live), 'dry runs write no state');
   } finally { fs.rmSync(tmp, { force: true }); }
+});
+
+test('live rate from now/beaconinfo samples only (the node keeps ~5 min of slots)', () => {
+  let samples = [];
+  const t0 = 1_700_000_000_000;
+  samples = addRateSample(samples, { round: 1000, at: t0 });
+  assert.equal(rateBase(samples, { round: 1000, at: t0 }), null, 'one sample: nothing to measure against');
+  samples = addRateSample(samples, { round: 1060, at: t0 + 30_000 });
+  assert.equal(rateBase(samples, { round: 1060, at: t0 + 30_000 }), null, 'under 60 s apart: not yet');
+  for (let s = 1; s <= 20; s++) samples = addRateSample(samples, { round: 1000 + 120 * s, at: t0 + 60_000 * s });
+  const now = samples.at(-1);
+  const then = rateBase(samples, now);
+  assert.equal(now.at - then.at, 300_000, 'the sample nearest 5 minutes back');
+  const r = beaconRate({ then, now, recent: [] });
+  assert.equal(r.rate, 2);
+  assert.ok(samples[0].at >= now.at - 900_000, 'only the last 15 minutes are kept');
+  assert.equal(addRateSample(samples, null).length, samples.length, 'an unreadable info adds nothing');
 });
