@@ -833,8 +833,14 @@ async function scheduleProcess(node, jwk, proc) {
   throw new Error(`spawn failed on ${node}:\n  ${tried.join('\n  ')}`);
 }
 
-/** The schedule route a node was last seen to accept. See `sendMessage`. */
+/**
+ * The schedule route TEMPLATE a node was last seen to accept, `{pid}` standing
+ * for the process. See `sendMessage`. Never a concrete path: caching one with
+ * the pid in it sent every later message, to any process, to the first
+ * process's schedule (a 500 `process_not_available`).
+ */
 const SCHEDULE_ROUTE = new Map();
+const SCHEDULE_TEMPLATES = ['/{pid}~process@1.0/schedule', '/{pid}~scheduler@1.0/schedule', '/{pid}/schedule'];
 
 /**
  * Where signed sends are reported. Null by default, so every script that does
@@ -964,17 +970,15 @@ export async function sendMessage({
   // deploy — 17 Admin.Load batches, then a message per paid-list chunk — and
   // paying a failed round trip before each of them would be slower than the
   // deploy itself.
-  const candidates = path
-    ? [path]
-    : [`/${pid}~process@1.0/schedule`, `/${pid}~scheduler@1.0/schedule`, `/${pid}/schedule`];
   const known = SCHEDULE_ROUTE.get(node);
-  const ordered = known && !path
-    ? [known, ...candidates.filter((p) => p !== known)]
-    : candidates;
+  const ordered = path
+    ? [null]
+    : (known ? [known, ...SCHEDULE_TEMPLATES.filter((t) => t !== known)] : SCHEDULE_TEMPLATES);
 
   const tried = [];
   let lastResponse = null;
-  for (const candidate of ordered) {
+  for (const template of ordered) {
+    const candidate = template === null ? path : template.replace('{pid}', pid);
     let res;
     try {
       res = await postSigned(node, candidate, msg, jwk);
@@ -984,7 +988,7 @@ export async function sendMessage({
     }
     lastResponse = res;
     if (res.status === 200) {
-      if (!path) SCHEDULE_ROUTE.set(node, candidate);
+      if (!path) SCHEDULE_ROUTE.set(node, template);
       const slot = res.headers['slot'];
       // Queued, not awaited, and not raced. The push is still best-effort from
       // the caller's point of view — the message is already accepted, and

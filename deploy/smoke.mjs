@@ -147,9 +147,7 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
   /** Signed with httpsig (validator/vendor/hbclient), settled as deploy.mjs does. */
   async function hsend(pid, tags, data, as = jwk) {
     const q = guard(pid, tags);
-    // An explicit path: hbclient caches the first accepted route per node, pid included,
-    // so a second process would be posted to the first one's schedule.
-    const { slot } = await hb.sendMessage({ node, jwk: as, process: pid, tags, data, path: `/${pid}~process@1.0/schedule` });
+    const { slot } = await hb.sendMessage({ node, jwk: as, process: pid, tags, data });
     await hb.awaitComputedSlot({ node, process: pid, slot });
     const out = await output(pid, slot);
     if (pid === token) refund(q, out);
