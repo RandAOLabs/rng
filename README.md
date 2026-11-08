@@ -39,7 +39,7 @@ rng.request(msg, { tier = "beacon", on = "Loot-Roll", ctx = { player = msg.From 
 | `validator/` | fast-tier committee daemon, Any-Honest validator and cracker, Dockerfiles |
 | `site/` | randao.net console (vinext on workerd), its deploy config and tests |
 | `deploy/` | `deploy.mjs`, launch runbook, configs, snapshots, DAO proposal templates |
-| `docs/` | [SPEC](docs/SPEC.md) (threshold BLS), [ANY_HONEST](docs/ANY_HONEST.md), [PERMISSIONLESS](docs/PERMISSIONLESS.md) (v3 design), paper, soak |
+| `docs/` | [index](docs/README.md): [ARCHITECTURE](docs/ARCHITECTURE.md) (v3 diagrams), [v3 whitepaper](docs/whitepaper/README.md), [SPEC](docs/SPEC.md) (threshold BLS), [ANY_HONEST](docs/ANY_HONEST.md), [PERMISSIONLESS](docs/PERMISSIONLESS.md) (v3 design record), [v2 paper](docs/paper/), [v1 whitepaper](docs/whitepaper-v1/), [history](docs/history/README.md) |
 
 ## Test
 
