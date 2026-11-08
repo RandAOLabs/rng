@@ -75,7 +75,15 @@ export function paceScale(rate: number, target = 2): string {
   const cells = Array.from({ length: half * 2 + 1 }, (_, i) => (i === half + offset ? "●" : "·"));
   const bar = `[${cells.slice(0, half - 1).join("")}|${cells.slice(half - 1, half + 2).join("")}|${cells.slice(half + 2).join("")}]`;
   const label = rate < target * 0.9 ? "SLOW" : rate > target * 1.1 ? "FAST" : "ON_PACE";
-  return `${bar} ${label}`;
+  return `${bar} ${label.padEnd(7)}`;
+}
+
+// Fixed width so the rate, gauge and label never shift as the numbers change.
+export function paceText(rate?: number): string {
+  const width = paceScale(2).length + 13;
+  if (!rate) return "MEASURING".padEnd(width);
+  const shown = Math.min(rate, 99.9).toFixed(1).padStart(4);
+  return `${shown}_PER_SEC ${paceScale(rate)}`;
 }
 
 function RoundTrack({ track, ok }: { track: Track; ok: boolean }) {
@@ -103,7 +111,7 @@ function BeaconPipeline({ validators, tracks, ok, total, rate }: { validators: V
     <div className="pipe">
       <div className="pipe-total">
         <div><span>TOTAL_ROUNDS</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
-        <small className="pipe-pace">{rate ? `${rate.toFixed(1)}_PER_SEC ${paceScale(rate)}` : "MEASURING"}</small>
+        <small className="pipe-pace">{paceText(rate)}</small>
       </div>
       <div className="pipe-head">
         <div><span>VALIDATORS</span><b>{validators.length || "—"}</b></div>

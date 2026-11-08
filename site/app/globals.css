@@ -77,7 +77,7 @@ a.live-beacon:hover, a.live-beacon:focus-visible { border-color: var(--white); }
 .pipe-total { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 14px; font-size: 9px; letter-spacing: .08em; color: var(--dim); }
 .pipe-total { flex-wrap: wrap; }
 .pipe-total > div { display: flex; align-items: baseline; gap: 12px; }
-.pipe-pace { color: var(--gray); font-size: 10px; letter-spacing: .04em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pipe-pace { color: var(--gray); font-family: var(--mono); font-size: 10px; letter-spacing: .04em; white-space: pre; font-variant-numeric: tabular-nums; }
 .pipe-total b {color: var(--white); font-size: 28px; font-weight: 400; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 .pipe-head, .track { display: grid; grid-template-columns: var(--tag) repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pipe-head { padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 9px; letter-spacing: .08em; }
