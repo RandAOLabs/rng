@@ -5,7 +5,7 @@
   "workspaces": ["lib/js", "validator"],
   "scripts": {
     "test": "npm run test:protocol && npm run test:node && npm run test:site",
-    "test:protocol": "node protocol/test/run-tests.mjs && node protocol/test/run-token-tests.mjs && node protocol/test/run-beacon-tests.mjs && node protocol/test/run-anyhonest-tests.mjs && node protocol/test/run-fair-tests.mjs",
+    "test:protocol": "node protocol/test/run-tests.mjs && node protocol/test/run-token-tests.mjs && node protocol/test/run-beacon-tests.mjs && node protocol/test/run-anyhonest-tests.mjs && node protocol/test/run-fair-tests.mjs && node --test protocol/test/throughput.test.mjs",
     "test:node": "node --test validator/test/bls.test.mjs validator/test/history.test.mjs validator/test/anyhonest.test.mjs validator/test/validator.test.mjs deploy/test/deployment-config.test.mjs",
     "test:site": "npm --prefix site test",
     "test:live": "node protocol/test/run-tests.mjs --live && node protocol/test/run-beacon-tests.mjs --live && node protocol/test/run-anyhonest-tests.mjs --live"
