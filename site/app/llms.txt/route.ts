@@ -36,8 +36,8 @@ binding, balances, and fees.
 - Verifying a signature: free at the protocol layer.
 - Deriving bytes: free at the protocol layer.
 - Requesting a new fast result: 3 RNG on the current testnet.
-- Requesting a one-shot Any-Honest result: 4 TEST-RNG.
-- Secure process subscription: 1 TEST-RNG for 1,000 authenticated pushes.
+- Requesting a one-shot Any-Honest result: 4 RNG.
+- Secure process subscription: 1 RNG for 1,000 authenticated pushes.
 
 Public reads are free but inherit the selected gateway view. The strongest
 delivery path is a prepaid AO process subscription bound before the reveal

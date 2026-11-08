@@ -107,8 +107,8 @@ async function callTool(name: unknown, args: Record<string, unknown>) {
     free: ["local deterministic streams", "round reads", "signature verification", "byte derivation"],
     paid: {
       fastRequest: "3 RNG",
-      anyHonestRequest: "4 TEST-RNG",
-      secureSubscription: "1 TEST-RNG for 1,000 authenticated process pushes",
+      anyHonestRequest: "4 RNG",
+      secureSubscription: "1 RNG for 1,000 authenticated process pushes",
       buy: "No faucet: RNG is a fixed-supply token; buy it on the Paralith orderbook (RNG/GOLD, coming soon)",
     },
     deliveryTrust: "Public reads are free but trust the selected gateway view. A prepaid process subscription binds before reveal and receives the authenticated result from the beacon process.",
