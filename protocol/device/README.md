@@ -1,4 +1,6 @@
-# timelock@1.0: the HyperBEAM device
+# rng@1.0: the HyperBEAM device
+
+(Earlier drafts called it `timelock@1.0`; the deployed device and every call in this repo use `~rng@1.0`.)
 
 Stateless, deterministic checks the beacons run on the node, so verifying a
 round is one call instead of a fleet of verifier processes:
@@ -20,7 +22,7 @@ Full reference: `timelock-at-1-0.md`.
 From a Lua process:
 
 ```lua
-local status, res = ao.resolve({ path = "/~timelock@1.0/verify-reveal", c = c, alpha = alpha, h = h })
+local status, res = ao.resolve({ path = "/~rng@1.0/verify-reveal", c = c, alpha = alpha, h = h })
 -- res.valid == true, res.y is the canonical output
 ```
 

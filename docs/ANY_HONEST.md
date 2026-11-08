@@ -1,8 +1,8 @@
 # HyperBEAM RNG Any-Honest v3
 
-Status: v3 (permissionless, DAO-governed, fixed supply, fair play) is built on
-branch `permissionless` and not yet deployed. The live testnet beacon is still
-v2 (`MZMoXv-2`) until the cutover in [`deploy/README.md`](../deploy/README.md).
+Status: v3 (permissionless, DAO-governed, fixed supply, fair play) is live on
+main since 2026-11-07: beacon `98AkinkW…`, ids in
+[`deploy/v3-mainnet.json`](../deploy/v3-mainnet.json).
 Design, threat model and economics: [`docs/PERMISSIONLESS.md`](PERMISSIONLESS.md).
 
 ## Purpose
