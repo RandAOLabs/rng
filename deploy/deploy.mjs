@@ -43,6 +43,8 @@
 //                                           the beacon's 5-minute rate >= RNG_MIN_RATE (default 1.8 rounds/s)
 //                                           and its round latency p50 < commitWindowMs/2)
 //   test-subscription                       authenticated-push acceptance test against the v3 beacon
+//   smoke [--n N] [--only A,B] [--load 30]  live end-to-end test through the client libraries (deploy/smoke.mjs);
+//                                           spends at most 2,000 RNG, only to the beacon, fast tier and fair
 //   plan <allocations.json> [params.json]   the whole v3 sequence, dry-run only
 //
 // Legacy, against the LIVE v2 beacon until cutover (state: RNG_LEGACY_STATE,
@@ -1021,6 +1023,12 @@ async function main(argv) {
       const expected = sha256(`hyperbeam/rng/subscription/v1|${round.value}|${id}|${receipt.lastRound}`);
       if (receipt.lastValue !== expected) throw new Error('subscription value failed independent verification');
       log({ op: 'subscription', consumer, id, round: receipt.lastRound, verified: true });
+    },
+
+    async smoke() {
+      if (DRY) throw new Error('smoke is live only');
+      const { main: smoke } = await import('./smoke.mjs');
+      await smoke({ args: rest, node: NODE, jwk, state });
     },
 
     async plan(allocFile, paramsFile) {
