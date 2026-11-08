@@ -34,6 +34,13 @@
       "executionDevice": "lua@5.3a",
       "sourceSha256": "8a570ec07e30769218b9ccda42e91ee9c5262ae9d8cc190e68ea57d7e98b3666",
       "at": "2026-11-07T22:49:18.881Z"
+    },
+    "qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c": {
+      "role": "subscriptionConsumer",
+      "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "d47fdee91f7e251a0c40cf4f00e868b1f64bd36c73a0edeafc1c3e9d0471dfa8",
+      "at": "2026-11-08T00:24:56.811Z"
     }
   },
   "deployer": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
@@ -102,5 +109,6 @@
       "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
       "walletRenounced": true
     }
-  }
+  },
+  "subscriptionConsumer": "qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c"
 }
