@@ -33,6 +33,6 @@ export function SiteHeader({ active }: Props) {
 
 export function SiteFooter() {
   return (
-    <footer className="footer"><strong>RNG_LABS // CIPHERPLAY_INC</strong><span>HYPERBEAM_RNG_V1 :: TESTNET_CANDIDATE</span></footer>
+    <footer className="footer"><strong>RNG_LABS // CIPHERPLAY_INC</strong><span>HYPERBEAM_RNG_V3 :: MAINNET</span></footer>
   );
 }
