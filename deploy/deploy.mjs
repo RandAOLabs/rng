@@ -69,7 +69,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+// LF only: a bundle (and its code root) is the same bytes on every checkout.
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 export const UNIT = 1_000_000;
