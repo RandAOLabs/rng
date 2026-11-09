@@ -43,3 +43,6 @@ yarn-error.log*
 
 # OS metadata
 .DS_Store
+
+# Built from ../docs by scripts/build-docs.mjs
+/lib/docs-content.generated.ts

@@ -3,8 +3,12 @@ import {
   extendedNetworkConfig,
   getAnyHonestStatus,
   getGovernanceStatus,
+  getLivePrices,
   getNetworkStatus,
 } from "../../lib/rng";
+import { listDocs, readDoc, searchDocs, docPages } from "../../lib/docs";
+import { DEPLOY } from "../../lib/docs-content.generated";
+import { requestTemplates } from "../../lib/request-templates";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +67,53 @@ const tools = [
     description: "Explain which RNG operations need a wallet or test credits before an agent builds a flow.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
+  {
+    name: "rng_docs_list",
+    description: "List the RandAO RNG protocol docs (randao.net/docs): slug, title, summary, URLs and section ids.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "rng_docs_read",
+    description: "Read one doc page as markdown, or one section of it by its heading id (from rng_docs_list or rng_docs_search).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", enum: docPages.map((page) => page.slug) },
+        section: { type: "string", maxLength: 200 },
+      },
+      required: ["slug"], additionalProperties: false,
+    },
+  },
+  {
+    name: "rng_docs_search",
+    description: "Search the protocol docs. Returns the best-matching sections (every term must appear) with snippets and links.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 200 },
+        limit: { type: "integer", minimum: 1, maximum: 25, default: 8 },
+      },
+      required: ["query"], additionalProperties: false,
+    },
+  },
+  {
+    name: "rng_request_templates",
+    description: "Live process ids, current prices and the exact message (target + tags) for every request type: Fast, Any-Honest, subscriptions, balances, withdrawals and fair play, with how each result arrives.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
 ] as const;
+
+async function liveTemplates() {
+  const cfg = extendedNetworkConfig();
+  const prices = await getLivePrices();
+  const ids = { token: cfg.token, fast: cfg.beacon, anyHonest: cfg.anyHonest, fair: cfg.fair,
+    dao: cfg.dao, subscriptionConsumer: DEPLOY.subscriptionConsumer, scheduler: DEPLOY.scheduler };
+  // The site's env names the live ids; say so whenever deploy/v3-mainnet.json disagrees.
+  const fromFile = { token: DEPLOY.token, fast: DEPLOY.fast, anyHonest: DEPLOY.anyHonest, fair: DEPLOY.fair, dao: DEPLOY.dao };
+  const differ = Object.entries(fromFile).filter(([k, v]) => ids[k as keyof typeof fromFile] !== v).map(([k]) => k);
+  return { network: cfg.label, ...requestTemplates(ids, prices), priceSource: prices.source,
+    ...(differ.length ? { idsDifferFromDeployFile: differ } : {}), docs: "https://randao.net/docs/use" };
+}
 
 function textResult(value: unknown, isError = false) {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) };
@@ -115,6 +165,20 @@ async function callTool(name: unknown, args: Record<string, unknown>) {
     governance: "YapDAO (stake-dao/1) staked in RNG governs the beacon: passed proposals send Gov.* actions. The launch wallet renounces at launch, so the DAO is the only owner of the beacon, fair play and the fast tier. Money and code actions wait for their Effective-At (at least 24 h after they arrive; published as `govPending`), and while one waits validators may leave at once with their bond (Exit-Now, `hatch` in beaconinfo); fees, pause and resume apply on receipt. Owners are published as `gov` in beaconinfo. There is no guardian.",
     recommendedUX: "The AO application process should prepay requests or a subscription so end users never manage RNG credits.",
   });
+  if (name === "rng_docs_list") return textResult(listDocs());
+  if (name === "rng_docs_read") {
+    const section = args.section === undefined ? undefined : String(args.section);
+    const doc = readDoc(String(args.slug), section);
+    if (!doc) throw new Error(section ? `no section "${section}" in doc "${String(args.slug)}"` : `unknown doc: ${String(args.slug)}`);
+    return textResult(doc.markdown);
+  }
+  if (name === "rng_docs_search") {
+    if (typeof args.query !== "string" || !args.query.trim() || args.query.length > 200) throw new Error("query must be a non-empty string of at most 200 characters");
+    const limit = args.limit === undefined ? 8 : Number(args.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25) throw new Error("limit must be an integer from 1 to 25");
+    return textResult(searchDocs(args.query, limit));
+  }
+  if (name === "rng_request_templates") return textResult(await liveTemplates());
   throw new Error(`unknown tool: ${String(name)}`);
 }
 

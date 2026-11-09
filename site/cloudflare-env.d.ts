@@ -7,6 +7,7 @@ declare namespace Cloudflare {
     RNG_TOKEN_ID?: string;
     RNG_ANYHONEST_ID?: string;
     RNG_DAO_ID?: string;
+    RNG_FAIR_ID?: string;
     RNG_NETWORK_LABEL?: string;
   }
 }

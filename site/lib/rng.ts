@@ -1,6 +1,7 @@
 import { bls12_381 as bls } from "@noble/curves/bls12-381.js";
 import { env } from "cloudflare:workers";
 import { findRound, httpReader } from "../../lib/js/history";
+import { DEFAULT_PRICES, DEPLOY } from "./docs-content.generated";
 export { deriveBytes, fastRequestValue } from "../../lib/js/derive";
 
 const encoder = new TextEncoder();
@@ -34,7 +35,40 @@ export function networkConfig() {
 
 export function extendedNetworkConfig() {
   const cfg = networkConfig();
-  return { ...cfg, anyHonest: env.RNG_ANYHONEST_ID || "", dao: env.RNG_DAO_ID || "" };
+  // The fair process from deploy/v3-mainnet.json only when this site runs on that token.
+  const fair = env.RNG_FAIR_ID || (cfg.token === DEPLOY.token ? DEPLOY.fair : "");
+  return { ...cfg, anyHonest: env.RNG_ANYHONEST_ID || "", dao: env.RNG_DAO_ID || "", fair };
+}
+
+/**
+ * Live prices for rng_request_templates, read from each process; a process
+ * that cannot be read falls back to the genesis defaults (deploy/), and the
+ * result says which.
+ */
+export async function getLivePrices() {
+  const cfg = extendedNetworkConfig();
+  const read = <T,>(pid: string, key: string) => pid
+    ? readJson<T>(`${cfg.node}/${pid}~process@1.0/now/${key}`).catch(() => null) : Promise.resolve(null);
+  const [fast, anyHonest, fair] = await Promise.all([
+    read<{ price?: { fast?: number; beacon?: number }; unit?: number }>(cfg.beacon, "beaconinfo"),
+    read<{ priceSchedule?: { request: number; subscription: number; subscriptionRounds: number }; unit?: number }>(cfg.anyHonest, "beaconinfo"),
+    read<{ requestPriceAtoms?: number }>(cfg.fair, "fairinfo"),
+  ]);
+  const unit = Number(anyHonest?.unit ?? fast?.unit ?? DEFAULT_PRICES.unit);
+  const fastPrice = fast?.price?.fast ?? fast?.price?.beacon;
+  const schedule = anyHonest?.priceSchedule;
+  return {
+    unit,
+    fast: { request: Number(fastPrice ?? DEFAULT_PRICES.fast.request) },
+    anyHonest: {
+      request: Number(schedule?.request ?? DEFAULT_PRICES.anyHonest.request),
+      subscription: Number(schedule?.subscription ?? DEFAULT_PRICES.anyHonest.subscription),
+      subscriptionRounds: Number(schedule?.subscriptionRounds ?? DEFAULT_PRICES.anyHonest.subscriptionRounds),
+    },
+    fairRequestAtoms: Number(fair?.requestPriceAtoms ?? DEFAULT_PRICES.anyHonest.request * unit),
+    source: { fast: fastPrice != null ? "live" : "default", anyHonest: schedule ? "live" : "default",
+      fair: fair?.requestPriceAtoms != null ? "live" : "default" },
+  };
 }
 
 async function readJson<T>(url: string, accept = "application/ao"): Promise<T> {

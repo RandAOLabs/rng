@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 export async function resolve(specifier, context, next) {
+  if (specifier === 'cloudflare:workers') return { url: new URL('./cloudflare-workers-stub.mjs', import.meta.url).href, shortCircuit: true };
   if ((specifier.startsWith('./') || specifier.startsWith('../')) && !/\.[cm]?[jt]sx?$/.test(specifier)) {
     for (const ext of ['.ts', '.tsx']) {
       const url = new URL(specifier + ext, context.parentURL);

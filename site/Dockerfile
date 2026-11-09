@@ -15,6 +15,11 @@ COPY --chown=node:node site/package.json site/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY --chown=node:node lib/js /app/lib/js
+# /docs is rendered from these at build time (scripts/build-docs.mjs).
+COPY --chown=node:node docs/USE.md docs/ARCHITECTURE.md docs/ANY_HONEST.md docs/PERMISSIONLESS.md docs/SPEC.md /app/docs/
+COPY --chown=node:node docs/whitepaper /app/docs/whitepaper
+COPY --chown=node:node docs/architecture /app/docs/architecture
+COPY --chown=node:node deploy/v3-mainnet.json deploy/v3-params.json deploy/committee.json /app/deploy/
 COPY --chown=node:node site/ .
 RUN npm run build \
   && sed -i 's/\r$//' docker-entrypoint.sh \

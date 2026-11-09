@@ -2,6 +2,7 @@
 
 Current (v3, live):
 
+- [USE.md](USE.md): how to request randomness on each tier, with the exact messages.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how RNG works today, as Mermaid diagrams (SVG copies in [architecture/](architecture/)).
 - [whitepaper/](whitepaper/README.md): the v3 whitepaper, checked against the code.
 - [PERMISSIONLESS.md](PERMISSIONLESS.md): v3 design record; "Governance at launch" is current.

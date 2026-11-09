@@ -12,6 +12,7 @@ npm run start:container -- \
   --var "RNG_TOKEN_ID:${RNG_TOKEN_ID}" \
   --var "RNG_ANYHONEST_ID:${RNG_ANYHONEST_ID:-}" \
   --var "RNG_DAO_ID:${RNG_DAO_ID:-}" \
+  --var "RNG_FAIR_ID:${RNG_FAIR_ID:-}" \
   --var "RNG_NETWORK_LABEL:${RNG_NETWORK_LABEL:-Testnet}" &
 SERVER=$!
 

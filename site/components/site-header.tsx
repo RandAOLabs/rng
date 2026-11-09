@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- full reloads avoid broken Vinext client navigation */
 import Image from "next/image";
 
-type ActivePage = "why" | "how" | "try" | "dao" | "validators";
+type ActivePage = "why" | "how" | "try" | "dao" | "validators" | "docs";
 type Props = { active?: ActivePage };
 
 const navigation: Array<{ key: ActivePage; index: string; label: string; href: string }> = [
@@ -10,6 +10,7 @@ const navigation: Array<{ key: ActivePage; index: string; label: string; href: s
   { key: "try", index: "03", label: "TRY", href: "/try" },
   { key: "dao", index: "04", label: "DAO", href: "/dao" },
   { key: "validators", index: "05", label: "VALIDATE", href: "/validators" },
+  { key: "docs", index: "06", label: "DOCS", href: "/docs" },
 ];
 
 export function SiteHeader({ active }: Props) {

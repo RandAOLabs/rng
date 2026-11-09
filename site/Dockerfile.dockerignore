@@ -1,6 +1,16 @@
 *
 !site
 !lib/js
+!docs/USE.md
+!docs/ARCHITECTURE.md
+!docs/ANY_HONEST.md
+!docs/PERMISSIONLESS.md
+!docs/SPEC.md
+!docs/whitepaper
+!docs/architecture
+!deploy/v3-mainnet.json
+!deploy/v3-params.json
+!deploy/committee.json
 site/node_modules
 site/dist
 site/.next
