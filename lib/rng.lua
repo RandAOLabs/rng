@@ -1,8 +1,9 @@
 -- rng.lua: HyperBEAM RNG client library by RNG Labs, a CipherPlay Inc. product.
 --
--- One API for both implemented security tiers. Tier "local" answers inside
--- the current message with no network calls; tier "beacon" sends one request
--- to the beacon process and runs the same continuation when the result lands.
+-- One API for every tier. Tier "local" answers inside the current message
+-- with no network calls; tiers "fast" (threshold BLS) and "any-honest" (the
+-- time-lock beacon) send one request to that tier's process and run the same
+-- continuation when the result lands.
 --
 -- Written for Lua 5.3 as HyperBEAM's Luerl runs it: no goto, no string.pack,
 -- no unary ~, no math.random. Every number is derived from SHA-256, so every
@@ -181,11 +182,19 @@ RngPending = RngPending or {}
 RngNonce = RngNonce or { id = nil, n = 0 }
 
 local continuations = {}
-local cfg = { beacon = nil, send = nil, json = nil, outbox = nil }
+local cfg = { fast = nil, anyHonest = nil, beacon = nil, send = nil, json = nil, outbox = nil }
 
-local TIERS = { ["local"] = true, beacon = true }
+--- Paid tier -> the config key naming its process. "beacon" is the old name
+--- of the Fast tier and still works (it reads cfg.fast, else cfg.beacon).
+local TIERS = { ["local"] = true, fast = "fast", beacon = "fast", ["any-honest"] = "anyHonest" }
 
---- Set the beacon process id and, optionally, how to send and decode.
+local function tierProcess(tier)
+  if TIERS[tier] == "fast" then return cfg.fast or cfg.beacon end
+  return cfg[TIERS[tier]]
+end
+
+--- Set the tier process ids (fast, anyHonest; beacon = old name for fast)
+--- and, optionally, how to send and decode.
 --- send(msg) defaults to ao.send; json defaults to require(".json") or
 --- require("json"). Native compute() processes (no ao.send) instead set
 --- outbox = base.results.outbox for each message; requests are written there.
@@ -232,7 +241,7 @@ local function run(name, stream, ctx, info)
 end
 
 --- Ask for randomness. opts: on (continuation name, required), ctx (table
---- passed back), tier ("local" default or "beacon"), salt.
+--- passed back), tier ("local" default, "fast" or "any-honest"), salt.
 --- Returns the request id. Tier "local" runs the continuation before returning.
 function rng.request(msg, opts)
   opts = opts or {}
@@ -246,20 +255,22 @@ function rng.request(msg, opts)
       { tier = "local", requestId = requestId })
     return requestId
   end
-  assert(cfg.beacon, "rng: paid tiers need rng.config{ beacon = <process id> }")
-  RngPending[requestId] = { on = opts.on, ctx = opts.ctx, tier = tier }
+  local target = tierProcess(tier)
+  assert(target, "rng: tier '" .. tier .. "' needs rng.config{ " .. TIERS[tier] .. " = <process id> }")
+  if tier == "beacon" then tier = "fast" end
+  RngPending[requestId] = { on = opts.on, ctx = opts.ctx, tier = tier, from = target }
   -- No time on the request: the beacon uses its scheduler's, and the
   -- scheduler refuses a copy of this message.
   if cfg.outbox then
     cfg.outbox["rng-request-" .. requestId] = {
-      target = cfg.beacon, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
+      target = target, Action = "Request-Random", Tier = tier, ["Request-Id"] = requestId,
     }
     return requestId
   end
   local send = cfg.send or (type(ao) == "table" and ao.send)
   assert(send, "rng: no send function; pass rng.config{ send = ... } or { outbox = ... }")
   send({
-    Target = cfg.beacon,
+    Target = target,
     Action = "Request-Random",
     Tier = tier,
     ["Request-Id"] = requestId,
@@ -267,15 +278,16 @@ function rng.request(msg, opts)
   return requestId
 end
 
---- Handle an RNG-Result message from the beacon. Runs the continuation of
---- every request it carries that this process is still waiting on. Returns
+--- Handle an RNG-Result message from a tier process. Runs the continuation of
+--- every request it carries that this process is still waiting on and sent
+--- to that same process. Returns
 --- how many ran, or nil and a reason when the message is refused.
 --- `from` is the proven sender; native processes pass their own actor()
 --- result, aos processes can omit it and msg.From is used.
 function rng.handle(msg, from)
   from = from or msg.From
-  if not cfg.beacon or from ~= cfg.beacon then
-    return nil, "not from the configured beacon"
+  if from == nil or (from ~= tierProcess("fast") and from ~= cfg.anyHonest) then
+    return nil, "not from a configured tier process"
   end
   local json = cfg.json
   if not json then
@@ -290,7 +302,7 @@ function rng.handle(msg, from)
   local ran = 0
   for _, res in ipairs(data.results or {}) do
     local p = RngPending[res.requestId]
-    if p then
+    if p and p.from == from then
       RngPending[res.requestId] = nil
       run(p.on, rng.stream("beacon|" .. res.value), p.ctx, {
         tier = p.tier, requestId = res.requestId, round = res.round, value = res.value,

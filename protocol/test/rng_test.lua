@@ -40,7 +40,7 @@ local INT = { 6, 3, 4, 2, 6, 6, 1, 5, 2, 3 }
 
 local function reset()
   RngPending, RngNonce = {}, { id = nil, n = 0 }
-  rng.config({ beacon = false, send = false, json = false })
+  rng.config({ fast = false, anyHonest = false, beacon = false, send = false, json = false })
 end
 
 function runRngTests()
@@ -139,7 +139,7 @@ function runRngTests()
     eq("one message sent", #sent, 1)
     eq("to beacon", sent[1].Target, "beacon-pid")
     eq("action", sent[1].Action, "Request-Random")
-    eq("tier tag", sent[1].Tier, "beacon")
+    eq("tier tag: old name beacon sends fast", sent[1].Tier, "fast")
     eq("request id tag", sent[1]["Request-Id"], id)
     eq("no time on the request", sent[1]["Request-Time"], nil)
     rng.request({ Id = "m-10", Target = "game", Timestamp = 1700000000123 }, { tier = "beacon", on = "Loot" })
@@ -160,11 +160,34 @@ function runRngTests()
     eq("second delivery ignored", rng.handle(result), 0)
   end)
 
+  test("any-honest goes to its own process; a result only resolves from where it was sent", function()
+    reset()
+    local sent, ran = {}, {}
+    rng.config({ fast = "fast-pid", anyHonest = "ah-pid", send = function(m) sent[#sent + 1] = m end })
+    rng.on("Roll", function(r, ctx, info) ran[#ran + 1] = info end)
+    local ah = rng.request({ Id = "m-1", Target = "game" }, { tier = "any-honest", on = "Roll" })
+    local fast = rng.request({ Id = "m-2", Target = "game" }, { tier = "fast", on = "Roll" })
+    eq("any-honest target", sent[1].Target, "ah-pid")
+    eq("any-honest tier tag", sent[1].Tier, "any-honest")
+    eq("fast target", sent[2].Target, "fast-pid")
+    eq("fast tier tag", sent[2].Tier, "fast")
+    local wrong = { From = "fast-pid", Data = { results = { { requestId = ah, value = "aa", round = 1 } } } }
+    eq("fast cannot answer an any-honest request", rng.handle(wrong), 0)
+    local right = { From = "ah-pid", Data = { results = { { requestId = ah, value = "aa", round = 1 } } } }
+    eq("any-honest answers its own", rng.handle(right), 1)
+    eq("info tier", ran[1].tier, "any-honest")
+    local f = { From = "fast-pid", Data = { results = { { requestId = fast, value = "bb", round = 2 } } } }
+    eq("fast answers its own", rng.handle(f), 1)
+    eq("fast info tier", ran[2].tier, "fast")
+    local n = rng.handle({ From = "stranger", Data = right.Data })
+    check("unconfigured sender refused", n == nil)
+  end)
+
   test("bad input is refused", function()
     reset()
     rng.on("X", function() end)
     check("unknown tier", not pcall(rng.request, { Id = "a" }, { on = "X", tier = "gold" }))
-    check("unimplemented tier", not pcall(rng.request, { Id = "a" }, { on = "X", tier = "fast" }))
+    check("any-honest without its process", not pcall(rng.request, { Id = "a" }, { on = "X", tier = "any-honest" }))
     check("missing continuation name", not pcall(rng.request, { Id = "a" }, {}))
     check("paid tier without beacon", not pcall(rng.request, { Id = "a" }, { on = "X", tier = "beacon" }))
     check("int with bad range", not pcall(function() rng.stream("x"):int(5, 1) end))

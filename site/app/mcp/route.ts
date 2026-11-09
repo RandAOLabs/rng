@@ -121,7 +121,7 @@ function textResult(value: unknown, isError = false) {
 
 function guide(language: string) {
   const cfg = extendedNetworkConfig();
-  if (language === "lua") return `local rng = require("rng")\n\nrng.on("Loot-Roll", function(stream, ctx)\n  grantLoot(ctx.player, stream:int(1, 6))\nend)\n\nrng.config({ beacon = "${cfg.beacon}" })\nrng.request(msg, { tier = "beacon", on = "Loot-Roll", ctx = { player = msg.From } })`;
+  if (language === "lua") return `local rng = require("rng")\n\nrng.on("Loot-Roll", function(stream, ctx)\n  grantLoot(ctx.player, stream:int(1, 6))\nend)\n\nrng.config({ fast = "${cfg.beacon}" })\nrng.request(msg, { tier = "fast", on = "Loot-Roll", ctx = { player = msg.From } })`;
   if (language === "javascript") return `const { rng } = connect({ MODE: "mainnet", URL: HYPERBEAM_URL })\n\nconst verified = await rng.verifyRound({\n  publicKey: GROUP_PUBLIC_KEY_HEX,\n  beacon: "${cfg.beacon}",\n  round,\n  signature\n}).then(r => r.json())\n\nconst bytes = await rng.derive({ seed: verified.value, counter: 0, bytes: 32 }).then(r => r.json())`;
   return `GET <hyperbeam-node>/${cfg.beacon}~process@1.0/now/beaconinfo\nGET <hyperbeam-node>/${cfg.beacon}~process@1.0/now/beaconstate\nGET <hyperbeam-node>/${cfg.anyHonest}~process@1.0/now/beaconinfo\nGET <hyperbeam-node>/${cfg.anyHonest}~process@1.0/now/timelockstate\n\nThreshold signing message: hyperbeam/rng/v1|<beacon>|<round>\nAny-Honest round domain: hyperbeam/rng/any-honest/v1/round`;
 }

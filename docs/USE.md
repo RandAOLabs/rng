@@ -178,15 +178,16 @@ Data: { "round": 12, "signature": "<hex>", "derivation": "hyperbeam/rng/fast/v2/
 With `lib/rng.lua`:
 
 ```lua
-rng.config({ beacon = "NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY" })
+rng.config({ fast = "NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY",
+             anyHonest = "98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM" })
 rng.handlers(Handlers)                 -- aos: routes RNG-Result to rng.handle
 rng.on("Loot", function(stream, ctx, info) grant(ctx.player, stream:int(1, 100)) end)
-rng.request(msg, { tier = "beacon", on = "Loot", ctx = { player = msg.From } })
+rng.request(msg, { tier = "fast", on = "Loot", ctx = { player = msg.From } })
 ```
 
-`tier = "beacon"` sends `Tier: beacon`, which only the Fast tier accepts.
-`rng.request` cannot ask the Any-Honest beacon; send its message yourself
-(next section).
+`tier = "any-honest"` asks the Any-Honest beacon the same way. A result
+resolves only when it comes from the process the request went to. The old
+`beacon` config key and tier name still mean Fast.
 
 A round still unsigned 30 minutes after its oldest request is abandoned and
 refunded in full; a requesting process gets
@@ -240,8 +241,9 @@ Data: { "round": 812, "tier": "any-honest", "value": "<round value>",
         "results": [ { "requestId": "<id>", "round": 812, "value": "<hex>" } ] }
 ```
 
-`rng.handle` only resolves requests that `rng.request` made, so handle this
-message yourself: accept it only from the Any-Honest beacon (its attested
+With `lib/rng.lua`, `rng.request(msg, { tier = "any-honest", on = ... })`
+sends this and `rng.handle` resolves the result (see Fast above). Without it,
+accept the result only from the Any-Honest beacon (its attested
 `from-process`) and match `results[].requestId` to your requests.
 `protocol/test/request-consumer.lua` is a minimal native consumer.
 
