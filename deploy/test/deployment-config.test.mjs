@@ -720,3 +720,17 @@ test('live rate from now/beaconinfo samples only (the node keeps ~5 min of slots
   assert.ok(samples[0].at >= now.at - 900_000, 'only the last 15 minutes are kept');
   assert.equal(addRateSample(samples, null).length, samples.length, 'an unreadable info adds nothing');
 });
+
+test('code-root matches gov.lua: one part is sha256(hex(sha256(code))); parts end on a character boundary', async () => {
+  const { codeRoot, GOV_PART_MAX } = await import('../deploy.mjs');
+  const { createHash } = await import('node:crypto');
+  const h = (b) => createHash('sha256').update(b).digest('hex');
+  assert.equal(codeRoot('print(1)').root, h(h('print(1)')));
+  const code = 'a'.repeat(GOV_PART_MAX - 1) + '—' + 'b'.repeat(10);
+  const { parts, manifest, root } = codeRoot(code);
+  assert.equal(parts.length, 2);
+  assert.ok(parts.every((p) => p.length <= GOV_PART_MAX));
+  assert.equal(Buffer.concat(parts).toString('utf8'), code);
+  assert.equal(parts[1].toString('utf8')[0], '—');
+  assert.equal(root, h(manifest));
+});

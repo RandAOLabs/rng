@@ -95,15 +95,21 @@ promise: a ready validator does every round it is given.
   pauses by creating the file `pause` in the device's `secrets-dir`, and
   deletes it to come back.
 
-Every failed duty is a full `slash` (1,000 RNG) of the stake, paid to the DAO
-Treasury, and makes the validator not ready:
+Every failed duty is a full `slash` (1,000 RNG) of the stake, paid into the
+treasury (held in the beacon, spent only by the DAO), and makes the validator
+not ready:
 
 - **Missed commit:** in a round's set, no commit within the commit window.
 - **Missed reveal:** an output missing at the reveal deadline, one slash for
   every such round. A crash with five rounds in flight costs five slashes.
 
 There is no allowance and no window that forgives: a mistake must never be
-cheaper than doing the work. A slashed validator gets no new rounds until it
+cheaper than doing the work. The one exception is an outage of the node
+itself. Validators message the beacon several times a second, so 10 seconds
+with no message at all (scheduler time) means nothing could get in: every
+open round's deadlines move by the gap and nobody is slashed for it. One
+silent validator is still slashed, because the others keep messaging.
+`beaconinfo.lastOutage` shows the last gap forgiven. A slashed validator gets no new rounds until it
 is in good standing again (its late outputs cracked or abandoned) and sends
 Ready.
 

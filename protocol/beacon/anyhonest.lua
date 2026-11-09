@@ -56,6 +56,7 @@ local DAY_MS = 86400000
 -- abandoned (requests refunded) even while the Treasury could pay a bounty:
 -- nothing stays stuck, and the withholder was slashed at the deadline.
 local ABANDON_CAP_MS = 7 * DAY_MS
+local OUTAGE_GAP_MS = 10000 -- no message for this long: the node was down (see forgiveOutage)
 local IDLE_EVICT_MS = 7 * DAY_MS -- a registered validator that never sent Ready may be evicted after this
 local IDLE_FLOOR_MS = 3600000    -- ... and only after this, by a new bond into a full registry
 local MAX_SUBSCRIPTIONS = 16     -- live subscriptions per subscriber
@@ -813,7 +814,27 @@ local function forgetExpired(now)
   end
 end
 
+--- Validators message the beacon several times a second, so a gap of
+--- OUTAGE_GAP_MS between two messages (scheduler time) means nothing could
+--- get in: the node was down. Every open round gets the gap back, so nobody
+--- is slashed for deadlines that passed while they could not send.
+local function forgiveOutage(now)
+  local last = int(Timelock.lastMessageAt, 0)
+  Timelock.lastMessageAt = math.max(last, now)
+  local gap = now - last
+  if last == 0 or gap < OUTAGE_GAP_MS then return end
+  for _, o in pairs(Timelock.opens) do
+    if int(o.firstCommitAt, 0) > 0 then o.firstCommitAt = o.firstCommitAt + gap end
+    if o.phase == "reveal" then
+      o.commitClose = int(o.commitClose, 0) + gap
+      o.revealDeadline = int(o.revealDeadline, 0) + gap
+    end
+  end
+  Timelock.lastOutage = { at = now, gapMs = gap }
+end
+
 local function advance(now)
+  forgiveOutage(now)
   forgetExpired(now)
   closeIfDue(now)
   local rs = {}
@@ -2121,7 +2142,7 @@ local function info(now, healthNow)
     gov = Gov.info(), paused = Timelock.paused == true, transferSeq = int(Timelock.transferSeq, 0),
     -- The DAO's actions waiting for their Effective-At; while a money or
     -- code one waits, the exit hatch is open (Exit-Now).
-    govPending = Gov.pendingView(govQueue(), now), hatch = hatchOpen(now), exitFloorMs = Gov.EXIT_FLOOR_MS,
+    govPending = Gov.pendingView(govQueue(), now), hatch = hatchOpen(now), exitFloorMs = Gov.EXIT_FLOOR_MS, lastOutage = Timelock.lastOutage,
     -- The treasury outflow cap (rolling): spends and reserve funding of the
     -- last `windowMs` (`used`) stay within a tenth of `base` (the treasury
     -- now + `used`); `remaining` may still go out now; the oldest counted
@@ -2135,7 +2156,7 @@ local function info(now, healthNow)
     -- `pay-and-request': a Credit-Notice with X-Request-Id requests in one message.
     -- `effective-at`: the DAO's money and code actions wait (Gov.Apply);
     -- `exit-hatch`: Exit-Now while one waits.
-    features = { "act", "ready", "bond-join", "gov", "pay-and-request", "effective-at", "exit-hatch" },
+    features = { "act", "ready", "bond-join", "gov", "pay-and-request", "effective-at", "exit-hatch", "outage-grace" },
   }
 end
 

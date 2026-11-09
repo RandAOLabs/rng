@@ -64,7 +64,17 @@ local function crack(v, r, target, y, proof)
   return send(wallet(v, { Action = "Crack", Data = encode({ round = r, validator = target, y = y, proof = proof }) }))
 end
 local function request(id) return send(delivery(F.game, { Action = "Request-Random", Tier = "any-honest", ["Request-Id"] = id })) end
-local function tick(ms) return send(wallet(F.stranger, { Action = "Get-Info" }), ms) end
+local function int0(v) return tonumber(v) or 0 end
+-- Time passing on a live network: other traffic reaches the beacon at least
+-- every 5 s, so a long tick is not an outage (see outage() for one).
+-- (Stands in for that traffic by moving the beacon's last-message time.)
+local function tick(ms)
+  ms = ms or 100
+  if Timelock and int0(Timelock.lastMessageAt) > 0 then Timelock.lastMessageAt = clock + ms - 1 end
+  return send(wallet(F.stranger, { Action = "Get-Info" }), ms)
+end
+-- The node was down for ms: the next message is the first in ms.
+local function outage(ms) return send(wallet(F.stranger, { Action = "Get-Info" }), ms) end
 -- `seen` is bucketed by forget time: the round an id is bound to, and how many are held.
 local function seenOf(id) for _, part in pairs(Timelock.seen) do if part[id] then return part[id] end end return nil end
 local function seenCount() local n = 0 for _, part in pairs(Timelock.seen) do for _ in pairs(part) do n = n + 1 end end return n end
@@ -225,6 +235,17 @@ function runTimelockTests()
   check("round record keeps T, commits and outputs", rec and rec.T == F.T and rec.commits[A] == P.r1a.c
     and rec.outputs[B].alpha == P.r1b.alpha and rec.outputs[B].y == P.r1b.y and rec.outputs[B].via == "reveal")
 
+  -- The node goes down for a minute mid-commit: round 2's commit window passes
+  -- while nobody can send. Nobody is slashed; the round gets the minute back.
+  local faultsBefore = Timelock.validators[A].faults + Timelock.validators[B].faults + Timelock.validators[C].faults
+  local bondC = Timelock.bonds[C]
+  outage(60000)
+  eq("outage: round 2 still taking commits", Timelock.opens["2"].phase, "commit")
+  eq("outage: nobody faulted", Timelock.validators[A].faults + Timelock.validators[B].faults
+    + Timelock.validators[C].faults, faultsBefore)
+  eq("outage: nobody slashed", Timelock.bonds[C], bondC)
+  check("outage: recorded", info().lastOutage and info().lastOutage.gapMs >= 60000)
+
   -- Rounds 2 and 3: c withholds both. (b committed round 2 by Act.)
   commit(C, 2, "r2c")
   reveal(A, 2, "r2a"); reveal(B, 2, "r2b")
@@ -234,6 +255,12 @@ function runTimelockTests()
   eq("request binds to round 3", r.round, 3)
   commit(A, 3, "r3a"); commit(B, 3, "r3b"); commit(C, 3, "r3c")
   reveal(A, 3, "r3a"); reveal(B, 3, "r3b")
+  -- An outage while rounds 2 and 3 reveal: their deadlines move by the gap.
+  local deadline3 = Timelock.opens["3"].revealDeadline
+  outage(45000)
+  check("outage in reveal: deadline moved", Timelock.opens["3"].revealDeadline >= deadline3 + 45000)
+  check("outage in reveal: not late", not Timelock.opens["2"].late and not Timelock.opens["3"].late)
+  eq("outage in reveal: c not slashed", Timelock.bonds[C], 25000)
   tick(10000)
   check("rounds 2 and 3 past their deadlines", Timelock.opens["2"].late == true and Timelock.opens["3"].late == true)
   eq("every missed reveal is its own full slash", Timelock.bonds[C], 23000)

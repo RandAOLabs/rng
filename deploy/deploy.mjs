@@ -631,6 +631,26 @@ const fairSource = () => [
 // The fast tier: on-demand threshold BLS (lua@5.3a, whole state per message).
 const fastSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', ...govSource(),
   read('protocol/beacon/beacon.lua')].join('\n');
+/** gov.lua's code root: the code in parts of at most PART_MAX bytes; the
+ *  manifest is each part's sha256 hex joined by newlines; root = sha256(manifest). */
+export const GOV_PART_MAX = 16 * 1024;
+export function codeRoot(code) {
+  const buf = Buffer.from(code, 'utf8');
+  const parts = [];
+  // Parts end on a character boundary (each part is sent as text).
+  for (let i = 0; i < buf.length;) {
+    let end = Math.min(i + GOV_PART_MAX, buf.length);
+    while (end < buf.length && (buf[end] & 0xc0) === 0x80) end--;
+    parts.push(buf.subarray(i, end));
+    i = end;
+  }
+  const manifest = parts.map((p) => createHash('sha256').update(p).digest('hex')).join('\n');
+  return { root: sha256(manifest), manifest, parts };
+}
+/** The full bundle an upgrade installs on a role (the beacon's wrapped for lua-patch@1.0). */
+export const upgradeSource = (role, owner, scheduler) => role === 'beacon' ? anyHonestPatchSource(owner, scheduler)
+  : role === 'fast' ? fastSource() : fairSource();
+
 /** The bundle each protocol role is spawned with (lua@5.3a; the beacon's lua-patch@1.0 wraps its own). */
 export const protocolSources = { anyHonest: anyHonestSource, fair: fairSource, fast: fastSource };
 const subscriptionConsumerSource = (beacon, id) => [...json(), read('protocol/test/subscription-consumer.lua')]
@@ -990,6 +1010,24 @@ async function main(argv) {
       return alerts;
     },
     'dao-watch': () => v3.watch(),
+    // code-root <role>: the root of this checkout's bundle for <role>, for
+    // 010-approve-code.json (CODE_ROOT). --send uploads it (Gov.Upgrade, the
+    // manifest then each part; anyone may), which installs once the DAO's
+    // approval is due. Then expect-code <role> <root> <version>.
+    async 'code-root'(role) {
+      if (!PROTOCOL_ROLES.includes(role)) throw new Error('code-root <beacon|fair|fast> [--send]');
+      const scheduler = state.scheduler || process.env.RNG_SCHEDULER;
+      const owner = state.deployer || me;
+      const code = upgradeSource(role, owner, scheduler);
+      const { root, manifest, parts } = codeRoot(code);
+      log({ op: 'code-root', role, root, bytes: Buffer.byteLength(code), parts: parts.length, sourceSha256: sha256(code) });
+      if (!flag('--send')) return root;
+      await send(state[role], 'Gov.Upgrade', { tags: { Part: '0' }, data: manifest });
+      for (let i = 0; i < parts.length; i++) {
+        await send(state[role], 'Gov.Upgrade', { tags: { Part: String(i + 1) }, data: parts[i].toString('utf8') });
+      }
+      return root;
+    },
     async 'expect-code'(role, root, version) {
       if (!PROTOCOL_ROLES.includes(role) || !/^[0-9a-f]{64}$/.test(root || '') || !Number.isSafeInteger(Number(version))) {
         throw new Error('expect-code <beacon|fair|fast> <64-hex root> <version>');
