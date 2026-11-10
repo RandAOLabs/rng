@@ -1,62 +1,39 @@
 {
   "processes": {
-    "n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY": {
+    "lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ": {
       "role": "token",
       "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
       "executionDevice": "lua@5.3a",
-      "sourceSha256": "32e950cc5e0f0844d2c449f1259f67b233f6c5a360ff070d40f8d0c676957657",
-      "at": "2026-11-07T22:46:51.109Z"
+      "sourceSha256": "d4a364b7a675c75a1f7731ecfc6516bb4b30f3a39b61fdf3bd56eeb109cc0d19",
+      "at": "2026-11-10T11:16:01.829Z"
     },
-    "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk": {
+    "YApWVUQikoJ4ECiFM0YSx4YEjmymMotUfuv4Laz3Lwk": {
       "role": "dao",
       "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
-      "executionDevice": "lua@5.3a",
-      "sourceSha256": "56fc59b2caffe3ee0a2e041680668acf0fdd7bcaf3729ff16cca83d2ce487716",
-      "at": "2026-11-07T22:47:07.259Z"
+      "executionDevice": "lua-patch@1.0",
+      "sourceSha256": "5bc7b85d6da3b4084f784f16dac01f43f9c50cb39242599d39195d17a4bbd1e9",
+      "at": "2026-11-10T11:16:06.217Z"
     },
-    "98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM": {
+    "IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao": {
       "role": "beacon",
       "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
       "executionDevice": "lua-patch@1.0",
-      "sourceSha256": "0a4b117b78b4a8baa8c8ea70eeb7ee465072f136091c02b98d74eea576ec27a9",
-      "at": "2026-11-07T22:47:22.605Z"
+      "sourceSha256": "d16aba23553ddcf9806f953278f4d3ace3283ce247c9f554ecf39028d4d5a47d",
+      "at": "2026-11-10T11:16:08.156Z"
     },
-    "QsKxU7KZ6x6ooh5Ar3sWexsX7AhumC4qhqVXvneH4_U": {
+    "mfJ_rRgKNhod4vuJFFJtFLDaImm2-zTySKIvnVt-BZo": {
       "role": "fair",
       "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
       "executionDevice": "lua@5.3a",
-      "sourceSha256": "95446aa72d07ea0b9b031aaab319d1d39bfcf64e490068397ad779c11e695ea5",
-      "at": "2026-11-07T22:48:43.399Z",
-      "retired": "2026-11-08T01:40:31.141Z"
+      "sourceSha256": "1e810e29ab924b1d25b669f851bbedc91bb2265accae8ce00c4a038c9ff3a597",
+      "at": "2026-11-10T11:16:16.921Z"
     },
-    "VIsVLEi6l36vLaV_iitEnswNuiNGTjQSoCEEjg9mUMg": {
+    "ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE": {
       "role": "fast",
       "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
       "executionDevice": "lua@5.3a",
-      "sourceSha256": "8a570ec07e30769218b9ccda42e91ee9c5262ae9d8cc190e68ea57d7e98b3666",
-      "at": "2026-11-07T22:49:18.881Z",
-      "retired": "2026-11-08T01:40:27.154Z"
-    },
-    "qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c": {
-      "role": "subscriptionConsumer",
-      "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
-      "executionDevice": "lua@5.3a",
-      "sourceSha256": "d47fdee91f7e251a0c40cf4f00e868b1f64bd36c73a0edeafc1c3e9d0471dfa8",
-      "at": "2026-11-08T00:24:56.811Z"
-    },
-    "NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY": {
-      "role": "fast",
-      "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
-      "executionDevice": "lua@5.3a",
-      "sourceSha256": "cebcceae64d42a85893349eba3eda18e9c5d6b45be2d07ff6843fcf457d62688",
-      "at": "2026-11-08T01:40:28.117Z"
-    },
-    "zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE": {
-      "role": "fair",
-      "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
-      "executionDevice": "lua@5.3a",
-      "sourceSha256": "3d909969ebaabf4b4ee4a5cf41c731f06ac4be0a1986cb2c944fe4c20dac5eac",
-      "at": "2026-11-08T01:40:32.120Z"
+      "sourceSha256": "5e94df915918d0492dfb8208ef6fe3300b8541d4d654a8a64b2793be4ea6bb10",
+      "at": "2026-11-10T11:16:22.521Z"
     }
   },
   "deployer": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
@@ -64,7 +41,7 @@
   "genesis": {
     "rows": [
       {
-        "role": "labs",
+        "role": "deployer",
         "address": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
         "atoms": "1000000000000000"
       }
@@ -74,11 +51,11 @@
     "validatorRng": 100000
   },
   "scheduler": "tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw",
-  "token": "n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY",
-  "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
+  "token": "lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ",
+  "dao": "YApWVUQikoJ4ECiFM0YSx4YEjmymMotUfuv4Laz3Lwk",
   "daoRules": {
     "Dao-Name": "RNG DAO",
-    "Dao-Token": "n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY",
+    "Dao-Token": "lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ",
     "Dao-Ticker": "RNG",
     "Dao-Denomination": "6",
     "Proposal-Threshold": "25000000000",
@@ -91,70 +68,39 @@
     "Max-Active-Proposals": "20",
     "Max-Proposals-Per-Proposer": "1"
   },
-  "beacon": "98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM",
+  "beacon": "IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao",
   "expectedCode": {
     "beacon": {
       "code": "",
       "version": 0,
-      "sourceSha256": "0a4b117b78b4a8baa8c8ea70eeb7ee465072f136091c02b98d74eea576ec27a9"
-    },
-    "fast": {
-      "code": "",
-      "version": 0,
-      "sourceSha256": "cebcceae64d42a85893349eba3eda18e9c5d6b45be2d07ff6843fcf457d62688"
+      "sourceSha256": "d16aba23553ddcf9806f953278f4d3ace3283ce247c9f554ecf39028d4d5a47d"
     },
     "fair": {
       "code": "",
       "version": 0,
-      "sourceSha256": "3d909969ebaabf4b4ee4a5cf41c731f06ac4be0a1986cb2c944fe4c20dac5eac"
+      "sourceSha256": "1e810e29ab924b1d25b669f851bbedc91bb2265accae8ce00c4a038c9ff3a597"
+    },
+    "fast": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "5e94df915918d0492dfb8208ef6fe3300b8541d4d654a8a64b2793be4ea6bb10"
     }
   },
   "predecessor": "",
+  "fair": "mfJ_rRgKNhod4vuJFFJtFLDaImm2-zTySKIvnVt-BZo",
+  "fast": "ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE",
   "owners": {
     "beacon": {
-      "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
-      "walletRenounced": true
-    },
-    "fast": {
-      "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
+      "dao": "YApWVUQikoJ4ECiFM0YSx4YEjmymMotUfuv4Laz3Lwk",
       "walletRenounced": true
     },
     "fair": {
-      "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
+      "dao": "YApWVUQikoJ4ECiFM0YSx4YEjmymMotUfuv4Laz3Lwk",
+      "walletRenounced": true
+    },
+    "fast": {
+      "dao": "YApWVUQikoJ4ECiFM0YSx4YEjmymMotUfuv4Laz3Lwk",
       "walletRenounced": true
     }
-  },
-  "subscriptionConsumer": "qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c",
-  "retired": [
-    {
-      "role": "fast",
-      "pid": "VIsVLEi6l36vLaV_iitEnswNuiNGTjQSoCEEjg9mUMg",
-      "retiredAt": "2026-11-08T01:40:27.154Z",
-      "owners": {
-        "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
-        "walletRenounced": true
-      },
-      "expectedCode": {
-        "code": "",
-        "version": 0,
-        "sourceSha256": "8a570ec07e30769218b9ccda42e91ee9c5262ae9d8cc190e68ea57d7e98b3666"
-      }
-    },
-    {
-      "role": "fair",
-      "pid": "QsKxU7KZ6x6ooh5Ar3sWexsX7AhumC4qhqVXvneH4_U",
-      "retiredAt": "2026-11-08T01:40:31.141Z",
-      "owners": {
-        "dao": "yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk",
-        "walletRenounced": true
-      },
-      "expectedCode": {
-        "code": "",
-        "version": 0,
-        "sourceSha256": "95446aa72d07ea0b9b031aaab319d1d39bfcf64e490068397ad779c11e695ea5"
-      }
-    }
-  ],
-  "fast": "NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY",
-  "fair": "zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE"
+  }
 }

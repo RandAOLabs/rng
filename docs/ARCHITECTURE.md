@@ -11,11 +11,11 @@ The abandoned January 2026 multi-chain design is in
 
 | Role | Process id | Code | Runs on |
 |---|---|---|---|
-| RNG token | `n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY` | `protocol/token/rng-token.lua` | `lua@5.3a` |
-| RNG DAO (YapDAO `stake-dao/1`) | `yAP3NXPHkz0m59Jm95iYlT6-qdqpBU50Cv9dwUBz6qk` | paralith-mono `dao.lua` (rules in `daoRules`) | `lua@5.3a` |
-| Any-Honest beacon | `98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM` | `protocol/beacon/anyhonest.lua` | `lua-patch@1.0` |
-| Fast tier | `NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY` | `protocol/beacon/beacon.lua` | `lua@5.3a` |
-| Fair play | `zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE` | `protocol/fair/fair.lua` + `lib/fair.lua` | `lua@5.3a` |
+| RNG token | `lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ` | `protocol/token/rng-token.lua` | `lua@5.3a` |
+| RNG DAO (YapDAO `stake-dao/1`) | `YApWVUQikoJ4ECiFM0YSx4YEjmymMotUfuv4Laz3Lwk` | paralith-mono `dao.lua` (rules in `daoRules`) | `lua@5.3a` |
+| Any-Honest beacon | `IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao` | `protocol/beacon/anyhonest.lua` | `lua-patch@1.0` |
+| Fast tier | `ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE` | `protocol/beacon/beacon.lua` | `lua@5.3a` |
+| Fair play | `mfJ_rRgKNhod4vuJFFJtFLDaImm2-zTySKIvnVt-BZo` | `protocol/fair/fair.lua` + `lib/fair.lua` | `lua@5.3a` |
 | Subscription test consumer | `qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c` | `protocol/test/subscription-consumer.lua` | `lua@5.3a` |
 | Scheduler (all of the above) | `tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw` | HyperBEAM `scheduler@1.0` | main node |
 

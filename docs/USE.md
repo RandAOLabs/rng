@@ -11,11 +11,11 @@ Process ids are from [`deploy/v3-mainnet.json`](../deploy/v3-mainnet.json).
 | Tier | Use it when | Safe unless | Price | Process |
 |---|---|---|---|---|
 | Local | the sender learning the result first does no harm | always predictable to the sender | free | none (`lib/rng.lua` in your process) |
-| Fast | you want one value quickly and trust 2 of 3 operators not to collude | 2 of the 3 committee operators collude | 3 RNG | `NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY` |
-| Any-Honest | nobody in the round may predict or steer the value | every validator in the round colludes | 4 RNG | `98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM` |
-| Fair play | a player must not have to trust the game, the operators or the validators | never, for an honest player | 4 RNG per batch, split over its sessions | `zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE` |
+| Fast | you want one value quickly and trust 2 of 3 operators not to collude | 2 of the 3 committee operators collude | 3 RNG | `ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE` |
+| Any-Honest | nobody in the round may predict or steer the value | every validator in the round colludes | 4 RNG | `IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao` |
+| Fair play | a player must not have to trust the game, the operators or the validators | never, for an honest player | 4 RNG per batch, split over its sessions | `mfJ_rRgKNhod4vuJFFJtFLDaImm2-zTySKIvnVt-BZo` |
 
-All payments are in the RNG token `n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY`
+All payments are in the RNG token `lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ`
 (6 decimals: 1 RNG = 1,000,000 atoms). There is no faucet. Every process here
 runs on the scheduler `tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw`.
 
@@ -99,7 +99,7 @@ balances. You fund one with a token Transfer to that process; the token sends
 it a `Credit-Notice` carrying your `X-` tags.
 
 ```text
-Target: n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY      (the RNG token)
+Target: lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ      (the RNG token)
 Action: Transfer
 Recipient: <Fast, Any-Honest or fair process>
 Quantity: <atoms>
@@ -134,9 +134,9 @@ locked by its first partial signature).
 **From a wallet, in one message (pay and request).**
 
 ```text
-Target: n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY
+Target: lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ
 Action: Transfer
-Recipient: NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY
+Recipient: ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE
 Quantity: 3000000                     price x unit; read beaconinfo first
 X-Request-Id: <1-128 characters, unique for you>
 ```
@@ -151,7 +151,7 @@ requester. Then:
    through `beaconhistory`.
 3. Your value is the Fast request value above, over the round's `value`. Check
    the round with the group key: BLS signature over
-   `hyperbeam/rng/v1|NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY|<round>`,
+   `hyperbeam/rng/v1|ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE|<round>`,
    and `value = SHA-256("hyperbeam/rng/v1/round|" message "|" signature)`.
 
 If the request is refused (paused, for example), the RNG stays in your Fast
@@ -160,7 +160,7 @@ balance; `Withdraw` takes it back.
 **From a process, against its balance.**
 
 ```text
-Target: NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY
+Target: ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE
 Action: Request-Random
 Tier: fast                            optional; "beacon" is the old name
 Request-Id: <1-128 characters>
@@ -178,8 +178,8 @@ Data: { "round": 12, "signature": "<hex>", "derivation": "hyperbeam/rng/fast/v2/
 With `lib/rng.lua`:
 
 ```lua
-rng.config({ fast = "NBpbTl643CXrRx3IIbN712O2_ZXbhbbFJZZhlcmOTsY",
-             anyHonest = "98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM" })
+rng.config({ fast = "ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE",
+             anyHonest = "IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao" })
 rng.handlers(Handlers)                 -- aos: routes RNG-Result to rng.handle
 rng.on("Loot", function(stream, ctx, info) grant(ctx.player, stream:int(1, 100)) end)
 rng.request(msg, { tier = "fast", on = "Loot", ctx = { player = msg.From } })
@@ -202,9 +202,9 @@ output is cracked, which takes longer.
 **From a wallet, in one message (pay and request).**
 
 ```text
-Target: n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY
+Target: lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ
 Action: Transfer
-Recipient: 98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM
+Recipient: IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao
 Quantity: 4000000                     priceSchedule.request x unit
 X-Request-Id: <1-128 characters>
 ```
@@ -226,7 +226,7 @@ Rounds older than the last 8 are read at their slot through `timelockhistory`
 **From a process, against its balance.**
 
 ```text
-Target: 98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM
+Target: IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao
 Action: Request-Random
 Tier: any-honest                      optional; "timelock" also accepted
 Request-Id: <1-128 characters>
@@ -255,7 +255,7 @@ that is answered `{ duplicate = true }` and not charged again.
 **Subscriptions (processes only).** One message buys a value every round:
 
 ```text
-Target: 98AkinkWAtW2NM-csO-D1GNI-lJqf3xWbX-TgeupWUM
+Target: IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao
 Action: Subscribe
 Subscription-Id: <1-128 characters>
 Rounds: <1 to 31,536,000>             default: subscriptionRounds (1,000)
@@ -290,9 +290,9 @@ and every validator together still cannot predict the outcome.
 **1. The game prepays** (any game may play):
 
 ```text
-Target: n7snPbrtwBA4LIlYMHHavzSZSrbUmheSLhw1uuX-KSY
+Target: lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ
 Action: Transfer
-Recipient: zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE
+Recipient: mfJ_rRgKNhod4vuJFFJtFLDaImm2-zTySKIvnVt-BZo
 Quantity: <atoms, at least one request price>
 X-Fair-Game: <the game's wallet or process id>
 ```
@@ -303,7 +303,7 @@ X-Fair-Game: <the game's wallet or process id>
 **2. The game opens a session** for the player's browser key:
 
 ```text
-Target: zEI8l8oaThgvIzd60ZyioW6TLZR10yKoeMTgp56TopE
+Target: mfJ_rRgKNhod4vuJFFJtFLDaImm2-zTySKIvnVt-BZo
 Action: Fair.Open
 Session: <1-64 of A-Z a-z 0-9 _ - . :>
 Player: <the browser key's address>
