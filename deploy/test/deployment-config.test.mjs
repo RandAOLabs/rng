@@ -734,3 +734,14 @@ test('code-root matches gov.lua: one part is sha256(hex(sha256(code))); parts en
   assert.equal(parts[1].toString('utf8')[0], '—');
   assert.equal(root, h(manifest));
 });
+
+test('the committee is three hosts, one per member, and nodes.sh reads them from committee.json', () => {
+  const committee = readJson('deploy/committee.json');
+  const rows = committee.nodes.map((n) => n.split(' '));
+  assert.equal(rows.length, committee.members.length);
+  assert.equal(new Set(rows.map(([, ip]) => ip)).size, 3);
+  assert.deepEqual(rows.map(([role]) => role).sort(), ['paralith', 'public', 'rng'], 'named by node role');
+  const sh = fs.readFileSync(path.join(ROOT, 'deploy/nodes.sh'), 'utf8');
+  assert.match(sh, /readFileSync\("committee\.json"/);
+  for (const [, ip] of rows) assert.ok(!sh.includes(ip), `no second host table (${ip})`);
+});

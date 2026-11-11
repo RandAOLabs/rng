@@ -22,8 +22,10 @@ KEY="${SSH_KEY:?set SSH_KEY to the committee SSH private key}"
 PORT=7477
 BASE=/opt/rng-provider
 IMAGE=node:22-slim
-# index name ip
-NODES=("1 main 176.9.219.106" "2 paralith 49.12.125.122" "3 rng 138.201.220.159")
+# "index role ip" from committee.json's nodes: DKG share i lives on the i-th host.
+mapfile -t NODES < <(cd "$(dirname "$0")" && node -e '
+  JSON.parse(require("fs").readFileSync("committee.json", "utf8")).nodes.forEach((n, i) => console.log(`${i + 1} ${n}`));')
+[ "${#NODES[@]}" -eq 3 ] || { echo "deploy/committee.json names ${#NODES[@]} nodes, not 3" >&2; exit 1; }
 
 ssh_() { ssh -i "$KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 "root@$1" "${@:2}"; }
 run_() { # ip, daemon command

@@ -148,6 +148,11 @@ New token (`RNG`, no `TEST-`), new DAO (`RNG DAO`), no predecessor
 (`v3-params.json` `predecessor: ""`), the whole supply to the deployer
 (`allocations-deployer.json`).
 
+Paralith's `fresh-deploy.mjs` runs this first, with `HB_NODE` set to the
+rng role's node from its `infra/nodes/nodes.json` (the scheduler is that
+node's own address). The committee (`committee.json` `nodes`, read by
+`nodes.sh`) is the three nodes, in DKG index order.
+
 ```bash
 export RNG_STATE=deploy/v3-main.json PARALITH_MONO=/c/REPO/pm-dao HB_NODE=$NODE HB_WALLET=<deployer.json>
 node deploy/deploy.mjs plan deploy/allocations-deployer.json --dry-run

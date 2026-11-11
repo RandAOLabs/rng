@@ -696,6 +696,8 @@ async function main(argv) {
     if (env && env !== actual) throw new Error(`RNG_SCHEDULER ${env} is not this node's address ${actual}`);
     if (state.scheduler && state.scheduler !== actual) throw new Error(`this deployment is pinned to scheduler ${state.scheduler}, the node is ${actual}`);
     state.scheduler = actual;
+    // Where the family is read and governed (paralith-mono's gov-wire, fresh-deploy).
+    if (!DRY) state.node = NODE;
     return actual;
   }
 
