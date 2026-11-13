@@ -1,0 +1,104 @@
+{
+  "processes": {
+    "Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso": {
+      "role": "token",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "d4a364b7a675c75a1f7731ecfc6516bb4b30f3a39b61fdf3bd56eeb109cc0d19",
+      "at": "2026-11-12T20:19:18.610Z"
+    },
+    "yaPwHL7MJ_oFPlrJIuk77CSP_9IhIEHcT0AXTTKcW_E": {
+      "role": "dao",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua-patch@1.0",
+      "sourceSha256": "a9e5c0d27e0a929175d6b9249b1c82a9c0c65b7a69c545acf1062a404ce71282",
+      "at": "2026-11-12T20:19:26.106Z"
+    },
+    "TvgStOyfJZJvi49QkT5AaldQTqzH3OgS27uhPwWm_lY": {
+      "role": "beacon",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua-patch@1.0",
+      "sourceSha256": "1c18bc2650c64eaa3cd530db7e65d09dbbb1b083af47e337314ed1f843b72408",
+      "at": "2026-11-12T20:19:30.486Z"
+    },
+    "33WN7xWXPfZBZaKzlwqMEzwCpeq05Rshj6Cqtj6Kgls": {
+      "role": "fair",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "1e810e29ab924b1d25b669f851bbedc91bb2265accae8ce00c4a038c9ff3a597",
+      "at": "2026-11-12T20:19:49.064Z"
+    },
+    "zr2hCtVuaFkIkEnRg2qKB9L4_5bDr1LtRD5iHZOXkCE": {
+      "role": "fast",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "5e94df915918d0492dfb8208ef6fe3300b8541d4d654a8a64b2793be4ea6bb10",
+      "at": "2026-11-12T20:20:11.963Z"
+    }
+  },
+  "deployer": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
+  "tokenTicker": "RNG",
+  "genesis": {
+    "rows": [
+      {
+        "role": "deployer",
+        "address": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
+        "atoms": "1000000000000000"
+      }
+    ],
+    "reserveRng": 200000000,
+    "treasuryRng": 50000000,
+    "validatorRng": 100000
+  },
+  "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+  "node": "https://rng-hb.tylerw.ai",
+  "token": "Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso",
+  "dao": "yaPwHL7MJ_oFPlrJIuk77CSP_9IhIEHcT0AXTTKcW_E",
+  "daoRules": {
+    "Dao-Name": "RNG DAO",
+    "Dao-Token": "Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso",
+    "Dao-Ticker": "RNG",
+    "Dao-Denomination": "6",
+    "Proposal-Threshold": "25000000000",
+    "Proposal-Deposit": "5000000000",
+    "Voting-Period": "86400000",
+    "Quorum-Bps": "1000",
+    "Pass-Bps": "5000",
+    "Veto-Bps": "3334",
+    "Unstake-Delay": "1209600000",
+    "Max-Active-Proposals": "20",
+    "Max-Proposals-Per-Proposer": "1"
+  },
+  "beacon": "TvgStOyfJZJvi49QkT5AaldQTqzH3OgS27uhPwWm_lY",
+  "expectedCode": {
+    "beacon": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "1c18bc2650c64eaa3cd530db7e65d09dbbb1b083af47e337314ed1f843b72408"
+    },
+    "fair": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "1e810e29ab924b1d25b669f851bbedc91bb2265accae8ce00c4a038c9ff3a597"
+    },
+    "fast": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "5e94df915918d0492dfb8208ef6fe3300b8541d4d654a8a64b2793be4ea6bb10"
+    }
+  },
+  "predecessor": "",
+  "owners": {
+    "beacon": {
+      "dao": "yaPwHL7MJ_oFPlrJIuk77CSP_9IhIEHcT0AXTTKcW_E"
+    },
+    "fair": {
+      "dao": "yaPwHL7MJ_oFPlrJIuk77CSP_9IhIEHcT0AXTTKcW_E"
+    },
+    "fast": {
+      "dao": "yaPwHL7MJ_oFPlrJIuk77CSP_9IhIEHcT0AXTTKcW_E"
+    }
+  },
+  "fair": "33WN7xWXPfZBZaKzlwqMEzwCpeq05Rshj6Cqtj6Kgls",
+  "fast": "zr2hCtVuaFkIkEnRg2qKB9L4_5bDr1LtRD5iHZOXkCE"
+}
