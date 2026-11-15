@@ -10,7 +10,8 @@
 --
 -- Rounds overlap: the next round takes commits as soon as the last one's
 -- commits close, so a slow (cracked) round never holds up the ones after it.
--- With `heartbeat` on, rounds run whether or not anyone is waiting.
+-- With `heartbeat` on, rounds run whether or not anyone is waiting (at most
+-- every idleIntervalMs while nobody is: no live subscription, no request).
 --
 -- Native ~lua@5.3a contract, same conventions as beacon.lua. Bundled after
 -- vendor/json.lua, vendor/jsonenc.lua and lib/rng.lua (global `rng`).
@@ -85,6 +86,7 @@ local function freshState()
     params = {
       T = 134217728, h = "", commitWindowMs = 5000, revealWindowMs = 30000, abandonAfterMs = 1800000,
       minCommits = 2, cadenceMs = 100, targetIntervalMs = 500, maxInFlight = 3, catchUpMs = 30000,
+      idleIntervalMs = 5000,
       stake = 25000, slash = 1000, heartbeat = 1,
       -- Each round takes at most maxActive validators (ranked: capped bond,
       -- then seniority); the registry holds at most maxValidators.
@@ -104,6 +106,7 @@ local function freshState()
     lastOpenAt = 0,        -- first commit of the newest round; cadence counts from here
     rhythmAt = 0,          -- the rhythm's anchor: round `rhythmRound' was due at `rhythmAt' (ms)
     rhythmRound = 0,
+    rhythmMs = 0,          -- the interval the anchor was laid at; any other starts a fresh rhythm
     next = 1,              -- the round taking requests and commits
     opens = {},            -- "r" -> round being built (see openRound): `next`, plus older ones revealing
     recent = {},           -- finalized round numbers, oldest first (cracked rounds finish late)
@@ -150,7 +153,18 @@ local function freshState()
     history = {},
   }
 end
-Timelock = Timelock or freshState()
+--- Parameters added since a state was written take their defaults. A new
+--- table, never a change in place: an upgrade that fails puts the old one back
+--- (vendor/gov.lua, INSTALL).
+local function withDefaults(t)
+  local p, out = {}, {}
+  for k, v in pairs(freshState().params) do p[k] = v end
+  for k, v in pairs(t.params or {}) do p[k] = v end
+  for k, v in pairs(t) do out[k] = v end
+  out.params = p
+  return out
+end
+Timelock = Timelock and withDefaults(Timelock) or freshState()
 -- Guards are published apart from the state, and only when they change.
 local GUARDS = { seen = true, credited = true, creditFloor = true }
 local GuardsChanged = false
@@ -246,6 +260,7 @@ local function restore(base)
     -- A published state without owners has none: never re-arm the wallet.
     Timelock.owners = freshOwners(false)
     for k, v in pairs(deflate(saved)) do Timelock[k] = v end
+    Timelock = withDefaults(Timelock)
     local gok, guards = pcall(json.decode, base.timelockguards or "")
     if gok and type(guards) == "table" then
       for k in pairs(GUARDS) do if guards[k] ~= nil then Timelock[k] = deflate(guards[k]) end end
@@ -674,6 +689,9 @@ local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n 
 --- apart, at most maxInFlight rounds in flight) to catch up, after fast ones they
 --- wait. Lateness beyond catchUpMs is forgiven when the next round opens, so an
 --- outage is not repaid in one burst. targetIntervalMs 0 turns the rhythm off.
+--- The anchor holds for the interval it was laid at (rhythmMs) only: a new
+--- interval (a Configure, or the switch to or from idle) starts a fresh rhythm,
+--- due one new interval after the last open, never extrapolated from the old.
 --- Rounds revealing and not yet past their reveal deadline. A late round
 --- (waiting for a crack) does not hold the pipeline: its withholder was
 --- slashed and suspended at the deadline, so it is in no round opened after.
@@ -681,6 +699,19 @@ local function inFlight()
   local n = 0
   for _, o in pairs(Timelock.opens) do if o.phase == "reveal" and not o.late then n = n + 1 end end
   return n
+end
+
+--- The interval rounds are due at: idleIntervalMs while the heartbeat runs for
+--- nobody (no live subscription covers the round taking commits and nothing
+--- is pending for it), else targetIntervalMs. idleIntervalMs 0: no idle pace.
+local function interval()
+  local p = Timelock.params
+  local target, idle, r = int(p.targetIntervalMs, 0), int(p.idleIntervalMs, 0), Timelock.next
+  if idle <= 0 or int(p.heartbeat, 1) == 0 or #(Timelock.pending[tostring(r)] or {}) > 0 then return target end
+  for _, sub in pairs(Timelock.subscriptions or {}) do
+    if sub.active and r >= int(sub.startRound, 0) and r <= int(sub.endRound, -1) then return target end
+  end
+  return idle
 end
 
 local function nextOpenAt()
@@ -691,20 +722,26 @@ local function nextOpenAt()
   if inFlight() >= math.max(1, int(p.maxInFlight, 3)) then
     return math.max(floor, int(Timelock.lastOpenAt, 0) + int(p.revealWindowMs, 30000))
   end
-  local target = int(p.targetIntervalMs, 0)
-  if target <= 0 or int(Timelock.rhythmAt, 0) == 0 then return floor end
-  local due = int(Timelock.rhythmAt, 0) + (Timelock.next - int(Timelock.rhythmRound, 0)) * target
+  local ms = interval()
+  if ms <= 0 or int(Timelock.rhythmAt, 0) == 0 then return floor end
+  if int(Timelock.rhythmMs, 0) ~= ms then return math.max(floor, int(Timelock.lastOpenAt, 0) + ms) end
+  local due = int(Timelock.rhythmAt, 0) + (Timelock.next - int(Timelock.rhythmRound, 0)) * ms
   return math.max(floor, due)
 end
 
---- Called as a round opens: start the rhythm, or forgive lateness past catchUpMs.
+--- Called as a round opens: start the rhythm (first round, or a new interval),
+--- or forgive lateness past catchUpMs.
 local function keepRhythm(now)
   local p = Timelock.params
-  local target = int(p.targetIntervalMs, 0)
-  if target <= 0 then return end
-  local due = int(Timelock.rhythmAt, 0) + (Timelock.next - int(Timelock.rhythmRound, 0)) * target
-  if int(Timelock.rhythmAt, 0) == 0 or now - due > int(p.catchUpMs, 30000) then
-    Timelock.rhythmAt = int(Timelock.rhythmAt, 0) == 0 and now or now - int(p.catchUpMs, 30000)
+  local ms = interval()
+  if ms <= 0 then return end
+  if int(Timelock.rhythmAt, 0) == 0 or int(Timelock.rhythmMs, 0) ~= ms then
+    Timelock.rhythmAt, Timelock.rhythmRound, Timelock.rhythmMs = now, Timelock.next, ms
+    return
+  end
+  local due = int(Timelock.rhythmAt, 0) + (Timelock.next - int(Timelock.rhythmRound, 0)) * ms
+  if now - due > int(p.catchUpMs, 30000) then
+    Timelock.rhythmAt = now - int(p.catchUpMs, 30000)
     Timelock.rhythmRound = Timelock.next
   end
 end
@@ -1570,6 +1607,9 @@ local function badParams(p)
      or p.subscriptionRounds < 1 or p.subscriptionRounds > 31536000
      or p.cadenceMs < 0 or p.cadenceMs > 60000 or p.targetIntervalMs < 0 or p.targetIntervalMs > 600000
      or p.maxInFlight < 1 or p.maxInFlight > 8 or p.catchUpMs < 0
+     -- 0 is no idle pace; otherwise never faster than the busy one.
+     or p.idleIntervalMs < 0 or p.idleIntervalMs > 600000
+     or (p.idleIntervalMs ~= 0 and p.idleIntervalMs < p.targetIntervalMs)
      -- One incident faults at most the committing round and the maxInFlight
      -- revealing ones (a fault suspends), each a slash plus at most one
      -- crack: together at most half the stake.
@@ -1786,11 +1826,11 @@ local MONEY_VERBS = { ["Gov.Set-Successor"] = true, ["Gov.Move-Reserve"] = true,
   ["Gov.Fund-Reserve"] = true, ["Gov.Remove-Validator"] = true, ["Gov.Set-Dao"] = true }
 --- Gov.Configure parameters that are money: crackBounty is taken from a
 --- withholder's bond per crack; maxInFlight bounds how many rounds one
---- incident can fault; cadenceMs and targetIntervalMs set how fast duties
---- come; roundPrice is what the reserve pays per heartbeat round; T (with h)
---- is the puzzle every output rests on.
+--- incident can fault; cadenceMs, targetIntervalMs and idleIntervalMs set how
+--- fast duties come; roundPrice is what the reserve pays per heartbeat round;
+--- T (with h) is the puzzle every output rests on.
 local MONEY_PARAMS = { "stake", "slash", "commitWindowMs", "revealWindowMs", "crackBounty", "maxInFlight",
-  "cadenceMs", "targetIntervalMs", "roundPrice", "T" }
+  "cadenceMs", "targetIntervalMs", "idleIntervalMs", "roundPrice", "T" }
 --- Money in one direction: fewer seats per round (maxActive) or in the
 --- registry (maxValidators) concentrates who makes the randomness, and more
 --- commits required (minCommits) can starve every round. Raising the seats

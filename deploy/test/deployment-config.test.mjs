@@ -107,10 +107,12 @@ test('v3 params template is inside the beacon hard bounds, and each bound bites'
   const { predecessor, ...p } = readJson('deploy/v3-params.json');
   assert.equal(predecessor, '', 'a fresh deploy has no predecessor beacon');
   assert.deepEqual(badParams(p), []);
+  assert.deepEqual(badParams({ ...p, idleIntervalMs: 0 }), [], 'idleIntervalMs 0: no idle pace');
   for (const bad of [{ T: 2 ** 26 }, { revealWindowMs: 9999 }, { commitWindowMs: 10001 }, { abandonAfterMs: 1000 },
     { slash: 30000 }, { slash: 2501 }, { stake: 10 ** 7 + 1 }, { rejoinBaseMs: 1000 }, { rejoinCapMs: 31 * 86400000 },
     { minCommits: 1 }, { maxActive: 129 }, { maxActive: 7, minCommits: 2 }, { maxValidators: 63 }, { heartbeat: 2 }, { roundPrice: 0 },
-    { subscriptionRounds: 0 }, { maxInFlight: 0 }, { fairWindowMs: 0 }, { stake: 1.5 }]) {
+    { subscriptionRounds: 0 }, { maxInFlight: 0 }, { fairWindowMs: 0 }, { stake: 1.5 },
+    { idleIntervalMs: -1 }, { idleIntervalMs: 600001 }, { idleIntervalMs: 400 }, { idleIntervalMs: undefined }]) {
     assert.notDeepEqual(badParams({ ...p, ...bad }), [], JSON.stringify(bad));
   }
 });

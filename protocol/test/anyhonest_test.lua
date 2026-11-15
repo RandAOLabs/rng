@@ -430,6 +430,15 @@ function runTimelockTests()
   tick()
   eq("state restored", info().round, 8)
   check("guards restored", Timelock.credited["4"] == true and seenOf(F.game .. "|req-1") == 1)
+  -- A checkpoint written before a parameter existed restores with its default.
+  local st = state()
+  st.params.idleIntervalMs = nil
+  base.timelockstate, base.timelockrev = encode(st), string.format("%d", Timelock.rev + 1)
+  Timelock = { rev = 0 }
+  tick()
+  check("a parameter missing from the checkpoint takes its default", info().round == 8
+    and Timelock.params.idleIntervalMs == 5000 and Timelock.params.commitWindowMs == 3000)
+  Timelock.params.idleIntervalMs = 0
 
   -- Duplicates, stale requests, withdrawals, claims.
   local bal = Timelock.balances[F.game]
@@ -642,7 +651,7 @@ function runTimelockTests()
   check("rhythm changes apply at once", r.ok == true and r.queued == nil and Timelock.params.targetIntervalMs == 500
     and Timelock.params.cadenceMs == 100, encode(r))
   local anchor = clock
-  Timelock.rhythmAt, Timelock.rhythmRound, Timelock.lastOpenAt = anchor, Timelock.next - 1, anchor
+  Timelock.rhythmAt, Timelock.rhythmRound, Timelock.lastOpenAt, Timelock.rhythmMs = anchor, Timelock.next - 1, anchor, 500
   tick(1)
   eq("on the rhythm: the next round waits for its slot", info().nextRoundAt, anchor + 500)
   Timelock.rhythmRound, Timelock.lastOpenAt = Timelock.next - 10, anchor + 20000
@@ -652,6 +661,56 @@ function runTimelockTests()
   tick(1)
   eq("no anchor yet: cadenceMs alone", info().nextRoundAt, anchor + 20100)
   eq("rhythm parameters checked", configure({ maxInFlight = 0 }).error, "Bad-Parameter")
+  -- A new interval starts a fresh rhythm one interval after the last open; it
+  -- never extrapolates from an anchor laid at the old one (2026-11-15: 500 ->
+  -- 5000 on an anchor ~1,900 rounds old put nextRoundAt 2.3 h out and stalled).
+  Timelock.rhythmAt, Timelock.rhythmRound, Timelock.lastOpenAt = clock - 1000000, Timelock.next - 2000, clock - 1000
+  r = configure({ targetIntervalMs = 5000 })
+  check("interval 500 -> 5000 applies", r.ok == true and Timelock.params.targetIntervalMs == 5000, encode(r))
+  check("a new interval does not push nextRoundAt past now + interval",
+    info().nextRoundAt <= info().at + 5000, info().nextRoundAt - info().at)
+  -- Idle: the heartbeat on, no live subscription and nothing pending for the
+  -- round taking commits: rounds at most every idleIntervalMs. A request or a
+  -- subscription brings the busy pace back at once (a fresh rhythm: a request
+  -- never waits out the idle interval).
+  r = configure({ targetIntervalMs = 500, idleIntervalMs = 5000 })
+  check("idle interval set", r.ok == true and Timelock.params.idleIntervalMs == 5000, encode(r))
+  check("idleIntervalMs published as an integer", base.beaconinfo:find('"idleIntervalMs":5000[,}]') ~= nil)
+  local subs = Timelock.subscriptions
+  Timelock.subscriptions, Timelock.pending[tostring(Timelock.next)] = {}, nil
+  local opened = clock
+  -- The last round opened idle: the anchor was laid at idleIntervalMs.
+  Timelock.rhythmAt, Timelock.rhythmRound, Timelock.lastOpenAt, Timelock.rhythmMs = opened, Timelock.next - 1, opened, 5000
+  tick(1)
+  eq("idle: the next round waits idleIntervalMs", info().nextRoundAt, opened + 5000)
+  check("nextRoundAt published as an integer", base.beaconinfo:find('"nextRoundAt":' .. string.format("%d", opened + 5000) .. '[,}]') ~= nil)
+  eq("idle: a commit before it is too early",
+    send(wallet(C, { Action = "Commit", Data = encode({ round = Timelock.next, c = "2" }) })).error, "Too-Early")
+  Timelock.pending[tostring(Timelock.next)] = { { requester = F.game, requestId = "idle-wake", charged = 0 } }
+  tick(1)
+  eq("a pending request: the busy pace at once", info().nextRoundAt, opened + 500)
+  Timelock.pending[tostring(Timelock.next)] = nil
+  tick(1)
+  eq("nothing pending again: idle", info().nextRoundAt, opened + 5000)
+  -- (Too few validators are left here to Subscribe; the record Subscribe writes.)
+  Timelock.subscriptions[F.game .. "|idle-wake"] = { id = "idle-wake", subscriber = F.game, startRound = Timelock.next,
+    endRound = Timelock.next + 2, rounds = 3, price = 1, active = true, createdAt = clock }
+  tick(1)
+  eq("a live subscription: the busy pace", info().nextRoundAt, opened + 500)
+  Timelock.subscriptions[F.game .. "|idle-wake"].endRound = Timelock.next - 1
+  tick(1)
+  eq("an ended subscription does not count", info().nextRoundAt, opened + 5000)
+  Timelock.subscriptions = subs
+  -- Bounds: 0 (no idle pace) up to 10 min, never faster than the busy pace.
+  eq("idle below the busy interval refused", configure({ idleIntervalMs = 400 }).error, "Bad-Parameter")
+  eq("idle above 10 min refused", configure({ idleIntervalMs = 600001 }).error, "Bad-Parameter")
+  eq("negative idle refused", configure({ idleIntervalMs = -1 }).error, "Bad-Parameter")
+  eq("a busy interval above idle refused", configure({ targetIntervalMs = 6000 }).error, "Bad-Parameter")
+  r = send(wallet(F.owner, { Action = "Gov.Configure", ["idle_interval_ms"] = "6000" }))
+  check("idle set by tag, any spelling", r.ok == true and Timelock.params.idleIntervalMs == 6000
+    and math.type(Timelock.params.idleIntervalMs) == "integer", encode(r))
+  check("idle 0 turns the idle pace off", configure({ idleIntervalMs = 0 }).ok == true and Timelock.params.idleIntervalMs == 0)
+  configure({ targetIntervalMs = 500 })
   Timelock.params.targetIntervalMs, Timelock.params.cadenceMs = 0, 0
 
   -- v3: permissionless join, the active set, reserve fallback, governance.
@@ -942,6 +1001,7 @@ function runTimelockTests()
     -- one incident at most half the stake; the rhythm cannot be stretched.
     { ["Crack-Bounty"] = "1001" }, { ["Crack-Bounty"] = "25000" }, { ["Max-In-Flight"] = "9" },
     { Slash = "2500", ["Max-In-Flight"] = "4" }, { ["Cadence-Ms"] = "60001" }, { ["Target-Interval-Ms"] = "600001" },
+    { ["Idle-Interval-Ms"] = "600001" }, { ["Idle-Interval-Ms"] = "400", ["Target-Interval-Ms"] = "500" },
     { ["Abandon-After-Ms"] = "604800001" } }) do
     bad.Action = "Gov.Configure"
     eq("bound " .. i .. " rejected on proposal", dao(bad).error, "Bad-Parameter")
@@ -1044,6 +1104,7 @@ function runTimelockTests()
     { Action = "Gov.Configure", Stake = "26000" }, { Action = "Gov.Configure", ["Crack-Bounty"] = "11" },
     { Action = "Gov.Configure", ["Max-In-Flight"] = "2" }, { Action = "Gov.Configure", ["Cadence-Ms"] = "200" },
     { Action = "Gov.Configure", ["Target-Interval-Ms"] = "900" }, { Action = "Gov.Configure", ["Round-Price"] = "2" },
+    { Action = "Gov.Configure", ["Idle-Interval-Ms"] = "6000" },
     { Action = "Gov.Configure", ["Commit-Window-Ms"] = "2000" },
     { Action = "Gov.Set-Successor", Successor = F.stranger }, { Action = "Gov.Move-Reserve", Successor = F.successor },
     { Action = "Gov.Treasury-Spend", Recipient = F.stranger, Quantity = "1" }, { Action = "Gov.Fund-Reserve", Quantity = "1" },

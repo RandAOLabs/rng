@@ -159,6 +159,8 @@ export function badParams(p) {
   need(p.subscriptionRounds >= 1 && p.subscriptionRounds <= 31536000, 'subscriptionRounds in [1, 31536000]');
   need(p.cadenceMs >= 0 && p.cadenceMs <= 60000 && p.targetIntervalMs >= 0 && p.targetIntervalMs <= 600000
     && p.maxInFlight >= 1 && p.maxInFlight <= 8 && p.catchUpMs >= 0, 'rhythm parameters (cadence <= 60 s, interval <= 10 min, maxInFlight <= 8)');
+  need(p.idleIntervalMs >= 0 && p.idleIntervalMs <= 600000 && (p.idleIntervalMs === 0 || p.idleIntervalMs >= p.targetIntervalMs),
+    'idleIntervalMs 0, or in [targetIntervalMs, 10 min]');
   need(p.crackBounty <= p.slash, 'crackBounty <= slash');
   need(2 * (1 + p.maxInFlight) * (p.slash + p.crackBounty) <= p.stake, 'one incident ((1 + maxInFlight) x (slash + crackBounty)) <= stake / 2');
   need(p.fairWindowMs >= 1, 'fairWindowMs >= 1');
@@ -263,12 +265,12 @@ const MONEY_VERBS = ['Gov.Set-Successor', 'Gov.Move-Reserve', 'Gov.Treasury-Spen
 // naming them carries Effective-At either way.
 const MONEY_TAGS = {
   beacon: ['Stake', 'Slash', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Crack-Bounty', 'Max-In-Flight', 'Cadence-Ms',
-    'Target-Interval-Ms', 'Round-Price', 'Max-Active', 'Max-Validators', 'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
+    'Target-Interval-Ms', 'Idle-Interval-Ms', 'Round-Price', 'Max-Active', 'Max-Validators', 'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
   'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'].map(word),
   fair: ['Beacon', 'Token'].map(word),
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
-  'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',
+  'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Idle-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',
   'Rejoin-Base-Ms', 'Rejoin-Cap-Ms', 'Heartbeat', 'Round-Price', 'Request-Price', 'Subscription-Price',
   'Subscription-Rounds', 'Crack-Bounty', 'Fair-Window-Ms'].map(word);
 

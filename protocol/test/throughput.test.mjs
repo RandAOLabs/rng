@@ -38,7 +38,9 @@ const CONFIG = { self: F.beacon, token: F.token, unit: F.unit, T: F.T, h: H, hPr
   commitWindowMs: COMMIT_WINDOW, revealWindowMs: LIVE.revealWindowMs, abandonAfterMs: LIVE.abandonAfterMs,
   minCommits: 2, cadenceMs: LIVE.cadenceMs, targetIntervalMs: LIVE.targetIntervalMs, maxInFlight: LIVE.maxInFlight,
   catchUpMs: LIVE.catchUpMs, heartbeat: 1, roundPrice: 1, requestPrice: 4, stake: 25000, slash: 1000,
-  rejoinBaseMs: 60000, rejoinCapMs: 3600000, crackBounty: 10, predecessor: '' };
+  rejoinBaseMs: 60000, rejoinCapMs: 3600000, crackBounty: 10, predecessor: '',
+  // Nobody subscribes here: these measure the busy pace, so no idle pace.
+  idleIntervalMs: 0 };
 
 // The beacon in Lua: compute() per message, rng@1.0 answered from SimDev,
 // which the simulated validators fill as they commit (only their own alpha
@@ -318,6 +320,17 @@ test('one validator silent: its round finalizes right after the commit deadline,
   onTarget(m, 'average with C silent');
   const c = sim.info.validators.find((v) => v.address === F.v[2]);
   assert.equal(c.ready, false, 'the silent validator was suspended');
+});
+
+test('idle (no subscription, nothing pending): one round per idleIntervalMs', async () => {
+  const sim = await simulate({ durationMs: 60_000, rtt: () => [100, 250], params: { idleIntervalMs: LIVE.idleIntervalMs } });
+  const m = measure(sim);
+  const idle = 1000 / LIVE.idleIntervalMs; // 0.2 rounds/s
+  console.log(`idle 100-250 ms: ${fmt(m)}; refused ${JSON.stringify(sim.refused)}`);
+  assert.ok(Math.abs(m.rate - idle) <= 0.05, `idle: ${m.rate.toFixed(3)} rounds/s, want ${idle} +- 0.05`);
+  // A reveal is not held 5 s for the next commit, so two messages a round,
+  // but a fifth of the busy pace's slots.
+  assert.ok(m.slotsPerS <= 1.5, `idle: ${m.slotsPerS.toFixed(2)} slots/s`);
 });
 
 test('the guard bites: revealing only at commitDeadline fails it', async () => {
