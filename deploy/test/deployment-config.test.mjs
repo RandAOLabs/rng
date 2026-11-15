@@ -747,3 +747,13 @@ test('the committee is three hosts, one per member, and nodes.sh reads them from
   assert.match(sh, /readFileSync\("committee\.json"/);
   for (const [, ip] of rows) assert.ok(!sh.includes(ip), `no second host table (${ip})`);
 });
+
+test('an idle beacon is held to its idle pace, a busy one to MIN_RATE', async () => {
+  const { expectedMinRate, MIN_RATE } = await import('../deploy.mjs');
+  const params = { idleIntervalMs: 5000 };
+  assert.equal(expectedMinRate({ params, activeSubscriptions: 0, pendingCount: 0 }), 0.16);
+  assert.equal(expectedMinRate({ params, activeSubscriptions: 1, pendingCount: 0 }), MIN_RATE);
+  assert.equal(expectedMinRate({ params, activeSubscriptions: 0, pendingCount: 2 }), MIN_RATE);
+  assert.equal(expectedMinRate({ params: { idleIntervalMs: 0 } }), MIN_RATE);
+  assert.equal(expectedMinRate(null), MIN_RATE);
+});

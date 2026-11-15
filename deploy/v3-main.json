@@ -72,9 +72,8 @@
   "beacon": "TvgStOyfJZJvi49QkT5AaldQTqzH3OgS27uhPwWm_lY",
   "expectedCode": {
     "beacon": {
-      "code": "",
-      "version": 0,
-      "sourceSha256": "1c18bc2650c64eaa3cd530db7e65d09dbbb1b083af47e337314ed1f843b72408"
+      "code": "6cf27a27fdcdda52d2d98e037902b8f5410bd00ea152a24fbe5c2caec741d230",
+      "version": 1
     },
     "fair": {
       "code": "",
