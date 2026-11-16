@@ -741,8 +741,9 @@ H["Round"] = function(base, msg, from, now)
   end
   local key = tostring(r)
   if #(Beacon.pending[key] or {}) == 0 then return fail(base, "Nothing-Pending") end
-  if int(Beacon.lockedRound, 0) == 0 then Beacon.lockedRound, Beacon.lockedAt = r, now end
 
+  -- Device mode finalizes or refuses: a refusal leaves the round as it was
+  -- (unlocked, if no partial has locked it), so nothing here locks it.
   if Beacon.verification == "device" then
     local signers = partialSigners(r)
     if #signers < int(Beacon.threshold, 0) then return fail(base, "Not-Enough-Partials") end
@@ -750,6 +751,7 @@ H["Round"] = function(base, msg, from, now)
     if not valid then return fail(base, why) end
     return finalize(base, r, sig, signers, now)
   end
+  if int(Beacon.lockedRound, 0) == 0 then Beacon.lockedRound, Beacon.lockedAt = r, now end
   local byRound = Beacon.attest[key] or { by = {}, sigs = {} }
   Beacon.attest[key] = byRound
   local prior = byRound.by[member]

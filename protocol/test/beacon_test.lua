@@ -375,6 +375,12 @@ function runBeaconTests()
       r.error == "Verifier-Unavailable" and noPartials(), r.error)
   end
   ao = savedAo0
+  -- A Round refused for too few partials changes nothing either: the round
+  -- stays open (unlocked), so later requests still bind to it.
+  local lockedAt0 = Beacon.lockedAt or 0
+  r, ob = send(wallet(F.members[3], { Action = "Round", Data = encode({ round = 3, signature = F.sig3 }) }))
+  check("device mode: a Round with no partials is refused and locks nothing",
+    r.error == "Not-Enough-Partials" and next(ob) == nil and noPartials() and (Beacon.lockedAt or 0) == lockedAt0, encode(r))
 
   -- Production mode: rng@1.0 verifies one group signature, while the beacon
   -- requires threshold published partials and pays their members.
