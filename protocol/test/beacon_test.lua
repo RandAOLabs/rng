@@ -84,6 +84,47 @@ function runBeaconTests()
   eq("configure refused for non-owner", r.error, "Not authorised")
   r = send(delivery(F.token, { Action = "Credit-Notice", Sender = F.game, Quantity = tostring(3 * U), Reference = "t0" }))
   eq("a credit before genesis is refused", r.error, "Not-Configured")
+  local function size(t) local n = 0 for _ in pairs(t or {}) do n = n + 1 end return n end
+  local function unconfigured()
+    return Beacon.token == "" and Beacon.self == "" and Beacon.groupKey == "" and size(Beacon.committee) == 0
+      and (Beacon.pendingCount or 0) == 0 and size(Beacon.seen) == 0 and size(Beacon.balances) == 0
+  end
+  -- Requests before genesis: refused, nothing bound, the process told.
+  local ob0
+  r, ob0 = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "pre-1" }))
+  check("a request before genesis is refused, nothing bound", r.error == "Not-Configured" and unconfigured()
+    and ob0["rng-error"] and ob0["rng-error"].target == F.game, r.error)
+  r = send(delivery(F.game, { Action = "Request-Random" }))
+  check("a request with no Request-Id is refused", r.error == "Missing-Request-Id" and unconfigured(), r.error)
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = string.rep("i", 129) }))
+  check("a Request-Id over 128 bytes is refused", r.error == "Missing-Request-Id" and unconfigured(), r.error)
+  -- Genesis is checked whole: any bad field configures nothing.
+  local function cfg(over, drop)
+    local c = json.decode(F.config)
+    for k, v in pairs(over) do c[k] = v end
+    for _, k in ipairs(drop or {}) do c[k] = nil end
+    return c
+  end
+  local badGenesis = {
+    { "Invalid-Token", cfg({ token = "short" }) },
+    { "Invalid-Self", cfg({ self = "short" }) },
+    { "Invalid-Unit", cfg({ unit = 0 }) },
+    { "Invalid-Group-Key", cfg({}, { "groupKey" }) },
+    { "Invalid-Group-Key", cfg({ groupKey = "zz" }) },
+    { "Invalid-Committee", cfg({ committee = {} }) },
+    { "Invalid-Committee", cfg({ committee = { "short" } }) },
+    { "Invalid-Committee", cfg({ committee = { F.members[1], F.members[1] } }) },
+    { "Invalid-Share-Public-Keys", cfg({ sharePublicKeys = "not a list" }) },
+    { "Invalid-Share-Public-Keys", cfg({ sharePublicKeys = { "zz", "zz", "zz" } }) },
+    { "Invalid-Threshold", cfg({ threshold = "two" }) },
+    { "Invalid-Verification", cfg({ verification = "trust-me" }) },
+    { "Invalid-Share-Public-Keys", cfg({ verification = "device" }, { "sharePublicKeys" }) },
+  }
+  for i, case in ipairs(badGenesis) do
+    r = send(wallet(F.owner, { Action = "Gov.Configure", Data = encode(case[2]) }))
+    check("bad genesis " .. i .. " refused " .. case[1] .. ", nothing configured", r.error == case[1] and unconfigured(),
+      tostring(r.error))
+  end
   r = send(wallet(F.owner, { Action = "Gov.Configure", Data = F.config }))
   eq("genesis sets the committee", #r.committee, 3)
   eq("price is 3 RNG", r.price.fast, 3)
@@ -136,6 +177,35 @@ function runBeaconTests()
   local dust = ob["rng-dust-refund"]
   check("dust goes back through the token", dust and dust.target == F.token and dust.Recipient == F.game
     and dust.Quantity == "7" and dust["X-Transfer-Sequence"] == "1", dust and dust.Quantity)
+  -- Refusals that move nothing: the balance, the transfer sequence and the
+  -- reference set stay as they were.
+  local seq0, nCredited = Beacon.transferSeq, size(Beacon.credited)
+  local function untouched() return Beacon.balances[F.game] == 14 and Beacon.transferSeq == seq0
+    and (Beacon.pendingCount or 0) == 0 end
+  r, ob = credit(F.game, U, "t" .. string.rep("9", 23))
+  check("a reference past an integer is refused, not marked", r.error == "Invalid-Reference" and next(ob) == nil
+    and untouched() and size(Beacon.credited) == nCredited, r.error)
+  r, ob = credit("not-an-address", 2 * U, "t80", { ["X-For"] = F.game, ["X-Request-Id"] = "bs-1" })
+  check("pay-and-request from a Sender that is no address is refused, nothing credited or bound",
+    r.error == "Bad-Sender" and next(ob) == nil and untouched() and Beacon.seen["not-an-address|bs-1"] == nil, r.error)
+  r = credit("not-an-address", 2 * U, "t80", { ["X-For"] = F.game, ["X-Request-Id"] = "bs-1" })
+  check("its reference is spent: the same notice again is a duplicate", r.duplicate == true and untouched(), encode(r))
+  r, ob = send({ target = F.beacon, Action = "Withdraw" })
+  check("an unsigned withdraw is refused", r.error == "Unsigned" and next(ob) == nil and untouched(), r.error)
+  r, ob = send(wallet(F.game, { Action = "Withdraw", Quantity = "lots" }))
+  check("a withdraw of no integer is refused", r.error == "Bad-Quantity" and next(ob) == nil and untouched(), r.error)
+  for _, q in ipairs({ "15", "0", "-1" }) do
+    r, ob = send(wallet(F.game, { Action = "Withdraw", Quantity = q }))
+    check("a withdraw of " .. q .. " of 14 is refused", r.error == "Insufficient-Balance" and next(ob) == nil
+      and untouched(), r.error)
+  end
+  r, ob = send(wallet(F.stranger, { Action = "Withdraw" }))
+  check("withdrawing an empty balance is refused", r.error == "Insufficient-Balance" and next(ob) == nil
+    and Beacon.balances[F.stranger] == nil and untouched(), r.error)
+  r, ob = send(delivery(F.game, { Action = "Claim" }))
+  check("a process delivery claims nothing", r.error == "Nothing-To-Claim" and next(ob) == nil and untouched(), r.error)
+  r = send(wallet(F.stranger, { Action = "Get-Round", Round = "999" }))
+  check("an unknown round is not found", r.error == "Round-Not-Found" and info().round == 0, r.error)
   send(wallet(F.stranger, { Action = "Credit-Notice", Sender = F.stranger, Quantity = tostring(99 * U),
     Reference = "t90", ["from-process"] = F.token }))
   eq("wallet forging from-process credits nothing", Beacon.balances[F.stranger], nil)
@@ -290,6 +360,22 @@ function runBeaconTests()
   credited = credited + 3
   check("a second requester's pay-1 binds round 3 too", r.round == 3, encode(r))
 
+  -- Device mode with no working verifier: a partial is refused and neither
+  -- locks the round nor is held.
+  local pc0 = Beacon.pendingCount
+  local function noPartials() return (Beacon.lockedRound or 0) == 0 and next(Beacon.partials.by) == nil
+    and Beacon.round == 2 and Beacon.pendingCount == pc0 end
+  local savedAo0 = ao
+  for i, verifier in ipairs({ false, { resolve = function() error("node down") end },
+                              { resolve = function() return "error", "unreachable" end },
+                              { resolve = function() return "ok", "not a table" end } }) do
+    ao = verifier or nil
+    r = send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 3, signature = F.partial31 }) }))
+    check("no verifier " .. i .. ": the partial is refused, nothing locked or held",
+      r.error == "Verifier-Unavailable" and noPartials(), r.error)
+  end
+  ao = savedAo0
+
   -- Production mode: rng@1.0 verifies one group signature, while the beacon
   -- requires threshold published partials and pays their members.
   local savedAo = ao
@@ -310,6 +396,12 @@ function runBeaconTests()
   r = send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 3, signature = "bad" }) }))
   eq("device mode rejects invalid partial", r.error, "Bad-Signature")
   send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 3, signature = F.partial31 }) }))
+  local acc0 = { Beacon.accrued[F.members[1]], Beacon.accrued[F.members[2]], Beacon.accrued[F.members[3]] }
+  r = send(wallet(F.members[3], { Action = "Round", Data = encode({ round = 3, signature = F.sig3 }) }))
+  check("device mode: one partial short of threshold finalizes nothing", r.error == "Not-Enough-Partials"
+    and Beacon.round == 2 and Beacon.pendingCount == pc0 and size(Beacon.partials.by) == 1
+    and Beacon.accrued[F.members[1]] == acc0[1] and Beacon.accrued[F.members[2]] == acc0[2]
+    and Beacon.accrued[F.members[3]] == acc0[3], r.error)
   send(wallet(F.members[2], { Action = "Partial", Data = encode({ round = 3, signature = F.partial32 }) }))
   r = send(wallet(F.members[3], { Action = "Round", Data = encode({ round = 3, signature = F.fake3 }) }))
   eq("device mode rejects forged group signature", r.error, "Bad-Signature")
@@ -444,6 +536,57 @@ function runBeaconTests()
     eq(gone .. " does not exist", dao({ Action = gone }).error, "unknown action '" .. gone .. "'")
   end
 
+  -- Proposals the queue refuses leave the queue, the DAO and the money alone.
+  local function govSnapshot()
+    return encode({ q = Beacon.gov.pending, n = Beacon.gov.nextId, dao = govInfo().dao, paused = Beacon.paused,
+      acc = Beacon.protocolAccrued, seq = Beacon.transferSeq })
+  end
+  local g0 = govSnapshot()
+  r = dao({ Action = "Gov.Set-Dao", Dao = "short", ["Effective-At"] = at() })
+  check("the DAO naming a bad successor is refused on proposal", r.error == "Dao must be a 43-character process id"
+    and govSnapshot() == g0, encode(r))
+  r = dao({ Action = "Gov.Pause", ["Effective-At"] = at(), Note = string.rep("n", 4100) })
+  check("a proposal over MAX_ARGS_BYTES is refused", r.error == "Too-Large" and govSnapshot() == g0, encode(r))
+  r = dao({ Action = "Gov.Cancel", ["Gov-Id"] = "code" })
+  check("cancelling a code approval that is not there", r.error == "Unknown-Gov-Id" and govSnapshot() == g0, encode(r))
+  r = dao({ Action = "Gov.Cancel", ["Gov-Id"] = "999" })
+  check("cancelling an unknown id", r.error == "Unknown-Gov-Id" and govSnapshot() == g0, encode(r))
+  r = dao({ Action = "Gov.Cancel", ["Gov-Id"] = "not-a-number" })
+  check("cancelling a non-numeric id", r.error == "Unknown-Gov-Id" and govSnapshot() == g0, encode(r))
+  -- The queue holds Gov.MAX_PENDING; one more is refused and nothing is added.
+  local held = {}
+  for i = 1, Gov.MAX_PENDING do
+    held[i] = dao({ Action = "Gov.Pause", ["Effective-At"] = at(i) }).pending.id
+  end
+  local full = govSnapshot()
+  r = dao({ Action = "Gov.Pause", ["Effective-At"] = at() })
+  check("a full queue refuses another proposal", r.error == "Too-Many-Pending" and govSnapshot() == full
+    and not Beacon.paused, encode(r))
+  for _, id in ipairs(held) do dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(id) }) end
+  eq("the queue is empty again", #info().govPending, 0)
+  -- A handler that throws, on proposal or on apply, rolls the whole message back.
+  local realEncode0 = encode
+  local function throwOnClaim(v)
+    if type(v) == "table" and v.claimed ~= nil and v.recipient ~= nil then error("boom") end
+    return realEncode0(v)
+  end
+  g0 = govSnapshot()
+  encode = throwOnClaim
+  r, ob = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner, ["Effective-At"] = at() })
+  encode = realEncode0
+  check("a proposal whose dry run throws is refused, nothing queued", r.error ~= nil and next(ob) == nil
+    and govSnapshot() == g0, encode(r))
+  local pid = dao({ Action = "Gov.Claim-Protocol", Recipient = F.owner, ["Effective-At"] = at() }).pending.id
+  due(pid)
+  g0 = govSnapshot()
+  encode = throwOnClaim
+  r, ob = apply(pid)
+  encode = realEncode0
+  check("an apply that throws pays nothing and keeps the action pending", r.error ~= nil and next(ob) == nil
+    and govSnapshot() == g0 and Beacon.gov.pending[tostring(pid)] ~= nil, encode(r))
+  dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(pid) })
+  eq("cancelled after", #info().govPending, 0)
+
   -- The DAO executes a proposal once.
   check("proposal executes", dao({ Action = "Gov.Pause", ["X-Dao-Proposal"] = "7" }).paused == true)
   dao({ Action = "Gov.Resume", ["X-Dao-Proposal"] = "8" })
@@ -457,6 +600,8 @@ function runBeaconTests()
   dao({ Action = "Gov.Pause" })
   eq("paused: mode", info().mode, "paused")
   eq("paused: no new requests", send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "p1" })).error, "Paused")
+  r = send(wallet(F.stranger, { Action = "Gov.Resume" }))
+  check("a stranger cannot resume", r.error == "Not authorised" and Beacon.paused == true, r.error)
   r = credit(F.wallet, 6 * U, "t4", { ["X-Request-Id"] = "pay-2" })
   credited = credited + 6
   check("pay-and-request refused while paused: the credit stays", r.error == "Paused" and Beacon.balances[F.wallet] == 6, r.error)
