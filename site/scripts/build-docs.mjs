@@ -88,7 +88,15 @@ function render(markdown, slug) {
         return false;
       },
       table(token) {
-        return `<div class="doc-table">${marked.Renderer.prototype.table.call(this, token)}</div>`;
+        if (token.header.length < 3) {
+          return '<div class="doc-table">' + marked.Renderer.prototype.table.call(this, token) + '</div>';
+        }
+        const labels = token.header.map(cell => plain(cell.text).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;"));
+        const header = token.header.map(cell => this.tablecell(cell)).join("");
+        const rows = token.rows.map(row => "<tr>" + row.map((cell, i) =>
+          this.tablecell(cell).replace(/^<td([^>]*)>/, (_, attrs) => '<td' + attrs + ' data-label="' + labels[i] + '"><div>').replace("</td>", "</div></td>")
+        ).join("") + "</tr>").join("");
+        return '<div class="doc-table doc-table-wide"><table><thead><tr>' + header + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
       },
     },
   });

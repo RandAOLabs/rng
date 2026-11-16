@@ -14,19 +14,25 @@ const navigation: Array<{ key: ActivePage; label: string; href: string }> = [
 ];
 
 export function SiteHeader({ active }: Props) {
+  const links = navigation.map((item) => (
+    <a key={item.key} href={item.href} className={active === item.key ? "active" : undefined} aria-current={active === item.key ? "page" : undefined}>
+      <strong>{item.label}</strong>
+    </a>
+  ));
   return (
     <header className="topbar">
       <a className="brand" href="/" aria-label="RNG Labs home">
         <Image className="brand-logo" src="/rng.png" width={48} height={48} alt="" priority unoptimized />
         <span className="brand-copy"><strong>RNG_LABS</strong></span>
       </a>
-      <nav className="nav-rail" aria-label="Main navigation">
-        {navigation.map((item) => (
-          <a key={item.key} href={item.href} className={active === item.key ? "active" : undefined} aria-current={active === item.key ? "page" : undefined}>
-            <strong>{item.label}</strong>
-          </a>
-        ))}
-      </nav>
+      <nav className="nav-rail" aria-label="Main navigation">{links}</nav>
+      <button type="button" className="site-menu" popoverTarget="site-drawer" aria-label="Open navigation">
+        <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+      </button>
+      <div id="site-drawer" popover="auto" aria-label="Site menu">
+        <div className="drawer-heading"><strong>RNG Labs</strong><button type="button" popoverTarget="site-drawer" popoverTargetAction="hide" aria-label="Close navigation">×</button></div>
+        <nav aria-label="Main navigation">{links}</nav>
+      </div>
     </header>
   );
 }

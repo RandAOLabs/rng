@@ -182,7 +182,7 @@ export function ConsoleDashboard() {
         </div>
 
         <a className="rng-visual live-beacon" href="/how" aria-label="Live Any-Honest beacon. Open how it works.">
-          <BeaconPipeline validators={validators} tracks={tracks} ok={live} total={total} rate={rate} />
+          {(!unavailable || tracks.length > 0) && <BeaconPipeline validators={validators} tracks={tracks} ok={live} total={total} rate={rate} />}
           <ul className="beacon-feed">
             {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b>{p.ms ? `${p.ms}ms` : ""}</b></li>)}
           </ul>

@@ -9,6 +9,7 @@ export function DocsLayout({ current, children }: Props) {
     <main className="shell docs-page">
       <SiteHeader active="docs" />
       <div className="docs-body container">
+        {current && <a className="docs-mobile-index" href="/docs">← All docs</a>}
         <nav className="docs-sidebar" aria-label="Docs">
           <a className={current ? "docs-home" : "docs-home active"} href="/docs" aria-current={current ? undefined : "page"}>All docs</a>
           <ul>

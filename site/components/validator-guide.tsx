@@ -49,7 +49,7 @@ function Command({ text }: { text: string }) {
   };
   return (
     <div className="flex items-start gap-2 border border-[var(--line)] bg-black/60 p-3">
-      <pre className="m-0 min-w-0 flex-1 overflow-x-auto whitespace-pre text-[12px] text-[#d9d9d4]">{text}</pre>
+      <pre className="m-0 min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] md:overflow-x-auto md:whitespace-pre text-[12px] text-[#d9d9d4]">{text}</pre>
       <button type="button" onClick={copy} className="shrink-0 border border-[var(--line)] px-2 py-1 text-[11px] text-[var(--gray)] hover:border-[var(--white)] hover:text-[var(--white)]">
         {copied ? "Copied" : "Copy"}
       </button>
