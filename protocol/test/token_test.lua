@@ -97,6 +97,7 @@ local function genesisTests()
     { "zero allocation", { [F.owner] = SUPPLY, [F.user] = 0 } },
     { "negative allocation", { [F.owner] = SUPPLY + 5, [F.user] = -5 } },
     { "fractional allocation", { [F.owner] = "999999999999999.5", [F.user] = "0.5" } },
+    { "numeric fractional allocation", { [F.owner] = SUPPLY - 1, [F.user] = 0.5 } },
     { "overflowing allocation", { [F.owner] = "9007199254740993", [F.user] = "1" } },
   }
   for _, case in ipairs(bad) do
@@ -597,9 +598,114 @@ local function patchModeTests()
   Lua53bPatchMode = previous
 end
 
+--- Refusals the suites above do not reach, each with the ledger, the streams
+--- and the published map shown unchanged after it (raw reply text asserted).
+local function refusalTests()
+  local function ledger()
+    local rows = {}
+    for a, v in pairs(Balances) do rows[#rows + 1] = a .. "=" .. string.format("%d", v) end
+    table.sort(rows)
+    return table.concat(rows, ",") .. "|" .. string.format("%d/%d/%d", TotalSupply, TransferSeq, TransferStreamRevision)
+      .. "|" .. encode(TransferStreams)
+  end
+  local function raw() return base.results.output.data end
+  boot()
+
+  local was = ledger()
+  send({ target = SELF, Action = "Balance" })
+  eq("unsigned Balance with no Account has no address", raw(), '{"error":"No address"}')
+  send(wallet(F.user, { Action = "Transfer", Quantity = "1" }))
+  eq("Transfer with no Recipient refused", raw(), '{"error":"Recipient is required"}')
+  send(wallet(F.user, { Action = "Transfer", Recipient = "", Quantity = "1" }))
+  eq("Transfer with an empty Recipient refused", raw(), '{"error":"Recipient is required"}')
+  eq("those refusals move nothing", ledger(), was)
+
+  -- A paid sequence resent without its receipt, carrying more X- tags than a
+  -- notice may: refused, and still nothing moves.
+  pay("1")
+  TransferReceipts, TransferReceiptOrder = {}, {}
+  was = ledger()
+  local many = {}
+  for i = 1, 17 do many["X-Tag-" .. i] = "v" end
+  local r, outbox = pay("1", many)
+  eq("a receipt-less replay over the X- tag bound is refused", raw(),
+    '{"error":"A transfer carries at most 16 X- tags and 2048 bytes of them"}')
+  check("and answers with no notice", next(outbox) == nil, r.Duplicate)
+  eq("and moves nothing", ledger(), was)
+
+  -- A VM that kept a receipt but lost the stream that paid it: the receipt
+  -- says paid, the stream says not, and the transfer is refused, not re-paid.
+  pay("2")
+  local streams = TransferStreams
+  TransferStreams = {}
+  was = ledger()
+  pay("2")
+  eq("a receipt the stream does not know is refused", raw(),
+    '{"error":"Transfer stream does not match its retained receipt"}')
+  eq("and moves nothing", ledger(), was)
+  TransferStreams = streams
+
+  -- Published checkpoints that do not prove themselves refuse every action
+  -- and publish nothing.
+  local function badCheckpoint(name, streamsJson, revision, info, want)
+    boot()
+    TransferStreams, TransferStreamRevision = {}, 0
+    base.transferstreams, base.transferstreamrevision = streamsJson, revision
+    if info ~= nil then base.tokeninfo = info end
+    local published = encode({ base.totalsupply, base.balances, base.transferseq, base.tokeninfo })
+    was = ledger()
+    send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" }))
+    eq(name, raw(), '{"error":"' .. want .. '"}')
+    eq(name .. ": moves nothing", ledger(), was)
+    eq(name .. ": publishes nothing", encode({ base.totalsupply, base.balances, base.transferseq, base.tokeninfo }), published)
+    check(name .. ": the checkpoint stays as published",
+      base.transferstreams == streamsJson and base.transferstreamrevision == revision)
+  end
+  badCheckpoint("streams without a revision (no sequenced tokeninfo)", '{"revision":0,"senders":{}}', nil,
+    encode({ Sealed = "true" }), "Transfer stream revision is missing")
+  badCheckpoint("a sender that is not an address", '{"revision":1,"senders":{"short":{"floor":1,"above":{}}}}', "1",
+    nil, "Invalid transfer stream checkpoint")
+  local keys = {}
+  for i = 1, 256 do keys[#keys + 1] = '"' .. i .. '":true' end
+  keys[#keys + 1] = '"01":true'
+  badCheckpoint("a window of 257 keys (one spelled twice)",
+    '{"revision":257,"senders":{"' .. F.process .. '":{"floor":0,"above":{' .. table.concat(keys, ",") .. '}}}}', "257",
+    nil, "Transfer stream window is too large")
+  badCheckpoint("floors that do not sum to the revision",
+    '{"revision":5,"senders":{"' .. F.process .. '":{"floor":2,"above":{}}}}', "5",
+    nil, "Transfer stream checkpoint does not match its revision")
+
+  -- 5.3b: a cold VM rebuilds balances only from a checkpoint matching its witness.
+  local previous = Lua53bPatchMode
+  Lua53bPatchMode = true
+  reset(goodAllocations())
+  send(wallet(F.user, { Action = "Info" }))
+  local balances = base.balances
+  local function cold(name, published, want)
+    reset(nil, true)
+    base.balances = published
+    local commit, total = base.tokencommit, base.totalsupply
+    send(wallet(F.user, { Action = "Info" }))
+    eq(name, raw(), '{"error":"' .. want .. '"}')
+    check(name .. ": mints and restores nothing", TotalSupply == 0 and Minted == 0 and next(Balances) == nil and not Sealed)
+    check(name .. ": publishes nothing", base.balances == published and base.tokencommit == commit
+      and base.totalsupply == total)
+  end
+  cold("5.3b cold VM with no balance checkpoint", nil, "RNG balance checkpoint is missing")
+  local forged = json.decode(balances)
+  forged[F.user] = "1000001"
+  cold("5.3b cold VM whose balances do not sum to the supply", encode(forged),
+    "RNG balance checkpoint does not match its witness")
+  reset(nil, true)
+  base.balances = balances
+  send(wallet(F.user, { Action = "Info" }))
+  check("5.3b the true checkpoint restores", TotalSupply == SUPPLY and Balances[F.user] == 1000000 and Sealed)
+  Lua53bPatchMode = previous
+end
+
 function runTokenTests()
   local suites = { genesisTests, sealTests, walletTests, identityTests, sequenceTests, receiptBoundTests, lostNoticeTests,
-                   restoreTests, patchModeTests }
+                   restoreTests, patchModeTests, refusalTests }
   for i, suite in ipairs(suites) do
     local ok, err = pcall(suite)
     check("suite " .. i .. " ran", ok, err)
