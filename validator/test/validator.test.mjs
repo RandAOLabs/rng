@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as tl from '../anyhonest.mjs';
 import {
-  plan, batch, HOLD_MS, HOLD_MAX_MS, REVEAL_MARGIN_MS, Clock, Health, backoff, secretStore, createValidator, bondCommand, checkSuccessor, bondTags, runLoop,
+  plan, batch, HOLD_MS, HOLD_MAX_MS, REVEAL_MARGIN_MS, Clock, Health, secretStore, createValidator, bondCommand, checkSuccessor, bondTags, runLoop,
 } from '../anyhonest-validator.mjs';
 
 const ME = 'me'.padEnd(43, '0');
@@ -29,7 +29,7 @@ function baseInfo(over = {}) {
   };
 }
 const ctx = (dir, over = {}) => ({ me: ME, sent: new Map(), atSlot: 10, now: 100000, beaconNow: 100000, healthy: true,
-  backoffUntil: 0, secrets: secretStore(dir), ...over });
+  secrets: secretStore(dir), ...over });
 const kinds = (r) => r.actions.map((a) => a.kind);
 
 // --- A mocked node: one beacon (and maybe a successor), its own clock ---------
@@ -246,12 +246,12 @@ test('a commit-phase round is owed only by its set', () => {
   assert.deepEqual(kinds(plan(info, ctx(tmp(), { pause: true }))), ['Pause', 'Commit']);
 });
 
-test('Ready needs good standing, the cooldown, our backoff, health and the full stake', () => {
+test('Ready needs good standing, an old beacon cooldown, health and the full stake; no wait of its own', () => {
   const v = (o) => baseInfo({ validators: [{ address: ME, ready: false, bond: 25000, ...o }, { address: OTHER, ready: true }] });
   assert.deepEqual(kinds(plan(v({}), ctx(tmp()))), ['Ready']);
   assert.deepEqual(kinds(plan(v({ overdue: true }), ctx(tmp()))), []);
   assert.deepEqual(kinds(plan(v({ rejoinAt: 100001 }), ctx(tmp()))), []);
-  assert.deepEqual(kinds(plan(v({}), ctx(tmp(), { backoffUntil: 100001 }))), []);
+  assert.deepEqual(kinds(plan(v({ faults: 3, lastFault: { round: 9, kind: 'commit' } }), ctx(tmp()))), ['Ready']);
   assert.deepEqual(kinds(plan(v({}), ctx(tmp(), { healthy: false }))), []);
   assert.deepEqual(kinds(plan(v({ bond: 24000, earnedAtoms: '0' }), ctx(tmp()))), []);
   assert.deepEqual(kinds(plan(v({ bond: 24000, earnedAtoms: String(1000 * UNIT) }), ctx(tmp()))), ['Ready']);
@@ -291,17 +291,6 @@ test('health counts only local round trips, and a lost send as infinite', () => 
   assert.equal(h.healthy(6000, 5000), true);
   h.sent(7000, -1);
   assert.equal(h.healthy(7000, 5000), false);
-});
-
-test('backoff doubles per incident from rejoinBaseMs', () => {
-  const p = { rejoinBaseMs: 1000, rejoinCapMs: 8000 };
-  let b = { faults: null, n: 0, until: 0, readySince: 0 };
-  b = backoff({ ready: true, faults: 0 }, p, 100, b);
-  b = backoff({ ready: false, faults: 1 }, p, 110, b);
-  assert.equal(b.until, 1110);
-  b = backoff({ ready: true, faults: 1 }, p, 2000, b);
-  b = backoff({ ready: false, faults: 2 }, p, 2100, b);
-  assert.equal(b.until, 4100);
 });
 
 // --- The loop against a mocked node ---------------------------------------------

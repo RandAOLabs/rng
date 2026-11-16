@@ -2151,6 +2151,11 @@ local function info(now, healthNow)
   for _, sub in pairs(Timelock.subscriptions or {}) do if sub.active then activeSubscriptions = activeSubscriptions + 1 end end
   local params = {}
   for k, v in pairs(Timelock.params) do if k ~= "h" then params[k] = v end end
+  -- No cooldown (see `fault`). rng-validator@1.0 builds before it back off on
+  -- their own after a fault, rejoinBaseMs doubling up to rejoinCapMs, and
+  -- take 60 s / 1 h when neither is published: 0 tells them not to wait. Not
+  -- a parameter: no Configure can set it.
+  params.rejoinBaseMs, params.rejoinCapMs = 0, 0
   return {
     tier = "any-honest", round = Timelock.round, params = params, validators = vs,
     at = now, mode = mode(), health = healthNow, registered = count(Timelock.validators),

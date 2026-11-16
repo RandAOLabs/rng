@@ -296,6 +296,11 @@ function runTimelockTests()
   local vc = info().validators[3]
   check("suspension published in Info, no cooldown", vc.suspended == true and vc.suspendedAt == 2
     and vc.rejoinAt == nil and vc.strikes == nil and Timelock.validators[C].rejoinAt == nil, encode(vc))
+  -- Older rng-validator@1.0 builds back off by these, defaulting to 60 s / 1 h
+  -- when absent: Info publishes 0, and no Configure moves it.
+  local ip = info().params
+  check("Info tells devices not to back off", ip.rejoinBaseMs == 0 and ip.rejoinCapMs == 0, encode(ip))
+  check("no Configure sets a rejoin wait", Timelock.params.rejoinBaseMs == nil and Timelock.params.rejoinCapMs == nil)
   tick(10000)
   -- c pays for its mistakes out of what it earned before it gets work again.
   r = ready(C)

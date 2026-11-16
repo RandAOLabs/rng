@@ -85,23 +85,6 @@ export class Health {
   get probing() { return this.pending.length > 0; }
 }
 
-// --- Backoff after a fault (as the device) ----------------------------------
-
-/** rejoinBaseMs doubled per incident, up to rejoinCapMs, on the local clock.
- *  A fault while ready starts an incident; ready for a cap or longer resets. */
-export function backoff(mine, params, now, b) {
-  if (!mine) return b;
-  const faults = num(mine.faults);
-  const base = num(params.rejoinBaseMs, 60_000), cap = num(params.rejoinCapMs, 3_600_000);
-  let { n, until } = b;
-  if (b.faults !== null && faults > b.faults && b.readySince > 0) {
-    n = now - b.readySince < cap ? n + 1 : 1;
-    until = now + Math.min(cap, base * 2 ** Math.min(n - 1, 32));
-  }
-  const readySince = !truthy(mine.ready) ? 0 : b.readySince || now;
-  return { faults, n, until, readySince };
-}
-
 // --- Secrets -----------------------------------------------------------------
 
 /** Every secret sent for a round, { c: alpha }, owner-only, on disk BEFORE its
@@ -177,11 +160,13 @@ export const HOLD_MS = 500, HOLD_MAX_MS = 500, REVEAL_MARGIN_MS = 10_000;
 /**
  * The actions for one pass, as [{ kind, round, data }], and the oldest round
  * still shown. ctx: { me, sent, atSlot, now (local), beaconNow, healthy,
- * backoffUntil, exit, pause, moving, mine, secrets, holdMs?, newAlpha?, commit? }.
+ * exit, pause, moving, mine, secrets, holdMs?, newAlpha?, commit? }.
  * Ready is said only by a member in good standing with a full stake (bond plus
- * the earnings the beacon refills it from), not before the beacon's cooldown,
- * nor our own backoff, nor while the local round trip is over half the commit
- * window. No waiver on quorum loss (2026-11-06: 108 slashes per validator).
+ * the earnings the beacon refills it from), not before an older beacon's
+ * cooldown (rejoinAt), nor while the local round trip is over half the commit
+ * window. No wait of our own after a fault: a fault costs its slash, and a
+ * suspended validator that can work comes straight back. One that was
+ * stopped (pause, exit, a successor) does not.
  */
 export function plan(info, ctx) {
   const { me, sent, atSlot, now, beaconNow, secrets } = ctx;
@@ -199,7 +184,7 @@ export function plan(info, ctx) {
   const fullStake = earned === null || bond + earned >= stake;
   const actions = [];
   if (member && !ready && !exiting && !stopping && !truthy(mine.overdue)
-      && beaconNow >= num(mine.rejoinAt) && now >= num(ctx.backoffUntil)
+      && beaconNow >= num(mine.rejoinAt)
       && ctx.healthy && fullStake && D('Ready', 0, 30_000)) {
     actions.push({ kind: 'Ready', round: 0, data: {} });
   }
@@ -314,7 +299,6 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
   } catch { /* none yet */ }
   const st = {
     me, sent: new Map(), clock: new Clock(), health: new Health(),
-    backoff: { faults: null, n: 0, until: 0, readySince: 0 },
     registry: { at: -Infinity, entry: null }, successor: { at: -Infinity, id: null },
     lastProbe: -Infinity, lastTopUp: -Infinity, latestAt: 0, wasExiting: false, done: false, status: { address: me },
     get beacon() { return beacon; },
@@ -358,11 +342,10 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
     }
     if (!mine) mine = st.registry.entry;
 
-    st.backoff = backoff(mine, p, now, st.backoff);
     if (now - st.successor.at > 10_000) st.successor = { at: now, id: await checkSuccessor(info, beacon, io.readInfo) };
     const exit = flag('exit'), pause = flag('pause'), moving = !!st.successor.id;
     const healthy = st.health.healthy(now, commitWindowMs);
-    const ctx = { me, sent: st.sent, atSlot, now, beaconNow, healthy, backoffUntil: st.backoff.until,
+    const ctx = { me, sent: st.sent, atSlot, now, beaconNow, healthy,
       exit, pause, moving, mine, secrets, log, holdMs: cfg.holdMs };
     const { actions, oldest } = plan(info, ctx);
     // Commits and reveals are posted without waiting: the next read starts
@@ -384,7 +367,7 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
     const shortfall = mine ? Math.max(0, stake - bond - earned) : stake;
     const waiting = mine && !truthy(mine.ready) && !truthy(mine.exiting) && !exit && !pause && !moving && !truthy(mine.overdue);
     if (waiting && !healthy && !st.health.probing && actions.length === 0 && now - st.lastProbe > 2000
-        && beaconNow >= num(mine.rejoinAt) - 30_000 && now >= st.backoff.until - 30_000) {
+        && beaconNow >= num(mine.rejoinAt) - 30_000) {
       st.lastProbe = now;
       await send('Get-Info', {}, [], now);
     }
@@ -431,7 +414,7 @@ export function createValidator({ cfg, me, io, log = () => {} }) {
       registered: !!mine, ready: mine ? truthy(mine.ready) : null, paused: mine ? truthy(mine.paused) : null,
       exiting: mine ? truthy(mine.exiting) : null, bond: mine ? bond : 0, stake, shortfall,
       faults: mine ? num(mine.faults) : null, rejoinAt: mine ? num(mine.rejoinAt) || null : null,
-      backoffUntil: st.backoff.until || null, clockOffsetMs: st.clock.offset, roundTripMs: Number.isFinite(rt) ? rt : null,
+      clockOffsetMs: st.clock.offset, roundTripMs: Number.isFinite(rt) ? rt : null,
       healthy, flags: { exit, pause }, moving: st.successor.id, beaconHealth: info.health ?? null, at: now };
     return { actions, info };
   }

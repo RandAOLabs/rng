@@ -269,7 +269,7 @@ const MONEY_TAGS = {
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
   'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Idle-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',
-  'Rejoin-Base-Ms', 'Rejoin-Cap-Ms', 'Heartbeat', 'Round-Price', 'Request-Price', 'Subscription-Price',
+  'Heartbeat', 'Round-Price', 'Request-Price', 'Subscription-Price',
   'Subscription-Rounds', 'Crack-Bounty', 'Fair-Window-Ms'].map(word);
 
 /** The Effective-At a proposal made at `now` names: the end of its vote, plus the floor (24 h, or

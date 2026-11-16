@@ -7,7 +7,7 @@ import { beaconHealth, type BeaconHealthInput } from "./health-banner";
 type Validator = { address: string; ready?: boolean; suspended?: boolean; exiting?: boolean; overdue?: boolean; bond?: number; faults?: number };
 type Params = {
   stake?: number; slash?: number; maxActive?: number; maxValidators?: number; minCommits?: number;
-  commitWindowMs?: number; targetIntervalMs?: number; rejoinBaseMs?: number; rejoinCapMs?: number;
+  commitWindowMs?: number; targetIntervalMs?: number;
   roundPrice?: number; requestPrice?: number; heartbeat?: number;
 };
 type Beacon = BeaconHealthInput & {
@@ -16,7 +16,7 @@ type Beacon = BeaconHealthInput & {
 };
 
 // Defaults from docs/PERMISSIONLESS.md, used until the live beacon publishes its own.
-const DEFAULTS = { stake: 25_000, slash: 1_000, maxActive: 64, maxValidators: 256, roundPrice: 1, requestPrice: 4, targetIntervalMs: 500, commitWindowMs: 5_000, rejoinBaseMs: 60_000, rejoinCapMs: 3_600_000 };
+const DEFAULTS = { stake: 25_000, slash: 1_000, maxActive: 64, maxValidators: 256, roundPrice: 1, requestPrice: 4, targetIntervalMs: 500, commitWindowMs: 5_000 };
 
 // Heartbeat pay per validator: every round pays `roundPrice`, split across the
 // active set. Requests add (requestPrice - 1) / active each (1 goes to the treasury).
@@ -148,11 +148,11 @@ export function ValidatorGuide() {
         <Command text={"node validator/anyhonest-validator.mjs exit validator.json\nnode validator/anyhonest-validator.mjs finalize-exit validator.json"} />
       </Section>
 
-      <Section title="Slashing, cooldown and rejoining">
+      <Section title="Slashing and rejoining">
         <ul className="m-0 list-disc space-y-1 pl-5">
           <li>Every missed commit or reveal costs {fmt(p.slash)} RNG of your bond, paid to the treasury, and suspends you.</li>
           <li>A withheld reveal is cracked by others; the {fmt(beacon?.priceSchedule?.crackBounty ?? 10)} RNG crack bounty is taken from your bond too.</li>
-          <li>After a fault you must wait {duration(p.rejoinBaseMs)} before rejoining. The wait doubles with each incident, up to {duration(p.rejoinCapMs)}, and resets after you stay ready that long.</li>
+          <li>There is no cooldown. A suspended validator rejoins as soon as it can answer again. One you paused or set to exit stays out.</li>
           <li>To rejoin, your bond plus earnings must cover the full {fmt(p.stake)} RNG stake again. Top up before you send <code>Ready</code>; the validator does this check itself.</li>
           <li>Governance can remove a validator, but it always refunds the full bond. It cannot take bonds.</li>
         </ul>
