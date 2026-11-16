@@ -91,14 +91,11 @@ local function freshState()
       -- Each round takes at most maxActive validators (ranked: capped bond,
       -- then seniority); the registry holds at most maxValidators.
       maxActive = 64, maxValidators = 256, fairWindowMs = 60000,
-      -- After a fault, Ready is refused for rejoinBaseMs, doubling with every
-      -- incident up to rejoinCapMs; a validator ready for rejoinCapMs starts over.
-      rejoinBaseMs = 60000, rejoinCapMs = 3600000,
       roundPrice = 1, requestPrice = 4, subscriptionPrice = 1, subscriptionRounds = 1000, crackBounty = 10,
     },
     -- address -> { ready = bool, paused = bool, faults = n, lastFault = { round, kind, slashed }, joinedAt = ms,
-    --              exiting = bool, exitAt = round, strikes = n, readyAt = ms,
-    --              suspendedAt = round, suspendedAtMs = ms, rejoinAt = ms (while suspended by a fault) }
+    --              exiting = bool, exitAt = round, readyAt = ms,
+    --              suspendedAt = round, suspendedAtMs = ms (while suspended by a fault) }
     validators = {},
     bonds = {},            -- address -> stake, RNG; every failed duty takes `slash` of it
     round = 0,             -- highest finalized round
@@ -160,6 +157,8 @@ local function withDefaults(t)
   local p, out = {}, {}
   for k, v in pairs(freshState().params) do p[k] = v end
   for k, v in pairs(t.params or {}) do p[k] = v end
+  -- The rejoin cooldown is gone: a fault is paid for by its slash alone.
+  p.rejoinBaseMs, p.rejoinCapMs = nil, nil
   for k, v in pairs(t) do out[k] = v end
   out.params = p
   return out
@@ -643,24 +642,20 @@ end
 --- One incident costs at most the rounds it already holds: the first fault
 --- suspends it, so it is in no round opened after that, and only rounds it was
 --- already given (one committing, the ones it committed to) can fault it again.
---- The first fault of an incident also starts a cooldown (rejoinAt) before Ready
---- is accepted: rejoinBaseMs, doubled per incident up to rejoinCapMs, so a
---- validator too slow for the commit window cannot rejoin and fault in a loop
---- (2026-11-06: 108 missed commits each, one every rejoin).
+--- There is no cooldown: a suspended validator may say Ready as soon as it is
+--- in good standing with a full stake again. The slash is the whole price of a
+--- fault; whether it can do the work again is the validator's to measure
+--- (rng-validator@1.0 says Ready only on a fresh round trip inside the commit
+--- window). A time-based wait kept validators that could work out of the set
+--- for up to an hour, the beacon degraded or halted meanwhile (2026-11-16).
 local function fault(addr, r, kind, now)
   local v = Timelock.validators[addr]
   if not v then return end
   local cut = math.min(int(Timelock.params.slash, 1000), int(Timelock.bonds[addr], 0))
   Timelock.bonds[addr] = int(Timelock.bonds[addr], 0) - cut
   Timelock.treasuryAtoms = int(Timelock.treasuryAtoms, 0) + cut * int(Timelock.unit, 1)
-  if v.ready or v.suspendedAtMs == nil then
-    local p = Timelock.params
-    local base, cap = int(p.rejoinBaseMs, 60000), int(p.rejoinCapMs, 3600000)
-    local strikes = now - int(v.readyAt, 0) >= cap and 1 or int(v.strikes, 0) + 1
-    local wait = base
-    for _ = 2, math.min(strikes, 64) do wait = math.min(wait * 2, cap) end
-    v.strikes, v.suspendedAt, v.suspendedAtMs, v.rejoinAt = strikes, r, now, now + math.min(wait, cap)
-  end
+  if v.ready or v.suspendedAtMs == nil then v.suspendedAt, v.suspendedAtMs = r, now end
+  v.strikes, v.rejoinAt = nil, nil
   v.ready, v.faults = false, int(v.faults, 0) + 1
   v.lastFault = { round = r, kind = kind, slashed = cut }
 end
@@ -1466,16 +1461,13 @@ end
 --- `stake` is refilled from earnings first, so a validator pays for its own
 --- mistakes out of what it earned; only one that has earned too little needs
 --- new tokens (X-Bond). From here every round it is given must be done.
---- After a fault, not before its cooldown (rejoinAt) has passed.
+--- No cooldown after a fault (see `fault`).
 H["Ready"] = function(base, msg, from, now)
   local v = from and Timelock.validators[from]
   if not v then return fail(base, "Not a validator") end
   if v.exiting then return fail(base, "Validator-Exiting") end
   if v.ready then return reply(base, { ready = true, stake = int(Timelock.bonds[from], 0) }) end
   if overdue(from) then return fail(base, "Not-In-Good-Standing", from, { obligations = roundObligations(from) }) end
-  if v.suspendedAtMs ~= nil and now < int(v.rejoinAt, 0) then
-    return fail(base, "Cooling-Down", from, { rejoinAt = v.rejoinAt, strikes = v.strikes })
-  end
   -- The stake is refilled from earnings as far as they go. Every Ready, the
   -- first and each rejoin, needs the full stake: a slashed validator tops its
   -- bond back up (earnings or X-Bond). A refused Ready changes nothing.
@@ -1493,7 +1485,7 @@ H["Ready"] = function(base, msg, from, now)
   end
   local refilled = refill
   v.ready, v.paused = true, false
-  v.readyAt, v.suspendedAt, v.suspendedAtMs, v.rejoinAt = now, nil, nil, nil
+  v.readyAt, v.suspendedAt, v.suspendedAtMs, v.rejoinAt, v.strikes = now, nil, nil, nil, nil
   return reply(base, { ready = true, stake = int(Timelock.bonds[from], 0), refilled = refilled,
     validators = activeValidators() })
 end
@@ -1596,7 +1588,6 @@ local function badParams(p)
      or p.abandonAfterMs < p.revealWindowMs or p.abandonAfterMs > ABANDON_CAP_MS
      -- A fault takes at most a tenth of the stake: no setting turns slashing into confiscation.
      or p.slash < 1 or p.slash * 10 > p.stake or p.stake > 10000000
-     or p.rejoinBaseMs < p.revealWindowMs or p.rejoinCapMs < p.rejoinBaseMs or p.rejoinCapMs > 30 * DAY_MS
      or p.minCommits < 2 or p.minCommits > p.maxActive or p.maxActive < minActive() or p.maxActive > 128
      or p.maxValidators < p.maxActive or p.maxValidators > 1024
      or (p.heartbeat ~= 0 and p.heartbeat ~= 1)
@@ -2074,9 +2065,8 @@ local function validatorView(addr, active)
                     suspended = v.ready ~= true, overdue = overdue(addr), exiting = v.exiting == true,
                     stake = int(Timelock.bonds[addr], 0), bond = int(Timelock.bonds[addr], 0),
                     faults = int(v.faults, 0), lastFault = v.lastFault,
-                    -- While suspended by a fault: since when, and the earliest Ready (ms).
-                    suspendedAt = v.suspendedAt, suspendedAtMs = v.suspendedAtMs, rejoinAt = v.rejoinAt,
-                    strikes = int(v.strikes, 0) }
+                    -- While suspended by a fault: since when.
+                    suspendedAt = v.suspendedAt, suspendedAtMs = v.suspendedAtMs }
 end
 
 --- The mode rounds run in: heartbeat (the reserve pays), request-driven

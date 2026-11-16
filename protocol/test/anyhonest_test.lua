@@ -290,15 +290,12 @@ function runTimelockTests()
   check("a accrued reveal pools and a crack bounty", Timelock.accruedAtoms[A] > 10 * U)
   eq("c back in good standing", info().validators[3].overdue, false)
 
-  -- A fault starts a cooldown: Ready is refused until rejoinAt, and both
-  -- missed reveals were one incident (one strike).
+  -- A fault suspends (both missed reveals were one incident, from round 2)
+  -- and starts no cooldown: nothing in Info says when Ready is allowed.
   Timelock.accruedAtoms[C] = 5000 * U
-  r = ready(C)
-  check("ready refused while cooling down after a fault", r.error == "Cooling-Down"
-    and Timelock.validators[C].ready == false, r.error)
   local vc = info().validators[3]
-  check("cooldown published in Info", vc.rejoinAt == Timelock.validators[C].rejoinAt and vc.suspendedAt == 2
-    and vc.strikes == 1 and vc.rejoinAt - vc.suspendedAtMs == 10000, encode(vc))
+  check("suspension published in Info, no cooldown", vc.suspended == true and vc.suspendedAt == 2
+    and vc.rejoinAt == nil and vc.strikes == nil and Timelock.validators[C].rejoinAt == nil, encode(vc))
   tick(10000)
   -- c pays for its mistakes out of what it earned before it gets work again.
   r = ready(C)
@@ -402,7 +399,6 @@ function runTimelockTests()
   check("b and c slashed for the commits they owed", Timelock.bonds[B] == 24000 and Timelock.bonds[C] == 24000
     and not Timelock.validators[B].ready and not Timelock.validators[C].ready)
   Timelock.accruedAtoms[B], Timelock.accruedAtoms[C] = Timelock.accruedAtoms[B] + 1000 * U, Timelock.accruedAtoms[C] + 1000 * U
-  eq("no Ready inside the cooldown", ready(B).error, "Cooling-Down")
   tick(40000)
   ready(B); ready(C)
   r = commit(A, 8, "r8a")
@@ -512,13 +508,15 @@ function runTimelockTests()
   TestHarness = true
 
   -- The rejoin spiral (2026-11-06): validators too slow for the commit window
-  -- missed a commit, rejoined at once, missed again: 108 slashes each. Now a
-  -- fault costs only the rounds already held, keeps the validator out of new
-  -- ones, and Ready waits rejoinBaseMs, doubling per incident up to rejoinCapMs.
+  -- missed a commit, rejoined at once, missed again: 108 slashes each. A
+  -- fault costs only the rounds already held and keeps the validator out of
+  -- new ones; there is no cooldown, so each rejoin that fails again is one
+  -- more slash, never more, and Ready is the device's call (rng-validator@1.0
+  -- says it only on a fresh round trip inside the commit window).
   Timelock.foundationReserveAtoms = Timelock.foundationReserveAtoms + 1000 * U
   for _, v in ipairs({ A, B, C }) do Timelock.bonds[v] = 25000 end
   local function has(list, x) for _, y in ipairs(list or {}) do if y == x then return true end end return false end
-  tick(40000) -- ready for rejoinCapMs: strikes start over
+  tick(40000)
   local s = math.tointeger(info().open.round)
   local fA, fB = Timelock.validators[A].faults, Timelock.validators[B].faults
   -- Each rejoin needs the full stake back: a and b refill from earnings.
@@ -531,25 +529,18 @@ function runTimelockTests()
     check("spiral " .. k .. ": c opens round " .. s .. " with all three", r.round == s and r.error == nil, r.error)
     tick(3000)
     eq("spiral " .. k .. ": void", info().open.phase, "collecting")
-    local want = math.min(10000 * 2 ^ (k - 1), 40000)
     for _, v in ipairs({ A, B }) do
       local x = Timelock.validators[v]
       check("spiral " .. k .. ": one slash per incident", x.faults == (v == A and fA or fB) + k
         and Timelock.bonds[v] == bonds[v] - 1000 and x.ready == false, x.faults)
-      check("spiral " .. k .. ": cooldown doubles up to the cap", x.strikes == k and x.rejoinAt - x.suspendedAtMs == want,
-        tostring(x.rejoinAt - x.suspendedAtMs))
+      check("spiral " .. k .. ": no cooldown", x.rejoinAt == nil and x.strikes == nil)
     end
-    -- A naive device saying Ready on every pass while quorum is lost: refused,
-    -- never slashed again, and the beacon refuses new work instead of wedging.
-    for _ = 1, 10 do
-      check("spiral " .. k .. ": no rejoin inside the cooldown", ready(A).error == "Cooling-Down" and ready(B).error == "Cooling-Down")
-    end
+    -- While they are out, the beacon refuses new work instead of wedging.
     eq("spiral " .. k .. ": c cannot open a round alone", commit(C, s, "q4c").error, "Too-Few-Validators")
     eq("spiral " .. k .. ": requests refused, not stuck", request("spiral-" .. k).error, "Too-Few-Validators")
     check("spiral " .. k .. ": no further slash while suspended",
       Timelock.bonds[A] == bonds[A] - 1000 and Timelock.bonds[B] == bonds[B] - 1000)
-    tick(want)
-    check("spiral " .. k .. ": ready once the cooldown passes", ready(A).ready == true and ready(B).ready == true)
+    check("spiral " .. k .. ": ready at once, no cooldown", ready(A).ready == true and ready(B).ready == true)
   end
   -- Overlapping rounds: c holds rounds s and s+1 (committed) and s+2 (in its
   -- set), then goes dark. It is slashed for those three and nothing after.
@@ -988,10 +979,9 @@ function runTimelockTests()
   check("a mixed Configure waits whole, then applies whole", r.applied ~= nil and Timelock.params.commitWindowMs == 3000
     and Timelock.params.abandonAfterMs == 60000, encode(r))
   for i, bad in ipairs({
-    { ["Reveal-Window-Ms"] = "9999" }, { ["Reveal-Window-Ms"] = "600001", ["Abandon-After-Ms"] = "700000", ["Rejoin-Base-Ms"] = "700000", ["Rejoin-Cap-Ms"] = "700000" },
+    { ["Reveal-Window-Ms"] = "9999" }, { ["Reveal-Window-Ms"] = "600001", ["Abandon-After-Ms"] = "700000" },
     { ["Commit-Window-Ms"] = "499" }, { ["Commit-Window-Ms"] = "10001" }, { ["Abandon-After-Ms"] = "9999" },
     { Slash = "0" }, { Slash = "25001" }, { Slash = "2501" }, { Stake = "10000001" },
-    { ["Rejoin-Base-Ms"] = "9999" }, { ["Rejoin-Cap-Ms"] = "2592000001" }, { ["Rejoin-Cap-Ms"] = "9999" },
     { ["Min-Commits"] = "1" }, { ["Min-Commits"] = "3", ["Max-Active"] = "2" }, { ["Max-Active"] = "129" },
     { ["Max-Validators"] = "1025" }, { ["Max-Active"] = "64", ["Max-Validators"] = "63" },
     { Heartbeat = "2" }, { ["Round-Price"] = "0" }, { ["Request-Price"] = "0" }, { ["Subscription-Price"] = "0" },
@@ -1100,7 +1090,7 @@ function runTimelockTests()
   check("successor ack recorded", r.acked == F.successor and info().successorAck == true, r.error)
   -- Attack: every MONEY/CODE verb from the DAO is refused short of the floor.
   local moneyVerbs = {
-    { Action = "Gov.Configure", Slash = "1200" }, { Action = "Gov.Configure", ["Reveal-Window-Ms"] = "15000", ["Rejoin-Base-Ms"] = "15000" },
+    { Action = "Gov.Configure", Slash = "1200" }, { Action = "Gov.Configure", ["Reveal-Window-Ms"] = "15000" },
     { Action = "Gov.Configure", Stake = "26000" }, { Action = "Gov.Configure", ["Crack-Bounty"] = "11" },
     { Action = "Gov.Configure", ["Max-In-Flight"] = "2" }, { Action = "Gov.Configure", ["Cadence-Ms"] = "200" },
     { Action = "Gov.Configure", ["Target-Interval-Ms"] = "900" }, { Action = "Gov.Configure", ["Round-Price"] = "2" },

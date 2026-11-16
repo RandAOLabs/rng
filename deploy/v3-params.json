@@ -5,6 +5,6 @@
   "minCommits": 2, "maxActive": 64, "maxValidators": 256,
   "cadenceMs": 100, "targetIntervalMs": 500, "idleIntervalMs": 5000, "maxInFlight": 3, "catchUpMs": 30000,
   "heartbeat": 1, "roundPrice": 1, "requestPrice": 4, "subscriptionPrice": 1, "subscriptionRounds": 1000,
-  "crackBounty": 10, "stake": 25000, "slash": 1000, "rejoinBaseMs": 60000, "rejoinCapMs": 3600000,
+  "crackBounty": 10, "stake": 25000, "slash": 1000,
   "fairWindowMs": 60000
 }

@@ -38,7 +38,7 @@ const CONFIG = { self: F.beacon, token: F.token, unit: F.unit, T: F.T, h: H, hPr
   commitWindowMs: COMMIT_WINDOW, revealWindowMs: LIVE.revealWindowMs, abandonAfterMs: LIVE.abandonAfterMs,
   minCommits: 2, cadenceMs: LIVE.cadenceMs, targetIntervalMs: LIVE.targetIntervalMs, maxInFlight: LIVE.maxInFlight,
   catchUpMs: LIVE.catchUpMs, heartbeat: 1, roundPrice: 1, requestPrice: 4, stake: 25000, slash: 1000,
-  rejoinBaseMs: 60000, rejoinCapMs: 3600000, crackBounty: 10, predecessor: '',
+  crackBounty: 10, predecessor: '',
   // Nobody subscribes here: these measure the busy pace, so no idle pace.
   idleIntervalMs: 0 };
 

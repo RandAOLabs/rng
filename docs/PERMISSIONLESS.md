@@ -371,7 +371,6 @@ On a new beacon, `Successor-Ack` comes from its `Configure`/genesis outbox:
   committing plus at most `maxInFlight` revealing. Each costs a slash plus at most one crack bounty, so an
   incident costs at most half the stake (defaults: 4 × 1 010 = 4 040 of 25 000). No vote can turn
   slashing into confiscation.
-- `rejoinBaseMs ≥ revealWindowMs`; `rejoinBaseMs ≤ rejoinCapMs ≤ 30 d`
 - `2 ≤ minCommits ≤ maxActive ≤ 128`; `maxActive ≤ maxValidators ≤ 1024`
 - every price and the bounty ≥ 1; `heartbeat ∈ {0,1}`
 - `token`, `unit`, `self` and `predecessor` are fixed after genesis (`Token-Locked`)

@@ -153,9 +153,9 @@ reserve. A crack is refused while the treasury holds less than the bounty.
 A missed commit (in a round's set, no commit in the window) or a missing output at
 a reveal deadline is a fault. Each fault takes `slash` = 1,000 RNG of the bond to
 the treasury, with no allowance. The first fault of an incident suspends the
-validator, so only rounds it already held can fault it again. It also starts a
-cooldown before Ready is accepted: `rejoinBaseMs` = 60 s, doubled per incident up
-to `rejoinCapMs` = 1 hour; a validator that stays ready for the cap starts over.
+validator, so only rounds it already held can fault it again. There is no
+cooldown: a validator that can do the work again may say Ready at once, and pays
+another slash if it cannot.
 
 The hard bounds cap one incident at half the stake:
 `2 x (1 + maxInFlight) x (slash + crackBounty) <= stake`
@@ -174,7 +174,6 @@ No vote can set a parameter outside these (`badParams`):
 | `stake` | at most 10,000,000 | 25,000 |
 | `slash` | 1 to `stake / 10` | 1,000 |
 | `crackBounty` | 1 to `slash` | 10 |
-| `rejoinBaseMs`, `rejoinCapMs` | base >= reveal window, base <= cap <= 30 d | 60,000, 3,600,000 |
 | `minCommits` | 2 to `maxActive` | 2 |
 | `maxActive` | 8 to 128 | 64 |
 | `maxValidators` | `maxActive` to 1,024 | 256 |

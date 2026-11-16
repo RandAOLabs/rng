@@ -56,11 +56,10 @@ only those pids.
 - GOV-3, exit hatch: while GOV-2 is pending, a test validator sends Exit-Now and
   gets its bond back once its owed rounds settle. A payer withdraws during that
   time. A fast-tier test member sends Exit-Now and gets its accrued fees.
-- GOV-4, bond, rejoin, slash cooldown: a test validator bonds to the full stake,
+- GOV-4, bond, rejoin, slash: a test validator bonds to the full stake,
   and a bond below the stake is refused. It goes Ready and runs rounds. It then
   misses a reveal: the round is cracked, the validator is slashed and the
-  crackBounty is paid. Its rejoin backoff doubles from rejoinBaseMs up to
-  rejoinCapMs. On Exit its bond comes back after its rounds settle, and a re-bond
+  crackBounty is paid. It may say Ready again at once (no cooldown). On Exit its bond comes back after its rounds settle, and a re-bond
   is refused while Exit-Settling.
 - GOV-5, Remove-Validator: a DAO proposal with Effective-At. After Gov.Apply the
   validator is gone, its bond is refunded, and rounds keep finalizing.

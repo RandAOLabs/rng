@@ -116,12 +116,12 @@ is in good standing again (its late outputs cracked or abandoned) and sends
 Ready.
 
 One incident costs at most the rounds the validator already holds: the first
-fault takes it out of every round opened after it. Ready is then refused
-(`Cooling-Down`) until `rejoinAt`: `rejoinBaseMs` (60,000) after the fault,
-doubling per incident up to `rejoinCapMs` (3,600,000); a validator ready for
-`rejoinCapMs` starts over. Info shows `suspendedAt`, `suspendedAtMs`,
-`rejoinAt` and `strikes`. A device rejoins only after that, and only once its
-own round trip is well inside the commit window.
+fault takes it out of every round opened after it. There is no cooldown: the
+slash is the whole price of a fault, and Ready is accepted again as soon as
+the validator is in good standing with a full stake. Info shows `suspendedAt`
+and `suspendedAtMs`. A device says Ready only once its own fresh round trip
+(samples from the last minute, none taken across an outage) is well inside
+the commit window.
 
 ## Validator money
 

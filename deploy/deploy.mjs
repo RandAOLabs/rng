@@ -148,8 +148,6 @@ export function badParams(p) {
   need(p.commitWindowMs >= 500 && p.commitWindowMs <= 10000, 'commitWindowMs in [500, 10000]');
   need(p.abandonAfterMs >= p.revealWindowMs && p.abandonAfterMs <= 7 * DAY, 'revealWindowMs <= abandonAfterMs <= 7 d');
   need(p.slash >= 1 && p.slash * 10 <= p.stake && p.stake <= 10000000, '1 <= slash <= stake / 10, stake <= 10^7');
-  need(p.rejoinBaseMs >= p.revealWindowMs && p.rejoinCapMs >= p.rejoinBaseMs && p.rejoinCapMs <= 30 * DAY,
-    'revealWindowMs <= rejoinBaseMs <= rejoinCapMs <= 30 d');
   need(p.minCommits >= 2 && p.minCommits <= p.maxActive && p.maxActive >= 8 && p.maxActive <= 128,
     '2 <= minCommits <= maxActive, 8 <= maxActive <= 128');
   need(p.maxValidators >= p.maxActive && p.maxValidators <= 1024, 'maxActive <= maxValidators <= 1024');
