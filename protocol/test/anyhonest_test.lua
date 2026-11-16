@@ -231,6 +231,10 @@ function runTimelockTests()
   eq("request protocol fees fund the Treasury", Timelock.treasuryAtoms, 102 * U)
   eq("overlapping heartbeats each reserve one fixed round price", Timelock.foundationReserveAtoms, 94 * U)
   eq("game balance 40 - 3 x 4", Timelock.balances[F.game], 28)
+  send(wallet(F.stranger, { Action = "Balance", Account = F.game }), 0)
+  local balRaw = base.results.output.data
+  check("Balance answers the request balance as a raw integer", balRaw:find('"balance":28[,}]') ~= nil
+    and balRaw:find('"account":"' .. F.game .. '"', 1, true) ~= nil, balRaw)
   local rec = state().rounds["1"]
   check("round record keeps T, commits and outputs", rec and rec.T == F.T and rec.commits[A] == P.r1a.c
     and rec.outputs[B].alpha == P.r1b.alpha and rec.outputs[B].y == P.r1b.y and rec.outputs[B].via == "reveal")
