@@ -1,0 +1,229 @@
+{
+ "ticker": "RNG",
+ "note": "Replacement RNG genesis (repoint) from the old token Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso at slot 132, beacon TvgStOyfJZJvi49QkT5AaldQTqzH3OgS27uhPwWm_lY at slot 1035018, vault ibtRrKfbuT0MKPcmSM3VNnM5GJbTiPqYTZagrRwFTB0 at slot 357. Every row says why; the distribution is what the runbook re-funds from the deployer.",
+ "allocations": [
+  {
+   "role": "holder",
+   "address": "-p-VrMg9GpkTNUdv7Lt6VpdbYmVtdBT9l9BMcCs_dHE",
+   "atoms": "1000000000",
+   "why": [
+    "vault payout 11 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "3KaBf1b9lgq8in4WSP1NEI8Q9jSWxgMzGqgKWJwlIfs",
+   "atoms": "1000000000",
+   "why": [
+    "vault payout 7 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "deployer",
+   "address": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
+   "atoms": "949656778337974",
+   "why": [
+    "old beacon reserve, re-funded by fund-reserve: 199656776000000",
+    "old beacon reserve, the fraction below one RNG: 337974",
+    "old beacon treasury, re-funded by fund-treasury: 50015000000000",
+    "bond of G8nfKNw1wKnCd9bGYnr-3Os1j3a-pnWU7ovtLq5bPqU, re-bonded by bond-for: 99000000000",
+    "bond of JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ, re-bonded by bond-for: 93000000000",
+    "bond of apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY, re-bonded by bond-for: 93000000000",
+    "beacon balance of 33WN7xWXPfZBZaKzlwqMEzwCpeq05Rshj6Cqtj6Kgls, re-funded (fund-fair): 40000000",
+    "old beacon residual (held, in no bucket): 2000000",
+    "old balance: 699699960000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "G5G0NLiFUUaUMHyLA0hSWtqUceFJrFWyxHnENtXECh8",
+   "atoms": "1000000000",
+   "why": [
+    "vault payout 1 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "G8nfKNw1wKnCd9bGYnr-3Os1j3a-pnWU7ovtLq5bPqU",
+   "atoms": "115207887342",
+   "why": [
+    "validator earnings accrued in the old beacon: 115207887342"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ",
+   "atoms": "114039887342",
+   "why": [
+    "validator earnings accrued in the old beacon: 114039887342"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "JxKGavYS-QcliuuoTxa2CtlBnkGrTb7pZvzszljxoCY",
+   "atoms": "1000000000",
+   "why": [
+    "vault payout 5 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "L2MlZ6fryHfhE07JNrOawymhs3XOk-zZa00Dx783Mi8",
+   "atoms": "60000000000",
+   "why": [
+    "vault payout 2 the old token refused: 30000000000",
+    "vault payout 6 the old token refused: 1000000000",
+    "vault payout 12 the old token refused: 29000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "RLywdqe15QvPNsUgGQrPzSlm4eXm86yXA5SkTfWWTGU",
+   "atoms": "1000000000",
+   "why": [
+    "vault payout 10 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "X6u2VTGodQ5mr-kyDokzcpnrLKVbbn4TMG61NKvFTCA",
+   "atoms": "1000000000",
+   "why": [
+    "vault payout 4 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY",
+   "atoms": "113973887342",
+   "why": [
+    "validator earnings accrued in the old beacon: 113973887342"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "az75q7lC-AVW9xE5eMcVyRXvlkcIjPlyS27YvspyinY",
+   "atoms": "2000000000",
+   "why": [
+    "vault payout 9 the old token refused: 1000000000",
+    "vault payout 14 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "dBEidzwey_-Unlr7vDjdugrFYKn2VMUJc-u_I4-UtfY",
+   "atoms": "2000000000",
+   "why": [
+    "vault payout 3 the old token refused: 1000000000",
+    "vault payout 8 the old token refused: 1000000000"
+   ]
+  },
+  {
+   "role": "vault",
+   "address": "ibtRrKfbuT0MKPcmSM3VNnM5GJbTiPqYTZagrRwFTB0",
+   "atoms": "49929000000000",
+   "why": [
+    "vault rng backing (its book carries over): 49929000000000"
+   ]
+  },
+  {
+   "role": "holder",
+   "address": "uYt6UaqC6ehLnZ7VyxfTvLT23EconxGdn6kAmknHbQY",
+   "atoms": "1000000000",
+   "why": [
+    "vault payout 13 the old token refused: 1000000000"
+   ]
+  }
+ ],
+ "distribution": {
+  "reserveRng": 199656776,
+  "treasuryRng": 50015000,
+  "validatorRng": 0,
+  "validatorBonds": {
+   "G8nfKNw1wKnCd9bGYnr-3Os1j3a-pnWU7ovtLq5bPqU": 99000,
+   "JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ": 93000,
+   "apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY": 93000
+  },
+  "fairFloatRng": 40
+ },
+ "evidence": {
+  "oldToken": "Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso",
+  "oldTokenSlot": 132,
+  "beaconPaused": false,
+  "beaconResidualAtoms": "2000000",
+  "vaultBacking": "49929000000000",
+  "pendingPayouts": [
+   {
+    "sequence": "1",
+    "recipient": "G5G0NLiFUUaUMHyLA0hSWtqUceFJrFWyxHnENtXECh8",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "2",
+    "recipient": "L2MlZ6fryHfhE07JNrOawymhs3XOk-zZa00Dx783Mi8",
+    "atoms": "30000000000"
+   },
+   {
+    "sequence": "3",
+    "recipient": "dBEidzwey_-Unlr7vDjdugrFYKn2VMUJc-u_I4-UtfY",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "4",
+    "recipient": "X6u2VTGodQ5mr-kyDokzcpnrLKVbbn4TMG61NKvFTCA",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "5",
+    "recipient": "JxKGavYS-QcliuuoTxa2CtlBnkGrTb7pZvzszljxoCY",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "6",
+    "recipient": "L2MlZ6fryHfhE07JNrOawymhs3XOk-zZa00Dx783Mi8",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "7",
+    "recipient": "3KaBf1b9lgq8in4WSP1NEI8Q9jSWxgMzGqgKWJwlIfs",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "8",
+    "recipient": "dBEidzwey_-Unlr7vDjdugrFYKn2VMUJc-u_I4-UtfY",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "9",
+    "recipient": "az75q7lC-AVW9xE5eMcVyRXvlkcIjPlyS27YvspyinY",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "10",
+    "recipient": "RLywdqe15QvPNsUgGQrPzSlm4eXm86yXA5SkTfWWTGU",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "11",
+    "recipient": "-p-VrMg9GpkTNUdv7Lt6VpdbYmVtdBT9l9BMcCs_dHE",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "12",
+    "recipient": "L2MlZ6fryHfhE07JNrOawymhs3XOk-zZa00Dx783Mi8",
+    "atoms": "29000000000"
+   },
+   {
+    "sequence": "13",
+    "recipient": "uYt6UaqC6ehLnZ7VyxfTvLT23EconxGdn6kAmknHbQY",
+    "atoms": "1000000000"
+   },
+   {
+    "sequence": "14",
+    "recipient": "az75q7lC-AVW9xE5eMcVyRXvlkcIjPlyS27YvspyinY",
+    "atoms": "1000000000"
+   }
+  ],
+  "newbookFreeRng": []
+ }
+}

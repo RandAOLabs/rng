@@ -117,43 +117,148 @@ local function schedulerAddress(base)
   return nil
 end
 
---- Any `from-*` origin stamp (`from-process`, `FromProcess`, `from_slot`, ...),
---- compared without case or `-`/`_`. Same as rune.lua's `hasOriginStamp`.
-local function hasOriginStamp(msg)
-  for key in pairs(msg) do
-    if type(key) == "string" then
-      local name = key:lower():gsub("[-_]", "")
-      if #name > 4 and name:sub(1, 4) == "from" then return true end
+-- BEGIN hypertoken admission (paralith-mono packages/hypertoken/lua/admission.lua, verbatim)
+local HTAdmit = (function(...)
+--- admission.lua -- which PROCESS sent a message: exactly what this process's
+--- own scheduler admitted for the slot being computed, and nothing else
+--- (docs/FOREIGN_SCHEDULERS.md).
+---
+--- A process has no key, so a push names its origin in `from-*` stamps that the
+--- delivering node writes. Whoever signed the body says nothing about origin:
+--- a foreign node can sign anything. What counts is the Assignment (`req`)
+--- that THIS process's scheduler signs for the slot. When its door admits a
+--- delivery under node policy (infra/nodes/trust.json) -- its own push
+--- (`local`), a trusted scheduler's (`trusted`), or one it recomputed from the
+--- sender's archived schedule (`verified`) -- it writes `admit-*` keys beside
+--- the body. The rule is one comparison, the same for all three:
+---
+---   the body's from-process, from-entry and from-slot (every spelling of each
+---   agreeing, the slot narrowed to an integer) equal admit-process,
+---   admit-entry and admit-slot on the Assignment.
+---
+--- `admit-*` keys inside a BODY are never read; only `rawget(req, ...)` is. A
+--- stamped body the scheduler did not admit names no process, and is not its
+--- signer's word either (a node that relays a push must not act as itself).
+--- A wallet is still named by its own real signature, in each contract.
+---
+--- `capture(req)` runs once at every compute entry and sets the one global,
+--- `Admitted`. Every copy of this module in a bundle reads that same global,
+--- so the `(msg, base)` callers of each contract's `sourceProcess` stay as
+--- they are.
+---
+--- Loaded as `(function(...) <this file> end)()`. Returns a table. ASCII only;
+--- Luerl-safe: no goto, no table.move, every number narrowed.
+
+local A = {}
+
+--- The keys the rule reads, each as `admit-<key>` off the Assignment. The
+--- scheduler writes more (`admit-outbox-key`, `-scheduler`, `-policy`,
+--- `-policy-epoch`); they stay on the signed Assignment as evidence, and no
+--- contract decision reads them.
+A.KEYS = { "process", "slot", "entry" }
+
+local function int(v)
+  return math.tointeger(tonumber(v))
+end
+
+local function isId(s)
+  return type(s) == "string" and #s == 43 and s:match("^[%w_%-]+$") ~= nil
+end
+
+--- `from-process`, `From_Process` and `FromProcess` are one name.
+local function norm(name)
+  return (tostring(name):lower():gsub("[-_]", ""))
+end
+
+--- The raw body under a tag view that keeps it as `__raw`, or the body itself.
+local function raw(msg)
+  if type(msg) ~= "table" then return {} end
+  local mt = getmetatable(msg)
+  if type(mt) == "table" and type(rawget(mt, "__raw")) == "table" then return rawget(mt, "__raw") end
+  return msg
+end
+
+--- Every `from-*` stamp on a body by normalised name, and true when two
+--- spellings of one stamp disagree, which believes nothing.
+function A.stamps(msg)
+  local out, clash = {}, false
+  for k, v in pairs(raw(msg)) do
+    if type(k) == "string" and v ~= nil and v ~= "" then
+      local n = norm(k)
+      if n ~= "from" and n:sub(1, 4) == "from" then
+        if out[n] ~= nil and out[n] ~= v then clash = true end
+        out[n] = v
+      end
     end
   end
-  return false
+  return out, clash
 end
 
---- The attested process behind a delivery OUR OWN scheduler signed, or nil.
---- Same rule as rune.lua's `processSource`.
-local function processSource(msg, base)
-  local source = msg["from-process"] or msg.FromProcess
-  if type(source) ~= "string" or #source ~= 43 then return nil end
-  local signed = provenSigner(msg)
-  return signed ~= nil and signed == schedulerAddress(base) and source or nil
+--- Does the body carry any `from-*` stamp? Then it is a process delivery and
+--- never a wallet's own word, whether or not it was admitted.
+function A.pushed(msg)
+  return next((A.stamps(msg))) ~= nil
 end
+
+--- Read this slot's admission off the Assignment; nil when there is none.
+--- Call it first thing in compute, every slot.
+function A.capture(req)
+  local a = nil
+  if type(req) == "table" and rawget(req, "admit-process") ~= nil then
+    a = {}
+    for _, k in ipairs(A.KEYS) do a[k] = rawget(req, "admit-" .. k) end
+  end
+  Admitted = a
+  return a
+end
+
+--- The process a body came from when this slot's admission names exactly it;
+--- otherwise nil and why.
+function A.source(msg)
+  local a = Admitted
+  if type(a) ~= "table" then return nil, "Not admitted by this process's scheduler" end
+  local s, clash = A.stamps(msg)
+  if clash then return nil, "Conflicting from-* stamps" end
+  if not isId(s.fromprocess) or s.fromprocess ~= a.process then
+    return nil, "from-process is not what this slot admitted"
+  end
+  if type(s.fromentry) ~= "string" or s.fromentry ~= a.entry then
+    return nil, "from-entry is not what this slot admitted"
+  end
+  local slot = int(s.fromslot)
+  if slot == nil or slot ~= int(a.slot) then return nil, "from-slot is not what this slot admitted" end
+  return s.fromprocess
+end
+
+--- Who acts: the admitted process for a stamped body, nobody for a stamped
+--- body that was not admitted, and `signer(msg)` (the contract's own: one real
+--- signature, `type` OR `alg`) for an unstamped one.
+function A.actor(msg, signer)
+  if A.pushed(msg) then return (A.source(msg)) end
+  return signer(msg)
+end
+
+return A
+end)()
+-- END hypertoken admission
 
 --- A wallet speaking for itself: the one real signer of a message with no
---- origin stamp. A stamped message some other node carried is that node's
---- transport signature, not its word, so it is nobody (rune.lua `actor`,
---- HYPERTOKEN_CRITIQUE item 6). Unlike rune.lua, our own scheduler is never a
---- wallet either: its signature without `from-process` attests nothing.
+--- `from-*` stamp (a stamped body is a delivery, never its signer's word).
+--- Unlike rune.lua, our own scheduler is never a wallet: its signature
+--- without an admitted push attests nothing.
 local function walletSigner(msg, base)
-  if hasOriginStamp(msg) then return nil end
+  if HTAdmit.pushed(msg) then return nil end
   local signed = provenSigner(msg)
   if signed ~= nil and signed == schedulerAddress(base) then return nil end
   return signed
 end
 
---- Who is spending: the attested process of an own-scheduler delivery, else
---- the wallet signer, else nobody.
+--- Who is spending. A stamped body (any `from-*`) is a process delivery: it is
+--- the process this slot's Assignment admitted (admission.lua: own push
+--- `local`, a `trusted` scheduler's, or a `verified` one), or nobody -- never
+--- the node that relayed it. An unstamped body is its wallet signer.
 local function actor(msg, base)
-  return processSource(msg, base) or walletSigner(msg, base)
+  return HTAdmit.actor(msg, function(m) return walletSigner(m, base) end)
 end
 
 --- A wallet or process address: exactly 43 base64url characters. Every holder
@@ -540,7 +645,7 @@ H["Transfer"] = function(base, msg)
   if not amount then return fail(base, why) end
 
   local flow
-  if processSource(msg, base) then
+  if HTAdmit.pushed(msg) then
     flow, why = prepareProcessTransfer(from, msg)
     if not flow then return fail(base, why) end
     if flow.duplicate then
@@ -667,6 +772,8 @@ end
 
 function compute(base, req, opts)
   base = type(base) == "table" and base or {}
+  -- This slot's admission, before anything reads a push (admission.lua).
+  HTAdmit.capture(req)
   ChangedBalances = {}
   ForceTokenCheckpoint = false
   local restored, problem = restoreTokenState(base)

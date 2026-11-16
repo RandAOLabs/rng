@@ -44,24 +44,39 @@ local function wallet(signer, fields)
   return body
 end
 
-local function delivery(fromProcess, fields)
-  local body = wallet(F.sched, fields)
-  body["from-process"] = fromProcess
+--- A push our scheduler ADMITTED (admission.lua): the body carries from-*
+--- stamps and the Assignment (req) carries the matching admit-* keys. The
+--- relaying signer is irrelevant: `signer` defaults to our scheduler, and a
+--- trusted foreign scheduler (paralith's, for the vault) is admitted alike.
+local Admits = setmetatable({}, { __mode = "k" })
+local admitSlot = 0
+local function delivery(fromProcess, fields, signer)
+  local body = wallet(signer or F.sched, fields)
+  admitSlot = admitSlot + 1
+  local entry = "entry-" .. admitSlot
+  body["from-process"], body["from-entry"], body["from-slot"] = fromProcess, entry, tostring(admitSlot)
+  Admits[body] = { process = fromProcess, entry = entry, slot = admitSlot }
   return body
 end
 
-local function send(body)
-  base = compute(base, { body = body, process = SELF })
+local function send(body, admit)
+  local req = { body = body, process = SELF }
+  local a = admit
+  if a == nil then a = Admits[body] end
+  if a then
+    req["admit-process"], req["admit-entry"], req["admit-slot"] = a.process, a.entry, a.slot
+  end
+  base = compute(base, req)
   local out = base.results and base.results.output and base.results.output.data
   local ok, decoded = pcall(json.decode, out or "")
   return ok and decoded or {}, base.results and base.results.outbox or {}
 end
 
-local function pay(sequence, fields)
+local function pay(sequence, fields, signer)
   local body = { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
                  ["X-Transfer-Sequence"] = sequence }
   for k, v in pairs(fields or {}) do body[k] = v end
-  return send(delivery(F.process, body))
+  return send(delivery(F.process, body, signer))
 end
 
 local function boot()
@@ -317,12 +332,48 @@ local function identityTests()
   eq("wallet unchanged", r.From, F.user)
   eq("wallet debited once", Balances[F.user], userBefore - 1)
 
-  local dual = delivery(F.process, { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
-    ["X-Transfer-Sequence"] = "2" })
-  dual.commitments.w = { type = "rsa-pss-sha512", committer = F.user, committed = { "target" } }
+  -- An unstamped body with two signers is nobody; a stamped one is a push,
+  -- named by its admission alone (its signers say nothing either way).
+  local dual = wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" })
+  dual.commitments.w = { type = "rsa-pss-sha512", committer = F.stranger, committed = { "target" } }
   r = send(dual)
   eq("dual signer is nobody", r.error, "Unsigned messages cannot transfer")
-  eq("dual signer moves nothing", Balances[F.process], processBefore - 1)
+  eq("dual signer moves nothing", Balances[F.user], userBefore - 1)
+  local dualPush = delivery(F.process, { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
+    ["X-Transfer-Sequence"] = "2" })
+  dualPush.commitments.w = { type = "rsa-pss-sha512", committer = F.user, committed = { "target" } }
+  r = send(dualPush, false)
+  eq("an unadmitted dual-signed push is nobody", r.error, "Unsigned messages cannot transfer")
+  eq("it debits neither signer nor process", Balances[F.process] .. "/" .. Balances[F.user],
+    (processBefore - 1) .. "/" .. (userBefore - 1))
+
+  -- Admission (paralith-mono packages/hypertoken/lua/admission.lua). The vault
+  -- lives on paralith: its push reaches us signed by paralith's node, and our
+  -- scheduler (trusting paralith) admits it. That is the 2026-11-15 fix: the
+  -- old rule believed only our own scheduler's signature.
+  local foreignNode = string.rep("P", 43)
+  r = pay("2", nil, foreignNode)
+  eq("admitted push relayed by a trusted foreign node is that process", r.From, F.process)
+  eq("admitted foreign push debits the process", Balances[F.process], processBefore - 2)
+  local stray = delivery(F.process, { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
+    ["X-Transfer-Sequence"] = "3" }, foreignNode)
+  r = send(stray, { process = F.process, entry = "other-entry", slot = admitSlot })
+  eq("admission for another entry is nobody", r.error, "Unsigned messages cannot transfer")
+  r = send(stray, { process = F.process, entry = Admits[stray].entry, slot = admitSlot + 7 })
+  eq("admission for another slot is nobody", r.error, "Unsigned messages cannot transfer")
+  r = send(stray, { process = F.stranger, entry = Admits[stray].entry, slot = admitSlot })
+  eq("admission naming another process is nobody", r.error, "Unsigned messages cannot transfer")
+  local inBody = delivery(F.process, { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
+    ["X-Transfer-Sequence"] = "3" }, foreignNode)
+  inBody["admit-process"], inBody["admit-entry"], inBody["admit-slot"] = F.process, Admits[inBody].entry, Admits[inBody].slot
+  r = send(inBody, false)
+  eq("admit-* keys in a body admit nothing", r.error, "Unsigned messages cannot transfer")
+  local clash = delivery(F.process, { Action = "Transfer", Recipient = F.recipient, Quantity = "1",
+    ["X-Transfer-Sequence"] = "3" }, foreignNode)
+  clash.FromProcess = F.stranger
+  r = send(clash)
+  eq("conflicting from-process spellings are nobody", r.error, "Unsigned messages cannot transfer")
+  eq("refused admissions move nothing", Balances[F.process], processBefore - 2)
 end
 
 local function sequenceTests()
