@@ -58,7 +58,7 @@ export function duration(ms: number) {
 }
 
 /** Where the RNG DAO is voted on. */
-export const yapUrl = (dao: string) => `https://yapdao.com/?dao=${encodeURIComponent(dao)}`;
+export const yapUrl = (dao: string, node: string) => `https://yapdao.com/?dao=${encodeURIComponent(dao)}&node=${encodeURIComponent(node)}`;
 
 /** A proposal's action as one readable line, flagged when it targets the beacon. */
 export function describeAction(action: DaoProposal["action"], beacon: string) {

@@ -7,6 +7,7 @@ import {
   getNetworkStatus,
 } from "../../lib/rng";
 import { listDocs, readDoc, searchDocs, docPages } from "../../lib/docs";
+import { RNG_MARKET_URL } from "../../lib/market";
 import { DEPLOY } from "../../lib/docs-content.generated";
 import { requestTemplates } from "../../lib/request-templates";
 
@@ -107,8 +108,8 @@ async function liveTemplates() {
   const cfg = extendedNetworkConfig();
   const prices = await getLivePrices();
   const ids = { token: cfg.token, fast: cfg.beacon, anyHonest: cfg.anyHonest, fair: cfg.fair,
-    dao: cfg.dao, subscriptionConsumer: DEPLOY.subscriptionConsumer, scheduler: DEPLOY.scheduler };
-  // The site's env names the live ids; say so whenever deploy/v3-mainnet.json disagrees.
+    dao: cfg.dao, scheduler: DEPLOY.scheduler };
+  // The site's env names the live ids; say so whenever deploy/v3-main.json disagrees.
   const fromFile = { token: DEPLOY.token, fast: DEPLOY.fast, anyHonest: DEPLOY.anyHonest, fair: DEPLOY.fair, dao: DEPLOY.dao };
   const differ = Object.entries(fromFile).filter(([k, v]) => ids[k as keyof typeof fromFile] !== v).map(([k]) => k);
   return { network: cfg.label, ...requestTemplates(ids, prices), priceSource: prices.source,
@@ -159,7 +160,7 @@ async function callTool(name: unknown, args: Record<string, unknown>) {
       fastRequest: "3 RNG",
       anyHonestRequest: "4 RNG",
       secureSubscription: "1 RNG for 1,000 authenticated process pushes",
-      buy: "No faucet: RNG is a fixed-supply token; buy it on the Paralith orderbook (RNG/GOLD, coming soon)",
+      buy: `Buy RNG on the Paralith RNG/PUSD orderbook: ${RNG_MARKET_URL}`,
     },
     deliveryTrust: "Public reads are free but trust the selected gateway view. A prepaid process subscription binds before reveal and receives the authenticated result from the beacon process.",
     governance: "YapDAO (stake-dao/1) staked in RNG governs the beacon: passed proposals send Gov.* actions. The launch wallet renounces at launch, so the DAO is the only owner of the beacon, fair play and the fast tier. Money and code actions wait for their Effective-At (at least 24 h after they arrive; published as `govPending`), and while one waits validators may leave at once with their bond (Exit-Now, `hatch` in beaconinfo); fees, pause and resume apply on receipt. Owners are published as `gov` in beaconinfo. There is no guardian.",

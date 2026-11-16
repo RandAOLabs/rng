@@ -129,6 +129,7 @@ export function ConsoleDashboard() {
 
   const [total, setTotal] = useState<number>();
   const [live, setLive] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   const [rate, setRate] = useState<number>();
   const seen = useRef(0);
 
@@ -137,8 +138,9 @@ export function ConsoleDashboard() {
   useLivePoll(async () => {
     try {
       const response = await fetch("/api/anyhonest", { cache: "no-store" });
-      if (!response.ok) return;
+      if (!response.ok) { setUnavailable(true); return; }
       const body = await response.json() as Beacon;
+      setUnavailable(!body.configured);
       const round = body.round ?? 0;
       if (round < seen.current) return;
       seen.current = round;
@@ -165,10 +167,8 @@ export function ConsoleDashboard() {
         const added = recent.filter((r) => !known.has(r.round)).map(toPulse);
         return added.length ? [...added, ...prev].sort((x, y) => y.round - x.round).slice(0, 3) : prev;
       });
-    } catch { /* The product explanation remains useful offline. */ }
+    } catch { setUnavailable(true); }
   }, 150, 3, 450);
-
-  const now = feed[0];
 
   return (
     <main className="shell home-page">
@@ -176,8 +176,9 @@ export function ConsoleDashboard() {
 
       <section className="home-simple container">
         <div className="home-message">
-          <p className="kicker">[ THE BLOCKCHAIN RNG LIBRARY // BUILT ON HYPERBEAM ]</p>
-          <h1>Randomness you can prove.</h1>
+          <h1>Verifiable randomness</h1>
+          <p>Inspect live beacon rounds or generate a value from a seed.</p>
+          <a className="button invert" href="/try">Open the RNG console</a>
         </div>
 
         <a className="rng-visual live-beacon" href="/how" aria-label="Live Any-Honest beacon. Open how it works.">
@@ -185,7 +186,7 @@ export function ConsoleDashboard() {
           <ul className="beacon-feed">
             {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b>{p.ms ? `${p.ms}ms` : ""}</b></li>)}
           </ul>
-          <div className="home-status"><span className={live ? "signal on" : "signal"} /><strong>{live ? "ANY_HONEST::PASS" : "CONNECTING"}</strong><small>{now ? "HOW_IT_WORKS →" : "READING_BEACON"}</small></div>
+          <div className="home-status"><span className={live && !unavailable ? "signal on" : "signal"} /><strong>{unavailable ? "Beacon unavailable" : live ? "Round verified" : "Awaiting a verified round"}</strong><small>How the beacon works →</small></div>
         </a>
       </section>
 

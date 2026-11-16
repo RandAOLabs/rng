@@ -8,7 +8,7 @@
 !docs/SPEC.md
 !docs/whitepaper
 !docs/architecture
-!deploy/v3-mainnet.json
+!deploy/v3-main.json
 !deploy/v3-params.json
 !deploy/committee.json
 site/node_modules

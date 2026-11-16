@@ -18,7 +18,7 @@ import { GET as llmsRoute } from '../app/llms.txt/route.ts';
 import { POST as mcp } from '../app/mcp/route.ts';
 
 const repo = (p) => fs.readFileSync(new URL(`../../${p}`, import.meta.url), 'utf8');
-const mainnet = JSON.parse(repo('deploy/v3-mainnet.json'));
+const mainnet = JSON.parse(repo('deploy/v3-main.json'));
 const siteEnv = Object.fromEntries(repo('site/deploy/native-testnet.env').split(/\r?\n/).filter(Boolean).map((l) => l.split('=')));
 Object.assign(env, siteEnv, { RNG_NODE_URL: 'http://node.test' });
 
@@ -85,7 +85,7 @@ test('/llms.txt indexes every page; /llms-full.txt holds every page', async () =
   for (const page of docs.docPages) assert.ok(full.includes(page.markdown), page.slug);
 });
 
-test('the site env and the docs name the ids in deploy/v3-mainnet.json', () => {
+test('the site env and the docs name the ids in deploy/v3-main.json', () => {
   assert.equal(siteEnv.RNG_BEACON_ID, mainnet.fast, 'RNG_BEACON_ID is the Fast tier');
   assert.equal(siteEnv.RNG_ANYHONEST_ID, mainnet.beacon);
   assert.equal(siteEnv.RNG_TOKEN_ID, mainnet.token);
@@ -139,7 +139,7 @@ test('request templates match the protocol code and lib/js helpers', () => {
   const { Action, Recipient, Quantity, 'X-Request-Id': rid } = byId['any-honest.pay-and-request'].tags;
   assert.deepEqual({ Action, Recipient, Quantity, 'X-Request-Id': rid }, { ...fairClient.payAndRequestTags(mainnet.beacon, 4_000_000n, rid) });
   assert.equal(byId['fast.pay-and-request'].tags.Quantity, '3000000');
-  const fund = fairClient.fairFundTags(mainnet.fair, mainnet.subscriptionConsumer, 4_000_000n);
+  const fund = fairClient.fairFundTags(mainnet.fair, mainnet.deployer, 4_000_000n);
   assert.deepEqual({ ...byId['fair.fund'].tags, 'X-Fair-Game': fund['X-Fair-Game'] }, fund);
   assert.deepEqual(Object.keys(byId['fair.commit'].tags), Object.keys(fairClient.fairCommitTags('g', 's', 'c')));
   assert.deepEqual(Object.keys(byId['fair.open'].tags), Object.keys(fairClient.fairOpenTags('s', 'p')));
@@ -208,8 +208,9 @@ test('rng_request_templates reads live prices, and falls back to the genesis def
   }
 });
 
-test('the generator flags a doc id that deploy/v3-mainnet.json does not know', () => {
+test('the generator flags a doc id that deploy/v3-main.json does not know', () => {
   const fake = createHash('sha256').update('x').digest('base64url').slice(0, 43);
-  assert.deepEqual(unknownIds(`Fast \`${mainnet.fast}\`, retired ${mainnet.retired[0].pid}, new ${fake}.`, mainnet), [fake]);
+  const retired = createHash('sha256').update('retired').digest('base64url');
+  assert.deepEqual(unknownIds(`Fast \`${mainnet.fast}\`, retired ${retired}, new ${fake}.`, { ...mainnet, retired: [{ pid: retired }] }), [fake]);
   for (const page of PAGES) assert.deepEqual(unknownIds(repo(page.source), mainnet), [], page.source);
 });

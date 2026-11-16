@@ -1,7 +1,7 @@
 # Architecture (v3, live)
 
 How RNG works today on AO mainnet (HyperBEAM). Process ids are from
-[`deploy/v3-mainnet.json`](../deploy/v3-mainnet.json); rules are from the code in
+[`deploy/v3-main.json`](../deploy/v3-main.json); rules are from the code in
 [`protocol/`](../protocol/) and [`validator/`](../validator/). The design record is
 [PERMISSIONLESS.md](PERMISSIONLESS.md); the paper is [whitepaper/](whitepaper/).
 The abandoned January 2026 multi-chain design is in
@@ -11,13 +11,12 @@ The abandoned January 2026 multi-chain design is in
 
 | Role | Process id | Code | Runs on |
 |---|---|---|---|
-| RNG token | `lOK7tVUeLLH_El_uridElqL2BCSMV_34DMU5Z6IV9jQ` | `protocol/token/rng-token.lua` | `lua@5.3a` |
-| RNG DAO (YapDAO `stake-dao/1`) | `YApWVUQikoJ4ECiFM0YSx4YEjmymMotUfuv4Laz3Lwk` | paralith-mono `dao.lua` (rules in `daoRules`) | `lua@5.3a` |
-| Any-Honest beacon | `IWnhoOtDBPos6-IHxih3DHMo1jHIW6ghFrMWO3DtEao` | `protocol/beacon/anyhonest.lua` | `lua-patch@1.0` |
-| Fast tier | `ugpQ17KM6S9sq-F_AEdnGIQOf_6YLsKo1M8zjGYJElE` | `protocol/beacon/beacon.lua` | `lua@5.3a` |
-| Fair play | `mfJ_rRgKNhod4vuJFFJtFLDaImm2-zTySKIvnVt-BZo` | `protocol/fair/fair.lua` + `lib/fair.lua` | `lua@5.3a` |
-| Subscription test consumer | `qxYgg3GQ0Tl4kwDAk3azOoWjHgK5upvk9-OeVjjgz2c` | `protocol/test/subscription-consumer.lua` | `lua@5.3a` |
-| Scheduler (all of the above) | `tkqULqMDeHKXCN79Cm_bDIV560JxXl6pBSmdPgxqwSw` | HyperBEAM `scheduler@1.0` | main node |
+| RNG token | `P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g` | `protocol/token/rng-token.lua` | `lua@5.3a` |
+| RNG DAO (YapDAO `stake-dao/1`) | `yAPgKEpAGDHHFQUzyzdwlpcLuldu1bcsbl65UXupL7Y` | paralith-mono `dao.lua` (rules in `daoRules`) | `lua-patch@1.0` |
+| Any-Honest beacon | `0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI` | `protocol/beacon/anyhonest.lua` | `lua-patch@1.0` |
+| Fast tier | `SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg` | `protocol/beacon/beacon.lua` | `lua@5.3a` |
+| Fair play | `HaYtR4PwVPorZVkxQFi2o1vU9cQDL_mhnLIuGnlDHac` | `protocol/fair/fair.lua` + `lib/fair.lua` | `lua@5.3a` |
+| Scheduler (all of the above) | `BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU` | HyperBEAM `scheduler@1.0` | RNG node |
 
 Retired: Fast `VIsVLEi6…`, fair `QsKxU7KZ…` (replaced 2026-11-08). The beacon,
 Fast tier and fair play are owned by the DAO only (`owners.*.walletRenounced`).
@@ -31,12 +30,12 @@ flowchart TB
     CON["randao.net console"]
     MKT["Paralith RNG/PUSD book"]
   end
-  subgraph ao["AO processes, all on scheduler tkqU… (main node)"]
-    TOKEN["RNG token n7sn…<br/>1B fixed, sequenced-v1"]
-    DAO["RNG DAO yAP3…<br/>stake-dao/1"]
-    FAIR["Fair play zEI8…"]
-    AH["Any-Honest beacon 98Ak…<br/>reserve, treasury, bonds"]
-    FAST["Fast tier NBpb…<br/>on-demand threshold BLS"]
+  subgraph ao["AO processes, all on scheduler BALL… (RNG node)"]
+    TOKEN["RNG token P-pk…<br/>1B fixed, sequenced-v1"]
+    DAO["RNG DAO yAPg…<br/>stake-dao/1"]
+    FAIR["Fair play HaYt…"]
+    AH["Any-Honest beacon 0s8O…<br/>reserve, treasury, bonds"]
+    FAST["Fast tier SWhb…<br/>on-demand threshold BLS"]
   end
   subgraph nodes["3 HyperBEAM nodes: main, paralith, rng"]
     VAL["rng-validator@1.0<br/>3 Any-Honest validators"]

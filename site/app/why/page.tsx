@@ -18,7 +18,7 @@ export default function WhyPage() {
   return (
     <main className="shell compact-page">
       <SiteHeader active="why" />
-      <section className="page-titlebar container"><div><p className="kicker">[ 01 // WHY ]</p><h1>Random is not automatically fair.</h1></div><p>A blockchain must replay exactly and resist whoever benefits from predicting the result.</p></section>
+      <section className="page-titlebar container"><div><h1>Fair randomness onchain</h1></div><p>A blockchain must replay exactly and resist whoever benefits from predicting the result.</p></section>
       <section className="why-board container">
         <div className="why-failures"><p className="board-label">FAILURE_MODES</p>{failures.map(([index, title, body]) => <article key={index}><span>{index}</span><div><h2>{title}</h2><p>{body}</p></div></article>)}</div>
         <div className="why-contract"><p className="board-label">RNG_SURFACES</p><div className="surface-ledger">{surfaces.map(([name, body]) => <div key={name}><b>{name}</b><span>{body}</span></div>)}</div><p className="trust-line"><b>THE RULE:</b> commit before reveal; verify after publication.</p></div>

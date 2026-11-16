@@ -2,8 +2,8 @@
 
 The public console is recreated through `compose.yaml`, not an ad hoc
 `docker run`. `native-testnet.env` pins the token, threshold beacon,
-Any-Honest beacon, and advisory DAO processes from
-`deploy/native-testnet.json`.
+Any-Honest beacon, and staking DAO processes from
+`deploy/v3-main.json`.
 
 Build and validate a candidate image, then promote it under the stable tag:
 
@@ -17,7 +17,7 @@ curl -fsS https://randao.net/api/dao
 
 Source-only deployments retain every process ID because Compose reloads the
 tracked environment file. If a protocol migration intentionally changes a
-process ID, update `native-testnet.json`, this environment file, and the Sites
+process ID, update `v3-main.json`, this environment file, and the Sites
 runtime environment in the same change.
 
 The DAO is an independent AO process. Rebuilding the console, HyperBEAM node,

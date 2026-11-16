@@ -1,7 +1,7 @@
 // Builds lib/docs-content.generated.ts from the repo's docs/ markdown, the
-// architecture SVGs and deploy/v3-mainnet.json, so the site has one source of
+// architecture SVGs and deploy/v3-main.json, so the site has one source of
 // truth. Runs before dev, build and test (package.json pre-scripts).
-// Fails when a doc names a 43-character id that deploy/v3-mainnet.json does not.
+// Fails when a doc names a 43-character id that deploy/v3-main.json does not.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,13 +130,13 @@ export function unknownIds(text, deploy) {
 }
 
 export function build() {
-  const deploy = JSON.parse(fs.readFileSync(path.join(ROOT, "deploy/v3-mainnet.json"), "utf8"));
+  const deploy = JSON.parse(fs.readFileSync(path.join(ROOT, "deploy/v3-main.json"), "utf8"));
   const params = JSON.parse(fs.readFileSync(path.join(ROOT, "deploy/v3-params.json"), "utf8"));
   const committee = JSON.parse(fs.readFileSync(path.join(ROOT, "deploy/committee.json"), "utf8"));
   const pages = PAGES.map((p) => {
     const raw = fs.readFileSync(path.join(ROOT, p.source), "utf8").replace(/\r\n/g, "\n");
     const unknown = unknownIds(raw, deploy);
-    if (unknown.length) throw new Error(`${p.source} names ${unknown.join(", ")}, which deploy/v3-mainnet.json does not know`);
+    if (unknown.length) throw new Error(`${p.source} names ${unknown.join(", ")}, which deploy/v3-main.json does not know`);
     const title = raw.match(/^#\s+(.+)$/m)?.[1].trim() ?? p.slug;
     const { html, headings } = render(rewriteLinks(raw, p.source, "html"), p.slug);
     let n = 0;
@@ -149,7 +149,7 @@ export function build() {
     [name, fs.readFileSync(path.join(ROOT, `docs/architecture/${name}.svg`), "utf8")]));
   const live = {
     token: deploy.token, dao: deploy.dao, anyHonest: deploy.beacon, fast: deploy.fast, fair: deploy.fair,
-    subscriptionConsumer: deploy.subscriptionConsumer, scheduler: deploy.scheduler, deployer: deploy.deployer,
+    scheduler: deploy.scheduler, deployer: deploy.deployer,
     retired: (deploy.retired ?? []).map((r) => ({ role: r.role, pid: r.pid, retiredAt: r.retiredAt })),
   };
   const defaults = {

@@ -1,7 +1,7 @@
 # RNG v3: verifiable randomness for AO
 
 RNG Labs, a CipherPlay Inc. product. Version 3, 8 November 2026, describing the
-processes live on AO mainnet (ids in [`deploy/v3-mainnet.json`](../../deploy/v3-mainnet.json)).
+processes live on AO mainnet (ids in [`deploy/v3-main.json`](../../deploy/v3-main.json)).
 Every number below was checked against the code; file references are in
 [Appendix A](#appendix-a-sources). Where an older design document says something
 else, the code wins ([Appendix B](#appendix-b-where-other-docs-disagree-with-the-code)).
@@ -40,9 +40,9 @@ from published data alone.
 | Tier | Process | Safe unless | Latency | Price |
 |---|---|---|---|---|
 | Local | `lib/rng.lua` in the caller | always predictable to the sender | none | free |
-| Fast | Fast tier `NBpbTl64…` (`beacon.lua`) | 2 of the 3 committee operators collude | one message phase | 3 RNG |
-| Any-Honest | beacon `98AkinkW…` (`anyhonest.lua`) | every validator in the round colludes | commit 5 s + reveal, under 30 s; longer if cracked | 4 RNG |
-| Fair play | `zEI8l8oa…` (`fair.lua`) or `lib/fair.lua` embedded | never, for an honest player | a beacon round plus the player's reveal | 4 RNG per batch, split |
+| Fast | Fast tier `SWhbDExE…` (`beacon.lua`) | 2 of the 3 committee operators collude | one message phase | 3 RNG |
+| Any-Honest | beacon `0s8Or-QN…` (`anyhonest.lua`) | every validator in the round colludes | commit 5 s + reveal, under 30 s; longer if cracked | 4 RNG |
+| Fair play | `HaYtR4Pw…` (`fair.lua`) or `lib/fair.lua` embedded | never, for an honest player | a beacon round plus the player's reveal | 4 RNG per batch, split |
 
 `rng.install(msg)` gives a process a deterministic stream seeded from the
 message. `rng.request(msg, { tier = ... })` asks a tier for a value and calls
@@ -446,7 +446,7 @@ Line numbers are at commit time of this paper.
 
 | Claim | Source |
 |---|---|
-| Process ids, scheduler, owners, DAO rules, genesis split | `deploy/v3-mainnet.json` |
+| Process ids, scheduler, owners, DAO rules, genesis split | `deploy/v3-main.json` |
 | Live beacon parameters | `deploy/v3-params.json` (genesis `Gov.Configure`; read `beaconinfo.params` for changes since) |
 | N, g, T floor, abandon cap, idle eviction, treasury window | `protocol/beacon/anyhonest.lua:33-73` |
 | Seats, ranking, eligibility | `anyhonest.lua:546-595` (`eligibleValidators`, `rankSort`, `activeValidators`) |
@@ -470,14 +470,14 @@ Line numbers are at commit time of this paper.
 | Token supply, sequenced-v1 | `protocol/token/rng-token.lua:1-30`, `:224-250`, `:449-500` |
 | Labs stake, Effective-At filling | `deploy/deploy.mjs:188`, `:276` |
 | Fast committee size and threshold | `deploy/committee.json` |
-| Launch validators | `deploy/anyhonest-validators.json`, `v3-mainnet.json` `genesis.validatorRng` |
+| Launch validators | `deploy/anyhonest-validators.json`, `v3-main.json` `genesis.validatorRng` |
 | Crack time | `docs/ANY_HONEST.md` (measured, not code) |
 | Reserve runway, pay figures | arithmetic on the values above |
 
 ## Appendix B: where other docs disagree with the code
 
 - `docs/ANY_HONEST.md` opens with "v3 ... not yet deployed" and names the v2 beacon
-  `MZMoXv-2` as live. v3 is live (`deploy/v3-mainnet.json`).
+  `MZMoXv-2` as live. v3 is live (`deploy/v3-main.json`).
 - `protocol/device/README.md` calls the device `timelock@1.0`; the processes call
   `/~rng@1.0/...` (`anyhonest.lua` `device()`, `beacon.lua` `verifySignature`).
 - `docs/PERMISSIONLESS.md` design-record rows (D2, D11, D17, the handler table, the

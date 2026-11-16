@@ -22,7 +22,7 @@ The deployment supplies these environment variables:
 - `RNG_ANYHONEST_ID`
 - `RNG_DAO_ID`
 - `RNG_FAIR_ID` (optional; when unset and `RNG_TOKEN_ID` is the token in
-  `deploy/v3-mainnet.json`, the fair process from that file is used)
+  `deploy/v3-main.json`, the fair process from that file is used)
 - `RNG_NETWORK_LABEL`
 
 `/docs`, `/llms.txt`, `/llms-full.txt` and `/docs/<slug>.md` are built from

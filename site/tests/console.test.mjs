@@ -281,3 +281,29 @@ test('DAO tally, actions and the beacon owners', () => {
   assert.equal(ownersLabel(gov('', false)), 'None');
   assert.equal(ownersLabel(undefined), '—');
 });
+
+test('wallet messages follow the node and process from status and require a receipt slot', async (t) => {
+  const { sendMessage } = await import('../lib/wallet.ts');
+  const process = 'T'.repeat(43), node = 'https://rng.test';
+  const calls = [];
+  let slot = '7';
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { arweaveWallet: {
+    signDataItem: async (item) => { assert.equal(item.target, process); return new Uint8Array([1]).buffer; },
+  } } });
+  t.after(() => { if (prior) Object.defineProperty(globalThis, 'window', prior); else delete globalThis.window; });
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    calls.push([url, init?.method ?? 'GET']);
+    if (init?.method === 'POST') return new Response('', { headers: slot == null ? {} : { slot } });
+    return new Response('{"accepted":true}');
+  });
+  const base = node + '/' + process + '~process@1.0';
+  const tags = { Action: 'Request-Random' };
+  assert.deepEqual(await sendMessage(node, process, tags), { slot: 7, reply: { accepted: true } });
+  assert.deepEqual(calls, [[base + '/schedule?codec-device=ans104@1.0', 'POST'],
+    [base + '/push&slot=7', 'GET'], [base + '/compute&slot=7/results/output/data', 'GET']]);
+  slot = null;
+  calls.length = 0;
+  await assert.rejects(sendMessage(node, process, tags), /valid slot/);
+  assert.equal(calls.length, 1);
+});

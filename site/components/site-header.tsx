@@ -4,13 +4,13 @@ import Image from "next/image";
 type ActivePage = "why" | "how" | "try" | "dao" | "validators" | "docs";
 type Props = { active?: ActivePage };
 
-const navigation: Array<{ key: ActivePage; index: string; label: string; href: string }> = [
-  { key: "why", index: "01", label: "WHY", href: "/why" },
-  { key: "how", index: "02", label: "HOW", href: "/how" },
-  { key: "try", index: "03", label: "TRY", href: "/try" },
-  { key: "dao", index: "04", label: "DAO", href: "/dao" },
-  { key: "validators", index: "05", label: "VALIDATE", href: "/validators" },
-  { key: "docs", index: "06", label: "DOCS", href: "/docs" },
+const navigation: Array<{ key: ActivePage; label: string; href: string }> = [
+  { key: "why", label: "Overview", href: "/why" },
+  { key: "how", label: "Protocol", href: "/how" },
+  { key: "try", label: "Console", href: "/try" },
+  { key: "dao", label: "DAO", href: "/dao" },
+  { key: "validators", label: "Validators", href: "/validators" },
+  { key: "docs", label: "Docs", href: "/docs" },
 ];
 
 export function SiteHeader({ active }: Props) {
@@ -20,10 +20,10 @@ export function SiteHeader({ active }: Props) {
         <Image className="brand-logo" src="/rng.png" width={48} height={48} alt="" priority unoptimized />
         <span className="brand-copy"><strong>RNG_LABS</strong></span>
       </a>
-      <nav className="nav-rail" aria-label="Main navigation" style={{ gridTemplateColumns: `repeat(${navigation.length}, 1fr)` }}>
+      <nav className="nav-rail" aria-label="Main navigation">
         {navigation.map((item) => (
           <a key={item.key} href={item.href} className={active === item.key ? "active" : undefined} aria-current={active === item.key ? "page" : undefined}>
-            <span>{item.index}</span><strong>{item.label}</strong>
+            <strong>{item.label}</strong>
           </a>
         ))}
       </nav>

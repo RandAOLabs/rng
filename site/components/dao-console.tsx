@@ -9,7 +9,7 @@ import {
 } from "../app/api/dao/model";
 import { SiteFooter, SiteHeader } from "./site-header";
 
-type DaoStatus = { configured: boolean; status?: string; process?: string; beacon?: string;
+type DaoStatus = { configured: boolean; status?: string; process?: string; node?: string; beacon?: string;
   info?: DaoInfo; proposals: DaoProposal[]; error?: string };
 // beaconinfo via /api/anyhonest. The v3 governance fields are absent on a v2 beacon.
 type Beacon = { configured: boolean; process?: string; round?: number; unit?: number;
@@ -88,7 +88,7 @@ export function DaoConsole() {
           <div className="mt-4 max-w-[760px] space-y-3 text-[15px] leading-relaxed text-[var(--gray)]">
             <p className="m-0">RNG holders govern the beacon through a YapDAO <code>stake-dao/1</code> process. Stake RNG to vote. A passed proposal sends one message, usually a <code>Gov.*</code> action to the beacon. Fees, pause and resume apply on receipt; anything that moves money or code takes effect at least 24 hours later, and validators may leave with their bond meanwhile.</p>
             <p className="m-0">This page is read-only. Staking, proposing and voting happen on YapDAO.</p>
-            {dao.process && <p className="m-0"><a className="button invert" href={yapUrl(dao.process)} target="_blank" rel="noreferrer">Vote on yapdao.com</a></p>}
+            {dao.process && dao.node && <p className="m-0"><a className="button invert" href={yapUrl(dao.process, dao.node)} target="_blank" rel="noreferrer">Vote on yapdao.com</a></p>}
           </div>
         </section>
 
@@ -133,7 +133,7 @@ export function DaoConsole() {
                 <p className="m-0 mt-1 text-[15px] text-[var(--white)]">{p.title}</p>
                 <p className="m-0 mt-1 text-[12px]">Yes {tokens(p.yes, denom)} · No {tokens(p.no, denom)} · Veto {tokens(p.veto, denom)} · Abstain {tokens(p.abstain, denom)} · quorum {t.quorumMet ? "met" : `${tokens(p.quorum, denom)} needed`} · {p.voters} voters</p>
                 {act && <p className="m-0 mt-2 break-all text-[12px]"><code>{act.name}</code> {act.args} → {act.toBeacon ? "beacon" : short(p.action?.process)}{act.executed ? " · executed" : ""}</p>}
-                {dao.process && p.status === "active" && <p className="m-0 mt-2 text-[12px]"><a className="underline underline-offset-2" href={yapUrl(dao.process)} target="_blank" rel="noreferrer">Vote on YapDAO</a></p>}
+                {dao.process && dao.node && p.status === "active" && <p className="m-0 mt-2 text-[12px]"><a className="underline underline-offset-2" href={yapUrl(dao.process, dao.node)} target="_blank" rel="noreferrer">Vote on YapDAO</a></p>}
               </article>);
           })}</div>
         </Section>

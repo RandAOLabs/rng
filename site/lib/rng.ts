@@ -35,7 +35,7 @@ export function networkConfig() {
 
 export function extendedNetworkConfig() {
   const cfg = networkConfig();
-  // The fair process from deploy/v3-mainnet.json only when this site runs on that token.
+  // The fair process from deploy/v3-main.json only when this site runs on that token.
   const fair = env.RNG_FAIR_ID || (cfg.token === DEPLOY.token ? DEPLOY.fair : "");
   return { ...cfg, anyHonest: env.RNG_ANYHONEST_ID || "", dao: env.RNG_DAO_ID || "", fair };
 }
@@ -161,7 +161,7 @@ async function readAnyHonestStatus() {
   // Wallet requesters read their value here: the beacon sends RNG-Result to processes only.
   const requestRecords = slots.flatMap((r) => r && typeof r.round === "number" && Array.isArray(r.requests) && r.requests.length > 0
     ? [{ round: r.round, value: r.value, requests: r.requests }] : []);
-  return { configured: true, process: cfg.anyHonest, ...info, round: Math.max(info.round, round),
+  return { configured: true, ...info, process: cfg.anyHonest, node: cfg.node, round: Math.max(info.round, round),
     latest: record ? { ...record, round } : undefined, recent, requestRecords,
     proofValid, checkedAt: new Date().toISOString() };
 }
@@ -192,7 +192,7 @@ export async function getGovernanceStatus() {
     return { configured: false, status: "not-stake-dao", process: cfg.dao, proposals: [] };
   }
   return { configured: true, status: info.Configured === true ? "configured" : "unconfigured",
-    process: cfg.dao, beacon: cfg.anyHonest, info, proposals: Array.isArray(proposals) ? proposals : [] };
+    process: cfg.dao, node: cfg.node, beacon: cfg.anyHonest, info, proposals: Array.isArray(proposals) ? proposals : [] };
 }
 
 export async function getDaoStake(address: string) {
@@ -234,7 +234,7 @@ export async function getNetworkStatus(requestedRound?: number) {
   // The fast tier is on-demand: until its first paid request there is no round.
   if (!(roundNumber >= 1)) {
     return {
-      network: cfg.label, beacon: cfg.beacon, token: cfg.token, round: 0, latestRound: info.round,
+      node: cfg.node, network: cfg.label, beacon: cfg.beacon, token: cfg.token, round: 0, latestRound: info.round,
       threshold: info.threshold, committeeSize: info.committee.length, committee: info.committee,
       price: info.price.fast ?? info.price.beacon, unit: info.unit, pending: info.pendingCount,
       verificationMode: info.verification, nativeVerification: info.verification === "device",
@@ -262,7 +262,7 @@ export async function getNetworkStatus(requestedRound?: number) {
   let signatureValid = false;
   try { signatureValid = verifySignature(groupKey, message, round.signature); } catch { signatureValid = false; }
   return {
-    network: cfg.label,
+    node: cfg.node, network: cfg.label,
     beacon: cfg.beacon,
     token: cfg.token,
     round: roundNumber,
