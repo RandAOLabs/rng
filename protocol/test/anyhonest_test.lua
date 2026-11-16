@@ -1719,7 +1719,15 @@ function runRefusalTests()
     ["X-For"] = F.game, ["X-Request-Id"] = "bs", Reference = "t21" }))
   check("pay-and-request from a Sender that is no address: refused, nothing credited or bound",
     r.error == "Bad-Sender" and next(ob) == nil and Timelock.balances[F.game] == 40 and seenOf("not-an-address|bs") == nil, encode(r))
-  check("its reference is spent", Timelock.credited["21"] == true)
+  check("its reference is not spent: nothing was accepted", Timelock.credited["21"] == nil)
+  r, ob = send(delivery(F.token, { Action = "Credit-Notice", Sender = "not-an-address", Quantity = tostring(4 * U),
+    ["X-For"] = F.game, Reference = "t22" }))
+  check("a plain credit from a Sender that is no address: refused, nothing credited",
+    r.error == "Bad-Sender" and next(ob) == nil and Timelock.balances[F.game] == 40 and Timelock.credited["22"] == nil, encode(r))
+  r, ob = send(delivery(F.token, { Action = "Credit-Notice", Sender = "not-an-address", Quantity = tostring(25000 * U),
+    ["X-For"] = F.game, ["X-Bond"] = "true", Reference = "t23" }))
+  check("a bond from a Sender that is no address: refused, nothing bonded",
+    r.error == "Bad-Sender" and next(ob) == nil and Timelock.bonds[F.game] == nil and Timelock.credited["23"] == nil, encode(r))
   for _, v in ipairs({ A, B, C }) do ready(v) end
 
   -- Payers and subscribers.

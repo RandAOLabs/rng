@@ -185,11 +185,19 @@ function runBeaconTests()
   r, ob = credit(F.game, U, "t" .. string.rep("9", 23))
   check("a reference past an integer is refused, not marked", r.error == "Invalid-Reference" and next(ob) == nil
     and untouched() and size(Beacon.credited) == nCredited, r.error)
+  -- A notice whose Sender is no address cannot be refunded, so it is never
+  -- accepted: refused before its reference is marked, every path alike.
   r, ob = credit("not-an-address", 2 * U, "t80", { ["X-For"] = F.game, ["X-Request-Id"] = "bs-1" })
   check("pay-and-request from a Sender that is no address is refused, nothing credited or bound",
     r.error == "Bad-Sender" and next(ob) == nil and untouched() and Beacon.seen["not-an-address|bs-1"] == nil, r.error)
-  r = credit("not-an-address", 2 * U, "t80", { ["X-For"] = F.game, ["X-Request-Id"] = "bs-1" })
-  check("its reference is spent: the same notice again is a duplicate", r.duplicate == true and untouched(), encode(r))
+  check("its reference is not spent: nothing was accepted", Beacon.credited["80"] == nil
+    and size(Beacon.credited) == nCredited, encode(Beacon.credited))
+  r, ob = credit("not-an-address", 2 * U, "t81", { ["X-For"] = F.game })
+  check("a plain credit from a Sender that is no address is refused, nothing credited",
+    r.error == "Bad-Sender" and next(ob) == nil and untouched() and size(Beacon.credited) == nCredited, encode(r))
+  r, ob = credit("not-an-address", U // 2, "t82")
+  check("dust from a Sender that is no address is refused, not kept", r.error == "Bad-Sender" and next(ob) == nil
+    and untouched() and size(Beacon.credited) == nCredited, encode(r))
   r, ob = send({ target = F.beacon, Action = "Withdraw" })
   check("an unsigned withdraw is refused", r.error == "Unsigned" and next(ob) == nil and untouched(), r.error)
   r, ob = send(wallet(F.game, { Action = "Withdraw", Quantity = "lots" }))

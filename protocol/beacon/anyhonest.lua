@@ -1059,6 +1059,10 @@ H["Credit-Notice"] = function(base, msg, from, now)
   local seq = int(tostring(msg.Reference or ""):match("^t(%d+)$"), nil)
   if not seq then return fail(base, "Missing-Reference") end
   if seq <= int(Timelock.creditFloor, 0) or Timelock.credited[tostring(seq)] then return reply(base, { duplicate = true }) end
+  -- Every path below either keeps the atoms against an account or sends them
+  -- back to Sender. A Sender that is no address could be paid nothing back,
+  -- so the notice is never accepted: refused before its reference is marked.
+  if not isAoAddress(msg.Sender) then return fail(base, "Bad-Sender") end
   markCredited(seq)
   local atoms = int(msg.Quantity, 0)
   local amount = atoms // int(Timelock.unit, 1)
@@ -1066,7 +1070,7 @@ H["Credit-Notice"] = function(base, msg, from, now)
   if amount <= 0 or not isAoAddress(who) then
     -- Dust, or no valid account: send it back.
     local outbox = {}
-    if atoms > 0 and isAoAddress(msg.Sender) then outbox["rng-refund"] = transferAtoms(msg.Sender, atoms, "RNG credit refund") end
+    if atoms > 0 then outbox["rng-refund"] = transferAtoms(msg.Sender, atoms, "RNG credit refund") end
     return reply(base, { error = "Nothing to credit", refunded = outbox["rng-refund"] and atoms or 0 }, outbox)
   end
   if msg["X-Foundation"] then
@@ -1082,7 +1086,7 @@ H["Credit-Notice"] = function(base, msg, from, now)
   -- Below one whole RNG the remainder cannot be credited: it goes back.
   local dust = atoms - amount * int(Timelock.unit, 1)
   local function withDust(outbox)
-    if dust > 0 and isAoAddress(msg.Sender) then outbox["rng-dust-refund"] = transferAtoms(msg.Sender, dust, "RNG credit remainder refund") end
+    if dust > 0 then outbox["rng-dust-refund"] = transferAtoms(msg.Sender, dust, "RNG credit remainder refund") end
     return outbox
   end
   if msg["X-Bond"] then
@@ -1109,8 +1113,8 @@ H["Credit-Notice"] = function(base, msg, from, now)
         end
       end
       if refused then
-        if isAoAddress(msg.Sender) then outbox["rng-refund"] = transferAtoms(msg.Sender, atoms, "RNG bond refund") end
-        return reply(base, { error = refused, refunded = outbox["rng-refund"] and atoms or 0 }, outbox)
+        outbox["rng-refund"] = transferAtoms(msg.Sender, atoms, "RNG bond refund")
+        return reply(base, { error = refused, refunded = atoms }, outbox)
       end
       Timelock.validators[who] = { ready = false, paused = false, faults = 0, exiting = false, exitAt = 0, joinedAt = now }
     end
@@ -1122,7 +1126,6 @@ H["Credit-Notice"] = function(base, msg, from, now)
     -- as its own Request-Random would. A refused request leaves the credit.
     -- The token reference already makes this notice count once.
     local payer = msg.Sender
-    if not isAoAddress(payer) then return fail(base, "Bad-Sender") end
     if not creditBalance(payer, amount) then
       return reply(base, { error = "Too-Many-Price-Batches" }, { ["rng-refund"] = transferAtoms(payer, atoms, "RNG credit refund") })
     end
@@ -1135,9 +1138,7 @@ H["Credit-Notice"] = function(base, msg, from, now)
     return reply(base, out, withDust(res.results.outbox or {}))
   end
   if not creditBalance(who, amount) then
-    local outbox = {}
-    if isAoAddress(msg.Sender) then outbox["rng-refund"] = transferAtoms(msg.Sender, atoms, "RNG credit refund") end
-    return reply(base, { error = "Too-Many-Price-Batches" }, outbox)
+    return reply(base, { error = "Too-Many-Price-Batches" }, { ["rng-refund"] = transferAtoms(msg.Sender, atoms, "RNG credit refund") })
   end
   -- No RNG-Funded notice: `who` may be a wallet (replies go only to
   -- processes), and the balance is in the published state.

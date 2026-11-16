@@ -583,24 +583,26 @@ H["Credit-Notice"] = function(base, msg, from, now)
   local seq = int(reference:sub(2), nil)
   if not seq then return fail(base, "Invalid-Reference") end
   if seq <= int(Beacon.creditFloor, 0) or Beacon.credited[tostring(seq)] then return reply(base, { duplicate = true }) end
+  -- Every path below either credits the atoms or sends them back to Sender.
+  -- A Sender that is no address could be paid nothing back, so the notice is
+  -- never accepted: refused before its reference is marked, state unchanged.
+  local sender = msg.Sender
+  if not isAoAddress(sender) then return fail(base, "Bad-Sender") end
   markCredited(seq)
   local atoms = int(msg.Quantity, 0)
   local unit = int(Beacon.unit, 1)
   local amount = atoms // unit
-  local sender = msg.Sender
   local who = msg["X-For"] or sender
   if amount <= 0 or not isAoAddress(who) then
     -- Dust, or no valid account: send it back.
     local outbox = {}
-    if atoms > 0 and isAoAddress(sender) then outbox["rng-refund"] = transferAtoms(sender, atoms, "RNG credit refund") end
+    if atoms > 0 then outbox["rng-refund"] = transferAtoms(sender, atoms, "RNG credit refund") end
     return reply(base, { error = "Nothing to credit", refunded = outbox["rng-refund"] and atoms or 0 }, outbox)
   end
   -- Below one whole RNG the remainder cannot be credited: it goes back.
   local dust = atoms - amount * unit
   local function withDust(outbox)
-    if dust > 0 and isAoAddress(sender) then
-      outbox["rng-dust-refund"] = transferAtoms(sender, dust, "RNG credit remainder refund")
-    end
+    if dust > 0 then outbox["rng-dust-refund"] = transferAtoms(sender, dust, "RNG credit remainder refund") end
     return outbox
   end
   if msg["X-Request-Id"] then
@@ -609,7 +611,6 @@ H["Credit-Notice"] = function(base, msg, from, now)
     -- (Withdraw takes it back). The payer may be a wallet, so no push: its
     -- round is in `seen`, its value derives from the round record.
     -- The token reference already makes this notice count once.
-    if not isAoAddress(sender) then return fail(base, "Bad-Sender") end
     if not creditBalance(sender, amount) then
       return reply(base, { error = "Too-Many-Price-Batches" }, { ["rng-refund"] = transferAtoms(sender, atoms, "RNG credit refund") })
     end
@@ -623,9 +624,7 @@ H["Credit-Notice"] = function(base, msg, from, now)
     return reply(base, out, withDust(res.results.outbox or {}))
   end
   if not creditBalance(who, amount) then
-    local outbox = {}
-    if isAoAddress(sender) then outbox["rng-refund"] = transferAtoms(sender, atoms, "RNG credit refund") end
-    return reply(base, { error = "Too-Many-Price-Batches" }, outbox)
+    return reply(base, { error = "Too-Many-Price-Batches" }, { ["rng-refund"] = transferAtoms(sender, atoms, "RNG credit refund") })
   end
   return reply(base, { credited = amount, account = who, balance = Beacon.balances[who] }, withDust({}))
 end
