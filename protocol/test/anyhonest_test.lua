@@ -1625,8 +1625,266 @@ function runTimelockTests()
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
   return table.concat(lines, "\n")
 end
+-- Refusals, on a second, fresh process: each one leaves every balance, bond,
+-- validator, round and pending action exactly as it found it.
+function runRefusalTests()
+  local U = F.unit
+  local D = F.w[1]
+  base = { ["scheduler-location"] = F.sched, process = base.process, timelockrev = "1",
+    timelockstate = encode({ owners = { dao = "", wallet = true, approved = "", approvedAt = 0, code = { sha = "", version = 0 } } }) }
+  Timelock = { rev = 0 }
+  send(wallet(F.stranger, { Action = "Get-Info" }))
+  check("refusals: a fresh process", Timelock.token == "" and next(Timelock.validators) == nil and info().round == 0)
+  local function snap()
+    return encode({ b = Timelock.balances, bo = Timelock.bonds, v = Timelock.validators, t = Timelock.treasuryAtoms,
+      f = Timelock.foundationReserveAtoms, s = Timelock.subscriptions, p = Timelock.pending, a = Timelock.accrued,
+      aa = Timelock.accruedAtoms, seq = Timelock.transferSeq, g = Timelock.gov.pending, n = Timelock.gov.nextId,
+      o = Timelock.gov.outflows, dao = GovState.dao, paused = Timelock.paused, token = Timelock.token,
+      h = Timelock.params.h, pre = Timelock.predecessor or "" })
+  end
+  local function refused(name, res, outbox, want, before)
+    check(name, res.error == want and next(outbox or {}) == nil and snap() == before,
+      "got " .. tostring(res.error) .. ", want " .. want .. (snap() == before and "" or " (state changed)"))
+  end
+  local function req(pid, fields)
+    fields.Action = "Request-Random"
+    return send(delivery(pid, fields))
+  end
+  local function sub(pid, fields)
+    fields.Action = "Subscribe"
+    return send(delivery(pid, fields))
+  end
+
+  -- Before genesis.
+  local s0 = snap()
+  local r, ob = req(F.game, { Tier = "fast", ["Request-Id"] = "x" })
+  check("tier other than any-honest refused, the process told", r.error == "Tier-Unavailable"
+    and ob["rng-error"] and ob["rng-error"].target == F.game and snap() == s0, r.error)
+  r, ob = req(F.game, {})
+  check("no Request-Id refused", r.error == "Missing-Request-Id" and snap() == s0, r.error)
+  r, ob = req(F.game, { ["Request-Id"] = string.rep("i", 129) })
+  check("a Request-Id over 128 bytes refused", r.error == "Missing-Request-Id" and snap() == s0, r.error)
+  r, ob = req(F.game, { ["Request-Id"] = "pre" })
+  check("a request before genesis refused, nothing bound", r.error == "Not-Configured" and snap() == s0
+    and seenOf(F.game .. "|pre") == nil, r.error)
+  r, ob = send({ target = SELF, Action = "Subscribe", ["Subscription-Id"] = "u" })
+  refused("an unsigned subscription refused", r, ob, "Unsigned", s0)
+  r, ob = sub(F.game, {})
+  check("no Subscription-Id refused", r.error == "Missing-Subscription-Id" and snap() == s0, r.error)
+  r, ob = sub(F.game, { ["Subscription-Id"] = "pre" })
+  check("a subscription before genesis refused", r.error == "Not-Configured" and snap() == s0, r.error)
+  -- A stray token's refund stream remembers STRAY_REFS references; past that it refuses.
+  send(delivery(F.stranger, { Action = "Credit-Notice", Sender = F.game, Quantity = tostring(U), Reference = "t1" }))
+  local stray = Timelock.strays[F.stranger]
+  for i = 2, 256 do stray.refs[tostring(i)] = true end
+  local straySeq = stray.seq
+  r, ob = send(delivery(F.stranger, { Action = "Credit-Notice", Sender = F.game, Quantity = tostring(U), Reference = "t999" }))
+  check("a stray token past STRAY_REFS references is refused, nothing refunded", r.error == "Not the configured token"
+    and next(ob) == nil and stray.seq == straySeq and stray.refs["999"] == nil, encode(r))
+
+  -- Genesis is checked whole.
+  local cfg = json.decode(F.config)
+  cfg.T, cfg.h, cfg.hProof, cfg.predecessor = nil, nil, nil, nil
+  local function with(k, v) local c = {} for x, y in pairs(cfg) do c[x] = y end c[k] = v return c end
+  s0 = snap()
+  for _, bad in ipairs({ { "predecessor", "short" }, { "token", "short" }, { "unit", 0 } }) do
+    r, ob = configure(with(bad[1], bad[2]))
+    refused("genesis with a bad " .. bad[1] .. " configures nothing", r, ob, "Bad-Parameter", s0)
+  end
+  r = configure(cfg)
+  check("genesis without h or a predecessor", r.ok == true and Timelock.token == F.token and Timelock.params.h == "", r.error)
+  s0 = snap()
+  r, ob = send(wallet(F.stranger, { Action = "Resend-Successor-Ack" }))
+  refused("no predecessor: no ack to resend", r, ob, "No-Predecessor", s0)
+  r, ob = send(delivery(F.stranger, { Action = "Credit-Notice", Sender = F.game, Quantity = tostring(5 * U), Reference = "t50" }))
+  refused("after genesis another process is no token", r, ob, "Not the configured token", s0)
+
+  -- Validators register by bond; with no h a registered one cannot commit.
+  for i, v in ipairs({ A, B, C, D }) do
+    send(delivery(F.token, { Action = "Credit-Notice", Sender = F.owner, Quantity = tostring(25000 * U), ["X-For"] = v,
+      ["X-Bond"] = "true", Reference = "t" .. (10 + i) }))
+  end
+  check("four registered", Timelock.validators[D] ~= nil and Timelock.bonds[D] == 25000)
+  s0 = snap()
+  r, ob = commit(A, info().open.round, "r1a")
+  refused("no h: a commit is refused", r, ob, "Not-Configured", s0)
+  r = configure({ T = F.T, h = F.h, hProof = F.hProof })
+  check("h set", r.ok == true and Timelock.params.h == F.h, r.error)
+  send(delivery(F.token, { Action = "Credit-Notice", Sender = F.game, Quantity = tostring(40 * U), Reference = "t20" }))
+  eq("game funded", Timelock.balances[F.game], 40)
+  s0 = snap()
+  r, ob = sub(F.game, { ["Subscription-Id"] = "s1" })
+  check("nobody ready: a subscription refused", r.error == "Too-Few-Validators" and snap() == s0, r.error)
+  r, ob = send(delivery(F.token, { Action = "Credit-Notice", Sender = "not-an-address", Quantity = tostring(4 * U),
+    ["X-For"] = F.game, ["X-Request-Id"] = "bs", Reference = "t21" }))
+  check("pay-and-request from a Sender that is no address: refused, nothing credited or bound",
+    r.error == "Bad-Sender" and next(ob) == nil and Timelock.balances[F.game] == 40 and seenOf("not-an-address|bs") == nil, encode(r))
+  check("its reference is spent", Timelock.credited["21"] == true)
+  for _, v in ipairs({ A, B, C }) do ready(v) end
+
+  -- Payers and subscribers.
+  s0 = snap()
+  send(wallet(F.owner, { Action = "Gov.Pause" }))
+  local paused = snap()
+  r, ob = sub(F.game, { ["Subscription-Id"] = "s1" })
+  check("paused: a subscription refused", r.error == "Paused" and snap() == paused, r.error)
+  send(wallet(F.owner, { Action = "Gov.Resume" }))
+  check("resumed", snap() == s0)
+  for _, rounds in ipairs({ "0", "31536001" }) do
+    r, ob = sub(F.game, { ["Subscription-Id"] = "s1", Rounds = rounds })
+    check("a subscription of " .. rounds .. " rounds refused", r.error == "Bad-Rounds" and snap() == s0, r.error)
+  end
+  r, ob = sub(F.stranger, { ["Subscription-Id"] = "s1", Rounds = "1" })
+  check("an unfunded subscription refused", r.error == "Insufficient-Balance" and snap() == s0, r.error)
+  r, ob = req(F.stranger, { ["Request-Id"] = "broke" })
+  check("an unfunded request refused, nothing bound", r.error == "Insufficient-Balance" and snap() == s0
+    and seenOf(F.stranger .. "|broke") == nil, r.error)
+  r, ob = send(wallet(F.stranger, { Action = "Withdraw" }))
+  refused("withdrawing an empty balance refused", r, ob, "Insufficient-Balance", s0)
+  r, ob = send(wallet(F.game, { Action = "Withdraw", Quantity = "41" }))
+  refused("withdrawing more than the balance refused", r, ob, "Insufficient-Balance", s0)
+  r, ob = send(wallet(F.stranger, { Action = "Claim" }))
+  refused("nothing earned: nothing to claim", r, ob, "Nothing-To-Claim", s0)
+
+  -- Validator verbs from someone who is not one.
+  for _, verb in ipairs({ "Exit", "Finalize-Exit", "Pause" }) do
+    r, ob = send(wallet(F.stranger, { Action = verb }))
+    refused(verb .. " from a non-validator refused", r, ob, "Not a validator", s0)
+  end
+  r, ob = send(wallet(A, { Action = "Finalize-Exit" }))
+  refused("Finalize-Exit before Exit refused", r, ob, "Exit-Not-Requested", s0)
+  r, ob = send(wallet(F.stranger, { Action = "Evict-Idle", Validator = F.stranger }))
+  refused("evicting an unknown validator refused", r, ob, "Unknown validator", s0)
+
+  -- Round 1: a, b and c open it; d registered but not in its set.
+  r = req(F.game, { ["Request-Id"] = "q1" })
+  local rn = r.round
+  check("q1 bound", rn ~= nil, r.error)
+  commit(A, rn, "r1a")
+  local function roundState() local o = Timelock.opens[tostring(rn)] return encode({ o.commits, o.outputs, o.active }) end
+  s0, ob = snap(), nil
+  local o0 = roundState()
+  r, ob = commit(A, rn, "r1b")
+  check("a second commit refused", r.error == "Already-Committed" and snap() == s0 and roundState() == o0, r.error)
+  r, ob = commit(D, rn, "r1b")
+  check("a validator outside the round's set cannot commit", r.error == "Joined-After-Round-Opened"
+    and snap() == s0 and roundState() == o0, r.error)
+  commit(B, rn, "r1b")
+  r = commit(C, rn, "r3c")
+  eq("round 1 reveals", r.phase, "reveal")
+  s0, o0 = snap(), roundState()
+  r, ob = reveal(F.stranger, rn, "r1a")
+  check("a reveal from a non-committer refused", r.error == "Not-Committed" and snap() == s0 and roundState() == o0, r.error)
+  r, ob = reveal(A, rn, "r1a", "zz")
+  check("a reveal that is no hex refused", r.error == "Bad-Reveal" and snap() == s0 and roundState() == o0, r.error)
+  reveal(A, rn, "r1a")
+  s0, o0 = snap(), roundState()
+  r, ob = reveal(A, rn, "r1a")
+  check("a second reveal refused", r.error == "Already-Revealed" and snap() == s0 and roundState() == o0, r.error)
+  reveal(B, rn, "r1b")
+  -- c withholds: past the deadline it is slashed (into the treasury), then cracked.
+  tick(11000)
+  check("c faulted", Timelock.opens[tostring(rn)].late == true and Timelock.bonds[C] == 24000)
+  s0, o0 = snap(), roundState()
+  r, ob = send({ target = SELF, Action = "Crack", Data = encode({ round = rn, validator = C, y = F.crack3.y, proof = F.crack3.proof }) })
+  check("an unsigned crack refused", r.error == "Unsigned" and snap() == s0 and roundState() == o0, r.error)
+  r, ob = crack(F.stranger, rn + 50, C, F.crack3.y, F.crack3.proof)
+  check("a crack of a round not revealing refused", r.error == "Not-Revealing" and snap() == s0 and roundState() == o0, r.error)
+  r, ob = crack(F.stranger, rn, A, F.crack3.y, F.crack3.proof)
+  check("cracking a revealed output refused", r.error == "Nothing-To-Crack" and snap() == s0 and roundState() == o0, r.error)
+  r, ob = crack(F.stranger, rn, C, "zz", F.crack3.proof)
+  check("a crack that is no number below N refused", r.error == "Bad-Crack" and snap() == s0 and roundState() == o0, r.error)
+  local funded = Timelock.treasuryAtoms
+  Timelock.treasuryAtoms = 10 * U - 1 -- white box: the treasury cannot front the bounty
+  s0, o0 = snap(), roundState()
+  r, ob = crack(F.stranger, rn, C, F.crack3.y, F.crack3.proof)
+  check("a valid crack the treasury cannot pay for refused", r.error == "Treasury-Bounty-Unfunded"
+    and snap() == s0 and roundState() == o0 and Timelock.accruedAtoms[F.stranger] == nil, r.error)
+  Timelock.treasuryAtoms = funded
+  r = crack(F.stranger, rn, C, F.crack3.y, F.crack3.proof)
+  check("funded again: the crack finalizes", r.value ~= nil and info().round == rn, encode(r))
+
+  -- Ready while exiting; Finalize-Exit is the way out.
+  send(wallet(D, { Action = "Exit" }))
+  s0 = snap()
+  r, ob = ready(D)
+  check("an exiting validator cannot say Ready", r.error == "Validator-Exiting" and snap() == s0
+    and Timelock.validators[D].ready == false, r.error)
+
+  -- Governance refusals, from the wallet.
+  s0 = snap()
+  r, ob = send(wallet(F.stranger, { Action = "Gov.Move-Reserve", Successor = F.successor }))
+  refused("a stranger cannot move the reserve", r, ob, "Not authorised", s0)
+  for _, q in ipairs({ "x", "0", "-5" }) do
+    r, ob = send(wallet(F.owner, { Action = "Gov.Fund-Reserve", Quantity = q }))
+    refused("funding the reserve with " .. q .. " refused", r, ob, "Bad-Quantity", s0)
+  end
+  r, ob = send(wallet(F.owner, { Action = "Gov.Fund-Reserve", Quantity = string.format("%d", Timelock.treasuryAtoms) }))
+  refused("funding past a tenth of the treasury refused", r, ob, "Over-Treasury-Cap", s0)
+  local savedOutflows = Timelock.gov.outflows
+  local full = {}
+  for i = 1, 64 do full[i] = { at = clock, atoms = 0 } end
+  Timelock.gov.outflows = full -- white box: MAX_OUTFLOWS passed actions in the window
+  s0 = snap()
+  r, ob = send(wallet(F.owner, { Action = "Gov.Fund-Reserve", Quantity = "1" }))
+  refused("a full outflow window refuses another", r, ob, "Too-Many-Outflows", s0)
+  Timelock.gov.outflows = savedOutflows
+  s0 = snap()
+  r, ob = send(wallet(F.owner, { Action = "Gov.Remove-Validator", Validator = F.stranger }))
+  refused("removing an unknown validator refused", r, ob, "Unknown validator", s0)
+  r, ob = send(wallet(F.owner, { Action = "Gov.Cancel", ["Gov-Id"] = "999" }))
+  refused("cancelling an unknown id refused", r, ob, "Unknown-Gov-Id", s0)
+
+  -- Governance refusals, from the DAO's queue.
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.dao }))
+  eq("the DAO is set", GovState.dao, F.dao)
+  local function dao(fields) return send(delivery(F.dao, fields)) end
+  local function at(extra) return string.format("%d", clock + 100 + 86400000 + (extra or 0)) end
+  s0 = snap()
+  r, ob = dao({ Action = "Gov.Set-Dao", Dao = "short", ["Effective-At"] = at() })
+  refused("the DAO naming a bad successor DAO is refused on proposal", r, ob, "Dao must be a 43-character process id", s0)
+  r, ob = dao({ Action = "Gov.Pause", ["Effective-At"] = at(), Note = string.rep("n", 4100) })
+  refused("a proposal over MAX_ARGS_BYTES refused", r, ob, "Too-Large", s0)
+  local held = {}
+  for i = 1, Gov.MAX_PENDING do held[i] = dao({ Action = "Gov.Pause", ["Effective-At"] = at(i) }).pending.id end
+  s0 = snap()
+  r, ob = dao({ Action = "Gov.Pause", ["Effective-At"] = at() })
+  refused("a full queue refuses another proposal", r, ob, "Too-Many-Pending", s0)
+  for _, id in ipairs(held) do dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(id) }) end
+  eq("the queue is empty again", next(Timelock.gov.pending), nil)
+  -- A handler that throws on proposal (its dry run) or on apply rolls the message back.
+  local realEncode = encode
+  local function throwOnFund(v)
+    if type(v) == "table" and v.reserveAtoms ~= nil then error("boom") end
+    return realEncode(v)
+  end
+  s0 = snap()
+  encode = throwOnFund
+  r, ob = dao({ Action = "Gov.Fund-Reserve", Quantity = "1", ["Effective-At"] = at() })
+  encode = realEncode
+  check("a proposal whose dry run throws is refused, nothing queued", tostring(r.error):match("boom")
+    and next(ob) == nil and snap() == s0, encode(r))
+  local pid = dao({ Action = "Gov.Fund-Reserve", Quantity = "1", ["Effective-At"] = at() }).pending.id
+  Timelock.gov.pending[tostring(pid)].effectiveAt = clock -- white box: due now
+  s0 = snap()
+  encode = throwOnFund
+  r, ob = send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(pid) }))
+  encode = realEncode
+  check("an apply that throws moves nothing and keeps the action pending", tostring(r.error):match("boom")
+    and next(ob) == nil and snap() == s0 and Timelock.gov.pending[tostring(pid)] ~= nil, encode(r))
+  dao({ Action = "Gov.Cancel", ["Gov-Id"] = tostring(pid) })
+
+  check("refusals: mock knew every device call", #misses == 0, table.concat(misses, ", "))
+  lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
+  return table.concat(lines, "\n")
+end
+
 function rngtest()
-  local ok, out = pcall(runTimelockTests)
+  local ok, out = pcall(function()
+    runTimelockTests()
+    lines[#lines] = nil
+    return runRefusalTests()
+  end)
   if ok then return out end
   return "ERROR " .. tostring(out) .. "\n" .. table.concat(lines, "\n")
 end
