@@ -118,6 +118,12 @@ function runBeaconTests()
   credited = credited + 13
   eq("credited 13", Beacon.balances[F.game], 13)
   check("no RNG-Funded push", ob["rng-funded"] == nil)
+  send(wallet(F.stranger, { Action = "Balance", Account = F.game }))
+  local balRaw = base.results.output.data
+  check("Balance answers the funded balance as a raw integer", balRaw:find('"balance":13[,}]') ~= nil, balRaw)
+  send(wallet(F.game, { Action = "Balance" }))
+  balRaw = base.results.output.data
+  check("Balance defaults to the signer", balRaw:find('"account":"' .. F.game .. '"', 1, true) ~= nil, balRaw)
   credit(F.game, 13 * U, "t1")
   eq("same notice twice credits once", Beacon.balances[F.game], 13)
   r = credit(F.game, U, nil)

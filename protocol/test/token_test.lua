@@ -186,6 +186,18 @@ local function walletTests()
   eq("wallet transfer needs no sequence", r.Action, "Transfer-Success")
   eq("wallet debited", Balances[F.user], 999990)
   eq("recipient credited", Balances[F.recipient], 10)
+  -- Reads, asserted on the raw reply: amounts are integer text.
+  send(wallet(F.stranger, { Action = "Balance", Account = F.recipient }))
+  local rawOut = base.results.output.data
+  check("Balance of an account answers integer text", rawOut:find('"Balance":"10"', 1, true) ~= nil, rawOut)
+  send(wallet(F.user, { Action = "Balance" }))
+  rawOut = base.results.output.data
+  check("Balance defaults to the signer", rawOut:find('"Balance":"999990"', 1, true) ~= nil
+    and rawOut:find('"Account":"' .. F.user .. '"', 1, true) ~= nil, rawOut)
+  send(wallet(F.stranger, { Action = "Balances" }))
+  rawOut = base.results.output.data
+  check("Balances lists holders as integer text", rawOut:find('"' .. F.recipient .. '":"10"', 1, true) ~= nil
+    and not rawOut:find('%d%.%d'), rawOut)
   local notice = outbox["credit-notice"]
   check("credit notice shape", notice and notice.Action == "Credit-Notice" and notice.Sender == F.user
     and notice.Quantity == "10" and notice.target == F.recipient)
