@@ -51,6 +51,11 @@ export function TryConsole() {
   const [draw, setDraw] = useState<Draw | null>(null);
   const [paid, setPaid] = useState<{ requestId: string; round?: number; value?: string; valid?: boolean } | null>(null);
 
+  function chooseMode(next: Mode) {
+    setMode(next);
+    setError(null);
+  }
+
   async function refreshStatus(round?: number) {
     const response = await fetch(`/api/status${round ? `?round=${round}` : ""}`, { cache: "no-store" });
     const body = await response.json() as Status & { error?: string };
@@ -170,7 +175,19 @@ export function TryConsole() {
   return (
     <main className="shell try-page">
       <SiteHeader active="try" />
-      <section className="container product-switcher" aria-label="RNG products">{modes.map((item) => <button key={item.key} disabled={walletPresent === null} className={mode === item.key ? "product-option selected" : "product-option"} onClick={() => { setMode(item.key); setError(null); }} aria-pressed={mode === item.key}>{item.title}</button>)}</section>
+      <section className="container product-switcher" aria-label="RNG products">
+        <label className="console-tool-picker">
+          Console tool
+          <select value={mode} disabled={walletPresent === null} onChange={event => chooseMode(event.target.value as Mode)}>
+            {modes.map(item => <option key={item.key} value={item.key}>{item.title}</option>)}
+          </select>
+        </label>
+        {modes.map(item => (
+          <button key={item.key} type="button" disabled={walletPresent === null}
+            className={mode === item.key ? "product-option selected" : "product-option"}
+            onClick={() => chooseMode(item.key)} aria-pressed={mode === item.key}>{item.title}</button>
+        ))}
+      </section>
 
       <section className="try-workspace container"><div className="mode-workbench">
         {mode === "local" && <div className="workbench-grid"><div><h2>Generate from a seed</h2><p className="muted">Free, immediate and replay-safe. Use it when the sender learning the result creates no advantage.</p><label className="field"><span>SEED</span><input value={seed} onChange={(event) => setSeed(event.target.value)} maxLength={4096} /></label><button className="button invert" onClick={derive} disabled={deriving || !seed}>{deriving ? "DERIVING..." : "Generate value"}</button></div><div className="terminal"><div className="terminal-bar"><span>stdout</span><span>~rng@1.0/derive</span></div><div className="terminal-body"><p><span className="prompt">&gt;</span> bytes=32 counter=0</p><code className="big-output">{derived || "waiting_for_input"}</code></div></div></div>}
