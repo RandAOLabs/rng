@@ -1,0 +1,174 @@
+{
+  "processes": {
+    "P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g": {
+      "role": "token",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "4439c638c43b993313c676f83a7faf69267ed9f03b516f1626a463f20f3d5788",
+      "at": "2026-11-16T01:10:31.401Z"
+    },
+    "yAPgKEpAGDHHFQUzyzdwlpcLuldu1bcsbl65UXupL7Y": {
+      "role": "dao",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua-patch@1.0",
+      "sourceSha256": "322cc4aa6ad250f42610dc2d58ff865031d3689e56273b299df202a091e0ed6f",
+      "at": "2026-11-16T01:10:35.928Z"
+    },
+    "0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI": {
+      "role": "beacon",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua-patch@1.0",
+      "sourceSha256": "cc7b0d13934f26d1760f25b64e6a6b7d909553cf201b3aef225e6b455c7668de",
+      "at": "2026-11-16T01:10:37.693Z"
+    },
+    "HaYtR4PwVPorZVkxQFi2o1vU9cQDL_mhnLIuGnlDHac": {
+      "role": "fair",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "1e810e29ab924b1d25b669f851bbedc91bb2265accae8ce00c4a038c9ff3a597",
+      "at": "2026-11-16T01:10:59.898Z"
+    },
+    "SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg": {
+      "role": "fast",
+      "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+      "executionDevice": "lua@5.3a",
+      "sourceSha256": "5e94df915918d0492dfb8208ef6fe3300b8541d4d654a8a64b2793be4ea6bb10",
+      "at": "2026-11-16T01:11:07.951Z"
+    }
+  },
+  "deployer": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
+  "tokenTicker": "RNG",
+  "genesis": {
+    "rows": [
+      {
+        "role": "holder",
+        "address": "-p-VrMg9GpkTNUdv7Lt6VpdbYmVtdBT9l9BMcCs_dHE",
+        "atoms": "1000000000"
+      },
+      {
+        "role": "holder",
+        "address": "3KaBf1b9lgq8in4WSP1NEI8Q9jSWxgMzGqgKWJwlIfs",
+        "atoms": "1000000000"
+      },
+      {
+        "role": "deployer",
+        "address": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
+        "atoms": "949651114342598"
+      },
+      {
+        "role": "holder",
+        "address": "G5G0NLiFUUaUMHyLA0hSWtqUceFJrFWyxHnENtXECh8",
+        "atoms": "1000000000"
+      },
+      {
+        "role": "holder",
+        "address": "G8nfKNw1wKnCd9bGYnr-3Os1j3a-pnWU7ovtLq5bPqU",
+        "atoms": "117257219134"
+      },
+      {
+        "role": "holder",
+        "address": "JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ",
+        "atoms": "115593219134"
+      },
+      {
+        "role": "holder",
+        "address": "JxKGavYS-QcliuuoTxa2CtlBnkGrTb7pZvzszljxoCY",
+        "atoms": "1000000000"
+      },
+      {
+        "role": "holder",
+        "address": "L2MlZ6fryHfhE07JNrOawymhs3XOk-zZa00Dx783Mi8",
+        "atoms": "60000000000"
+      },
+      {
+        "role": "holder",
+        "address": "RLywdqe15QvPNsUgGQrPzSlm4eXm86yXA5SkTfWWTGU",
+        "atoms": "1000000000"
+      },
+      {
+        "role": "holder",
+        "address": "X6u2VTGodQ5mr-kyDokzcpnrLKVbbn4TMG61NKvFTCA",
+        "atoms": "1000000000"
+      },
+      {
+        "role": "holder",
+        "address": "apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY",
+        "atoms": "116035219134"
+      },
+      {
+        "role": "holder",
+        "address": "az75q7lC-AVW9xE5eMcVyRXvlkcIjPlyS27YvspyinY",
+        "atoms": "2000000000"
+      },
+      {
+        "role": "holder",
+        "address": "dBEidzwey_-Unlr7vDjdugrFYKn2VMUJc-u_I4-UtfY",
+        "atoms": "2000000000"
+      },
+      {
+        "role": "vault",
+        "address": "ibtRrKfbuT0MKPcmSM3VNnM5GJbTiPqYTZagrRwFTB0",
+        "atoms": "49929000000000"
+      },
+      {
+        "role": "holder",
+        "address": "uYt6UaqC6ehLnZ7VyxfTvLT23EconxGdn6kAmknHbQY",
+        "atoms": "1000000000"
+      }
+    ],
+    "reserveRng": 199651114,
+    "treasuryRng": 50017000,
+    "validatorRng": 0
+  },
+  "scheduler": "BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU",
+  "node": "https://rng-hb.tylerw.ai",
+  "token": "P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g",
+  "dao": "yAPgKEpAGDHHFQUzyzdwlpcLuldu1bcsbl65UXupL7Y",
+  "daoRules": {
+    "Dao-Name": "RNG DAO",
+    "Dao-Token": "P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g",
+    "Dao-Ticker": "RNG",
+    "Dao-Denomination": "6",
+    "Proposal-Threshold": "25000000000",
+    "Proposal-Deposit": "5000000000",
+    "Voting-Period": "86400000",
+    "Quorum-Bps": "1000",
+    "Pass-Bps": "5000",
+    "Veto-Bps": "3334",
+    "Unstake-Delay": "1209600000",
+    "Max-Active-Proposals": "20",
+    "Max-Proposals-Per-Proposer": "1"
+  },
+  "beacon": "0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI",
+  "expectedCode": {
+    "beacon": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "cc7b0d13934f26d1760f25b64e6a6b7d909553cf201b3aef225e6b455c7668de"
+    },
+    "fair": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "1e810e29ab924b1d25b669f851bbedc91bb2265accae8ce00c4a038c9ff3a597"
+    },
+    "fast": {
+      "code": "",
+      "version": 0,
+      "sourceSha256": "5e94df915918d0492dfb8208ef6fe3300b8541d4d654a8a64b2793be4ea6bb10"
+    }
+  },
+  "predecessor": "",
+  "owners": {
+    "beacon": {
+      "dao": "yAPgKEpAGDHHFQUzyzdwlpcLuldu1bcsbl65UXupL7Y"
+    },
+    "fair": {
+      "dao": "yAPgKEpAGDHHFQUzyzdwlpcLuldu1bcsbl65UXupL7Y"
+    },
+    "fast": {
+      "dao": "yAPgKEpAGDHHFQUzyzdwlpcLuldu1bcsbl65UXupL7Y"
+    }
+  },
+  "fair": "HaYtR4PwVPorZVkxQFi2o1vU9cQDL_mhnLIuGnlDHac",
+  "fast": "SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg"
+}
