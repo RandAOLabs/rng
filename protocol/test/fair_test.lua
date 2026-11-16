@@ -105,6 +105,150 @@ local function expire(session, player, advance)
 end
 local function configure(d, who) return send(wallet(who or F.owner, { Action = "Fair.Configure", Data = encode(d) })) end
 
+--- Refusals not reached by the main flow, each with the state shown unchanged
+--- after it. The library (lib/fair.lua) first, then a fresh process.
+local function refusalTests()
+  local function snap(st) return encode(st) end
+
+  -- Library: a session that is committed but not yet bound.
+  local st = fair.new({ beacon = F.beacon, windowMs = 30000 })
+  local before = snap(st)
+  local d, e = fair.dispatch(st, "Fair.Commit", { Game = "short", Session = "s1", Commit = F.c1 }, F.p1, false, 1000)
+  check("library: commit to a bad game is Bad-Game", d == nil and e == "Bad-Game", e)
+  eq("library: Bad-Game changes nothing", snap(st), before)
+  fair.open(st, { game = F.game, session = "s1", player = F.p1, now = 1000 })
+  fair.dispatch(st, "Fair.Commit", { Game = F.game, Session = "s1", Commit = F.c1 }, F.p1, false, 1000)
+  local k = F.game .. "|s1|" .. F.p1
+  eq("library: committed and requested", st.outstanding and st.outstanding.requestId, "fair-1")
+  before = snap(st)
+  d, e = fair.dispatch(st, "Fair.Expire", { Game = F.game, Session = "s1", Player = F.p1 }, F.stranger, false, 999999)
+  check("library: expiring an unbound session is Not-Bound", d == nil and e == "Not-Bound", e)
+  eq("library: Not-Bound changes nothing", snap(st), before)
+  d, e = fair.dispatch(st, "Fair.Reveal", { Game = "short", Session = "s1", Secret = F.s1 }, F.p1, false, 1000)
+  check("library: reveal naming a bad game is No-Session", d == nil and e == "No-Session", e)
+  d, e = fair.dispatch(st, "Fair.Reveal", { Game = F.game, Session = "none", Secret = F.s1 }, F.p1, false, 1000)
+  check("library: reveal of an unknown session is No-Session", d == nil and e == "No-Session", e)
+  d, e = fair.dispatch(st, "Fair.Expire", { Game = F.game, Session = "none", Player = F.p1 }, F.stranger, false, 1000)
+  check("library: expire of an unknown session is No-Session", d == nil and e == "No-Session", e)
+  eq("library: No-Session changes nothing", snap(st), before)
+  -- The beacon's answer for our request, but not a 64-hex value: nothing binds.
+  d, e = fair.dispatch(st, "RNG-Result", { Data = { results = { { requestId = "fair-1", value = "zz" } } } },
+    F.beacon, true, 2000)
+  check("library: a malformed value for our request is Bad-Result", d == nil and e == "Bad-Result", e)
+  check("library: the request stays outstanding, the session committed",
+    st.outstanding and st.outstanding.requestId == "fair-1" and st.sessions[k].status == "committed")
+  eq("library: Bad-Result changes nothing", snap(st), before)
+  d, e = fair.dispatch(st, "RNG-Error", { Data = "{" }, F.beacon, true, 2000)
+  check("library: an RNG-Error that is not JSON is Bad-Result", d == nil and e == "Bad-Result", e)
+  eq("library: a bad RNG-Error requeues nothing", snap(st), before)
+  -- Metered withdrawals: no token yet, and a quantity that is not whole.
+  st = fair.new({ metered = true, price = 10 })
+  before = snap(st)
+  d, e = fair.withdraw(st, { game = F.game, nonce = "1", now = 1000 })
+  check("library: withdraw before a token is Not-Configured", d == nil and e == "Not-Configured", e)
+  eq("library: Not-Configured changes nothing", snap(st), before)
+  st.token = F.token
+  fair.credit(st, { from = F.token, fromProcess = true, sender = F.payer, quantity = "30", reference = "t1", forGame = F.game })
+  before = snap(st)
+  for _, q in ipairs({ "abc", "1.5", "-1", "" }) do
+    d, e = fair.withdraw(st, { game = F.game, nonce = "1", quantity = q, now = 1000 })
+    check("library: withdraw quantity '" .. q .. "' is Bad-Quantity", d == nil and e == "Bad-Quantity", e)
+  end
+  eq("library: Bad-Quantity changes nothing", snap(st), before)
+  eq("library: balance and nonce kept", st.accounts[F.game].balance .. "/" .. tostring(st.accounts[F.game].nonce), "30/0")
+
+  -- A fresh process: the wallet owner, a DAO, nothing configured.
+  base = { ["scheduler-location"] = F.sched, process = { commitments = { p = { type = "rsa-pss-sha512", committer = F.owner } } } }
+  Fair = { rev = 0, owner = "", owners = { dao = "", wallet = true, approved = "", approvedAt = 0, code = { sha = "", version = 0 } },
+    gov = { pending = {}, nextId = 1 }, state = fair.new({ metered = true }) }
+  local function out() return base.results.output.data end
+  local function at() return string.format("%d", clock + 100 + 86400000) end
+  local function pending() return count(Fair.gov.pending) end
+  -- An empty table encodes as {} or [] by its metatable alone (a rollback's
+  -- deep copy drops it), so compare with the two spellings folded.
+  local function frozen()
+    return ((encode(Fair.state) .. "#" .. encode(Fair.gov) .. "#" .. tostring(base.fairrev)):gsub("{}", "[]"))
+  end
+  send(wallet(F.stranger, { Action = "Get-Info" }))
+  send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.dao }))
+  eq("fresh: the wallet sets the DAO", out(), '{"dao":"' .. F.dao .. '","ok":true}')
+
+  local was = frozen()
+  send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "1" }))
+  eq("fresh: a withdrawal before the token is Not-Configured", out(), '{"error":"Not-Configured"}')
+  send(wallet(F.stranger, { Action = "Fair.Nope" }))
+  eq("fresh: an unknown action is refused", out(), "{\"error\":\"unknown action 'Fair.Nope'\"}")
+  send(wallet(F.owner, { Action = "Fair.Configure", Beacon = "short" }))
+  eq("fresh: a beacon that is not a process id is Bad-Parameter", out(), '{"error":"Bad-Parameter"}')
+  send(wallet(F.owner, { Action = "Fair.Configure", Keep = "4", Tags = { keep = "5" } }))
+  eq("fresh: a Tags value disagreeing with the body is Bad-Parameter", out(), '{"error":"Bad-Parameter"}')
+  send(wallet(F.p1, { Action = "Fair.Commit", Game = "short", Session = "s1", Commit = F.c1 }))
+  eq("fresh: a commit naming a bad game is Bad-Game", out(), '{"error":"Bad-Game"}')
+  send(wallet(F.stranger, { Action = "Fair.Reveal", Game = "short", Session = "s1", Secret = F.s1, Player = F.p1 }))
+  eq("fresh: a reveal naming a bad game is No-Session", out(), '{"error":"No-Session"}')
+  send(wallet(F.stranger, { Action = "Fair.Expire", Game = F.game, Session = "s1", Player = F.p1 }))
+  eq("fresh: an expire of no session is No-Session", out(), '{"error":"No-Session"}')
+  eq("fresh: those refusals change nothing", frozen(), was)
+  eq("fresh: no beacon was set", Fair.state.beacon, "")
+
+  -- The DAO's Set-Dao: dry-run first, so a bad id is refused and nothing queued.
+  was = frozen()
+  send(delivery(F.dao, { Action = "Gov.Set-Dao", Dao = "short", ["Effective-At"] = at() }))
+  eq("fresh: the DAO naming a bad DAO id is refused", out(), '{"error":"Dao must be a 43-character process id"}')
+  eq("fresh: and nothing is queued or changed", frozen(), was)
+  eq("fresh: the DAO seat is kept", GovState.dao, F.dao)
+
+  -- A dry run that throws: the whole message rolls back.
+  local bounds = fair.BOUNDS
+  fair.BOUNDS = setmetatable({ requestPrice = { "x", 1 } }, { __index = bounds })
+  send(delivery(F.dao, { Action = "Fair.Configure", ["Request-Price"] = "5", ["Effective-At"] = at() }))
+  fair.BOUNDS = bounds
+  check("fresh: a dry run that throws reports it", (json.decode(out()).error or ""):find("compare") ~= nil, out())
+  eq("fresh: and leaves state and queue as they were", frozen(), was)
+  eq("fresh: the price is unchanged", Fair.state.price, 0)
+
+  -- Gov.Apply of an entry refused at apply: the token was set meanwhile.
+  local r = send(delivery(F.dao, { Action = "Fair.Configure", Token = F.token, ["Effective-At"] = at() }))
+  local id = r.pending and r.pending.id
+  check("fresh: the DAO's token naming waits", id ~= nil and Fair.state.token == "", out())
+  check("fresh: the wallet sets another token at once", configure({ token = F.other, requestPrice = 4 }).ok == true)
+  Fair.gov.pending[tostring(id)].effectiveAt = clock
+  local revBefore = base.fairrev
+  send(wallet(F.stranger, { Action = "Gov.Apply", ["Gov-Id"] = tostring(id) }))
+  eq("fresh: an entry refused at apply says why", out(), '{"error":"Token-Locked","govId":' .. id .. '}')
+  check("fresh: the token is kept, the entry marked refused and still pending",
+    Fair.state.token == F.other and Fair.gov.pending[tostring(id)] ~= nil
+    and Fair.gov.pending[tostring(id)].refused == true, encode(Fair.gov))
+  check("fresh: the refusal is published (the hatch closes)", base.fairrev ~= revBefore
+    and json.decode(base.fairinfo).hatch == false)
+
+  -- Metered library through the process: a quantity that is not whole.
+  was = frozen()
+  send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "1", Quantity = "abc" }))
+  eq("fresh: a withdrawal quantity that is not whole is Bad-Quantity", out(), '{"error":"Bad-Quantity"}')
+  check("fresh: Bad-Quantity pays nothing", next(base.results.outbox) == nil and Fair.state.transferSeq == 0)
+
+  -- Gov.Cancel of nothing.
+  send(wallet(F.owner, { Action = "Gov.Cancel", ["Gov-Id"] = "code" }))
+  eq("fresh: cancelling no code approval is Unknown-Gov-Id", out(), '{"error":"Unknown-Gov-Id"}')
+  send(wallet(F.owner, { Action = "Gov.Cancel", ["Gov-Id"] = "999" }))
+  eq("fresh: cancelling an unknown id is Unknown-Gov-Id", out(), '{"error":"Unknown-Gov-Id"}')
+  send(wallet(F.owner, { Action = "Gov.Cancel", ["Gov-Id"] = "abc" }))
+  eq("fresh: a non-numeric id is Unknown-Gov-Id", out(), '{"error":"Unknown-Gov-Id"}')
+  eq("fresh: those refusals change nothing", frozen(), was)
+
+  -- The queue holds at most Gov.MAX_PENDING actions.
+  while pending() < Gov.MAX_PENDING do
+    r = send(delivery(F.dao, { Action = "Fair.Configure", Keep = "4", ["Effective-At"] = at() }))
+    if not (r.pending and r.pending.id) then check("fresh: filling the queue", false, out()); break end
+  end
+  was = frozen()
+  send(delivery(F.dao, { Action = "Fair.Configure", Keep = "5", ["Effective-At"] = at() }))
+  eq("fresh: one past the queue bound is refused", out(), '{"error":"Too-Many-Pending"}')
+  eq("fresh: and queues nothing", frozen(), was)
+  eq("fresh: the queue is at its bound", pending(), Gov.MAX_PENDING)
+end
+
 local function runFairTests()
   local r, ob
 
@@ -790,6 +934,8 @@ local function runFairTests()
   Fair = { rev = 0, owner = "", state = fair.new() }
   send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.owner }))
   eq("a published state with no owners re-arms nobody", out(), '{"error":"Not authorised","ok":false}')
+
+  refusalTests()
 
   lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
   return table.concat(lines, "\n")
