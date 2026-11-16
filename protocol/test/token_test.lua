@@ -403,29 +403,37 @@ local function sequenceTests()
   eq("transfer reply names the sequence", r.TransferSequence, "3")
   local seqBefore = TransferSeq
 
-  -- Replay within the window: no second payment, original notices re-emitted.
+  -- Replay within the window: no second payment, one Debit-Notice back to the
+  -- sender with the original reference and intent, no second Credit-Notice.
   r, outbox = pay("3", { ["X-Pair"] = "forged-intent", ["X-Reference"] = "payout-3" })
   eq("replay is a duplicate", r.Duplicate, "true")
   eq("replay retained receipt", r.ReceiptRetained, "true")
   eq("replay pays nothing", Balances[F.process], before - 3)
   eq("replay does not advance TransferSeq", TransferSeq, seqBefore)
-  check("replay re-emits the original reference and intent only",
-    outbox["credit-notice"] and outbox["credit-notice"].Reference == original.Reference
-      and outbox["credit-notice"]["X-Pair"] == "original-intent")
-  check("replay re-emits Debit-Notice with X-Reference (DAO clears its payout row)",
-    outbox["debit-notice"] and outbox["debit-notice"]["X-Reference"] == "payout-3")
+  local d = outbox["debit-notice"]
+  check("replay answers the sender with one Debit-Notice and no Credit-Notice",
+    count(outbox) == 1 and outbox["credit-notice"] == nil and d and d.target == F.process)
+  check("replayed Debit-Notice: Duplicate, sequence, original reference and intent",
+    d.Duplicate == "true" and d.TransferSequence == "3" and d.Reference == original.Reference
+      and d["X-Pair"] == "original-intent" and d["X-Reference"] == "payout-3" and d["X-Transfer-Sequence"] == "3")
+  r, outbox = pay("3", { Cast = "true" })
+  check("a Cast replay is answered with nothing", r.Duplicate == "true" and next(outbox) == nil)
 
   r = pay("3", { Quantity = "2" })
   check("a paid sequence cannot be reused for another amount", r.error ~= nil and Balances[F.process] == before - 3)
   r = pay("3", { Recipient = F.stranger })
   check("a paid sequence cannot be reused for another recipient", r.error ~= nil)
 
-  -- Replay after the receipt is gone (below the floor): still a no-op.
+  -- Replay after the receipt is gone (below the floor): nothing moves, and
+  -- the sender still hears back (it used to be silence).
   TransferReceipts, TransferReceiptOrder = {}, {}
-  r, outbox = pay("1")
-  check("replay below floor without receipt is a silent no-op",
-    r.Duplicate == "true" and r.ReceiptRetained == "false" and next(outbox) == nil
-      and Balances[F.process] == before - 3)
+  r, outbox = pay("1", { ["X-Reference"] = "payout-1" })
+  d = outbox["debit-notice"]
+  check("replay without a receipt moves nothing", r.Duplicate == "true" and r.ReceiptRetained == "false"
+    and Balances[F.process] == before - 3 and TransferSeq == seqBefore)
+  check("replay without a receipt: one Debit-Notice to the sender, no Credit-Notice",
+    count(outbox) == 1 and d and d.target == F.process and d.Duplicate == "true"
+      and d.TransferSequence == "1" and d["X-Reference"] == "payout-1" and d["X-Transfer-Sequence"] == "1")
 
   -- Window: floor 3, so 259 is the last allowed sequence.
   r = pay("260")
@@ -474,6 +482,41 @@ local function receiptBoundTests()
   eq("all 40 paid once", Balances[F.process], 1000000 - 40)
   local r = pay("1")
   check("evicted receipt still blocks replay", r.Duplicate == "true" and Balances[F.process] == 1000000 - 40)
+end
+
+--- A sender (dao.lua's payout rows) whose Debit-Notice was lost resends the
+--- same sequence until one arrives: it settles once, and nothing moves twice,
+--- whether the token still holds the receipt or not.
+local function lostNoticeTests()
+  boot()
+  local pending, settled = {}, 0
+  local function deliver(outbox)
+    local d = outbox["debit-notice"]
+    if d and d.target == F.process and pending[d["X-Reference"]] then
+      pending[d["X-Reference"]] = nil
+      settled = settled + 1
+    end
+  end
+  local before, recipientBefore = Balances[F.process], Balances[F.recipient] or 0
+  for _, evict in ipairs({ false, true }) do
+    local id = evict and "payout-b" or "payout-a"
+    local seq = evict and "2" or "1"
+    pending[id] = true
+    local _, lost = pay(seq, { ["X-Reference"] = id, Quantity = "5" })
+    check(id .. ": first transfer emits a Debit-Notice (lost in transit)", lost["debit-notice"] ~= nil)
+    if evict then TransferReceipts, TransferReceiptOrder = {}, {} end
+    local r, outbox = pay(seq, { ["X-Reference"] = id, Quantity = "5" })
+    check(id .. ": resend is a duplicate", r.Duplicate == "true"
+      and r.ReceiptRetained == (evict and "false" or "true"))
+    check(id .. ": resend carries no Credit-Notice", outbox["credit-notice"] == nil)
+    deliver(outbox)
+    check(id .. ": resend settles the payout", pending[id] == nil)
+    _, outbox = pay(seq, { ["X-Reference"] = id, Quantity = "5" })
+    deliver(outbox)
+  end
+  eq("each payout settled exactly once", settled, 2)
+  eq("sender paid each payout once", Balances[F.process], before - 10)
+  eq("recipient credited each payout once", Balances[F.recipient], recipientBefore + 10)
 end
 
 local function restoreTests()
@@ -543,7 +586,7 @@ local function patchModeTests()
 end
 
 function runTokenTests()
-  local suites = { genesisTests, sealTests, walletTests, identityTests, sequenceTests, receiptBoundTests,
+  local suites = { genesisTests, sealTests, walletTests, identityTests, sequenceTests, receiptBoundTests, lostNoticeTests,
                    restoreTests, patchModeTests }
   for i, suite in ipairs(suites) do
     local ok, err = pcall(suite)

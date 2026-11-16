@@ -343,8 +343,8 @@ TransferStreams = TransferStreams or {}
 TransferStreamRevision = TransferStreamRevision or 0
 
 --- The last notices of recent sequenced transfers, so a sender that resends a
---- sequence it already paid (dao.lua `Resend-Payout`) gets the ORIGINAL notices
---- again -- its Debit-Notice is what clears its pending row. Bounded in total
+--- sequence it already paid (dao.lua `Resend-Payout`) gets its ORIGINAL
+--- Debit-Notice again -- that is what clears its pending row. Bounded in total
 --- and per sender, evicting from the largest sender first, so one sender
 --- cannot push another's receipts out. Held in memory only: a receipt lost to a
 --- cold VM degrades to `ReceiptRetained = false`, never to a second payment.
@@ -650,15 +650,33 @@ H["Transfer"] = function(base, msg)
     if not flow then return fail(base, why) end
     if flow.duplicate then
       local seen = flow.receipt
-      if not seen then
-        return reply(base, { Action = "Transfer-Success", From = from, Duplicate = "true",
-          ReceiptRetained = "false", TransferSequence = asString(flow.sequence) })
-      end
-      if seen.to ~= to or seen.amount ~= asString(amount) then
+      if seen and (seen.to ~= to or seen.amount ~= asString(amount)) then
         return fail(base, "X-Transfer-Sequence was already used for a different transfer")
       end
-      -- Already paid: re-emit the original notices (original intent tags), move nothing.
-      local outbox = isCast(msg) and {} or noticesFor(from, seen.to, seen.amount, seen.reference, seen.forwarded)
+      local tags = seen and seen.forwarded
+      if not tags then
+        tags, why = forwarded(msg)
+        if not tags then return fail(base, why) end
+      end
+      -- Applied already, so nothing moves -- but the sender hears back, every
+      -- time, receipt or not. A sender re-sends only because its Debit-Notice
+      -- never arrived, and that notice is its only proof (dao.lua clears a
+      -- payout row on it): answered with silence, the payout stays pending at
+      -- the sender for good. One Debit-Notice to the sender, marked Duplicate,
+      -- with its sequence and X- tags (the original ones while the receipt is
+      -- held); never a second Credit-Notice. Same rule as rune.lua.
+      local outbox = {}
+      if not isCast(msg) then
+        local debit = { target = from, Action = "Debit-Notice", Duplicate = "true",
+          TransferSequence = asString(flow.sequence) }
+        if seen then debit.Recipient, debit.Quantity, debit.Reference = seen.to, seen.amount, seen.reference end
+        for k, v in pairs(tags) do debit[k] = v end
+        outbox["debit-notice"] = debit
+      end
+      if not seen then
+        return reply(base, { Action = "Transfer-Success", From = from, Duplicate = "true",
+          ReceiptRetained = "false", TransferSequence = asString(flow.sequence) }, outbox)
+      end
       return reply(base, { Action = "Transfer-Success", From = from, Recipient = to,
         Quantity = seen.amount, Balance = asString(balanceOf(from)), Duplicate = "true",
         ReceiptRetained = "true", Reference = seen.reference,
