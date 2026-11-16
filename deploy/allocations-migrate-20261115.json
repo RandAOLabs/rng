@@ -1,6 +1,6 @@
 {
  "ticker": "RNG",
- "note": "Replacement RNG genesis (repoint) from the old token Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso at slot 132, beacon TvgStOyfJZJvi49QkT5AaldQTqzH3OgS27uhPwWm_lY at slot 1035018, vault ibtRrKfbuT0MKPcmSM3VNnM5GJbTiPqYTZagrRwFTB0 at slot 357. Every row says why; the distribution is what the runbook re-funds from the deployer.",
+ "note": "Replacement RNG genesis (repoint) from the old token Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso at slot 140, beacon TvgStOyfJZJvi49QkT5AaldQTqzH3OgS27uhPwWm_lY at slot 1051049, vault ibtRrKfbuT0MKPcmSM3VNnM5GJbTiPqYTZagrRwFTB0 at slot 358. Every row says why; the distribution is what the runbook re-funds from the deployer.",
  "allocations": [
   {
    "role": "holder",
@@ -21,16 +21,15 @@
   {
    "role": "deployer",
    "address": "DA9qhP25ZPz6MHIhO-7aNHDN3LsTAL7yCKYIkqr13Z8",
-   "atoms": "949656778337974",
+   "atoms": "949651114342598",
    "why": [
-    "old beacon reserve, re-funded by fund-reserve: 199656776000000",
-    "old beacon reserve, the fraction below one RNG: 337974",
-    "old beacon treasury, re-funded by fund-treasury: 50015000000000",
+    "old beacon reserve, re-funded by fund-reserve: 199651114000000",
+    "old beacon reserve, the fraction below one RNG: 342598",
+    "old beacon treasury, re-funded by fund-treasury: 50017000000000",
     "bond of G8nfKNw1wKnCd9bGYnr-3Os1j3a-pnWU7ovtLq5bPqU, re-bonded by bond-for: 99000000000",
-    "bond of JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ, re-bonded by bond-for: 93000000000",
-    "bond of apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY, re-bonded by bond-for: 93000000000",
+    "bond of JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ, re-bonded by bond-for: 92000000000",
+    "bond of apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY, re-bonded by bond-for: 92000000000",
     "beacon balance of 33WN7xWXPfZBZaKzlwqMEzwCpeq05Rshj6Cqtj6Kgls, re-funded (fund-fair): 40000000",
-    "old beacon residual (held, in no bucket): 2000000",
     "old balance: 699699960000000"
    ]
   },
@@ -45,17 +44,17 @@
   {
    "role": "holder",
    "address": "G8nfKNw1wKnCd9bGYnr-3Os1j3a-pnWU7ovtLq5bPqU",
-   "atoms": "115207887342",
+   "atoms": "117257219134",
    "why": [
-    "validator earnings accrued in the old beacon: 115207887342"
+    "validator earnings accrued in the old beacon: 117257219134"
    ]
   },
   {
    "role": "holder",
    "address": "JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ",
-   "atoms": "114039887342",
+   "atoms": "115593219134",
    "why": [
-    "validator earnings accrued in the old beacon: 114039887342"
+    "validator earnings accrued in the old beacon: 115593219134"
    ]
   },
   {
@@ -95,9 +94,9 @@
   {
    "role": "holder",
    "address": "apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY",
-   "atoms": "113973887342",
+   "atoms": "116035219134",
    "why": [
-    "validator earnings accrued in the old beacon: 113973887342"
+    "validator earnings accrued in the old beacon: 116035219134"
    ]
   },
   {
@@ -136,21 +135,21 @@
   }
  ],
  "distribution": {
-  "reserveRng": 199656776,
-  "treasuryRng": 50015000,
+  "reserveRng": 199651114,
+  "treasuryRng": 50017000,
   "validatorRng": 0,
   "validatorBonds": {
    "G8nfKNw1wKnCd9bGYnr-3Os1j3a-pnWU7ovtLq5bPqU": 99000,
-   "JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ": 93000,
-   "apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY": 93000
+   "JZeSPxl06ay3HsZKJWz2l_HbPs03uJj1WcB1tUnctcQ": 92000,
+   "apkIrBZxqKh1oyUVJtCXOrHMviL3vtQaD7j0DTfJ0KY": 92000
   },
   "fairFloatRng": 40
  },
  "evidence": {
   "oldToken": "Z0yL_rU_xg8EnlicONlqZZiQiINqod-Yct5-a6OCcso",
-  "oldTokenSlot": 132,
+  "oldTokenSlot": 140,
   "beaconPaused": false,
-  "beaconResidualAtoms": "2000000",
+  "beaconResidualAtoms": "0",
   "vaultBacking": "49929000000000",
   "pendingPayouts": [
    {

@@ -86,11 +86,22 @@ if (st.token !== TOKEN) throw new Error(`beacon token ${st.token} is not ${TOKEN
 for (const k of ['exitHolds', 'strays', 'accrued', 'pending']) {
   if ((Array.isArray(st[k]) ? st[k] : Object.keys(st[k] || {})).length) throw new Error(`beacon ${k} is not empty: settle it first`);
 }
-if (!st.paused) console.error('WARNING: the old beacon is not paused; accrued is still moving');
-const reserve = BigInt(st.foundationReserveAtoms);
-const treasury = BigInt(st.treasuryAtoms);
-const bonds = Object.fromEntries(Object.entries(st.bonds || {}).map(([a, v]) => [a, BigInt(v) * UNIT]));
-const accrued = Object.fromEntries(Object.entries(st.accruedAtoms || {}).map(([a, v]) => [a, BigInt(v)]));
+// `timelockstate` is a checkpoint (every CHECKPOINT_EVERY messages on
+// lua-patch), so it can trail the live state by a few rounds; `beaconinfo` is
+// published every message. Read the moving buckets from it once the beacon is
+// paused, so the drift since the checkpoint lands with its owners, not in the
+// residual.
+const binfo = json(beaconNow.beaconinfo);
+const live = binfo && binfo.paused === true && Array.isArray(binfo.validators);
+if (!live && !st.paused) console.error('WARNING: the old beacon is not paused; accrued is still moving');
+const reserve = BigInt(live ? binfo.foundationReserveAtoms : st.foundationReserveAtoms);
+const treasury = BigInt(live ? binfo.treasuryAtoms : st.treasuryAtoms);
+const bonds = live
+  ? Object.fromEntries(binfo.validators.filter((v) => Number(v.bond) > 0).map((v) => [v.address, BigInt(v.bond) * UNIT]))
+  : Object.fromEntries(Object.entries(st.bonds || {}).map(([a, v]) => [a, BigInt(v) * UNIT]));
+const accrued = live
+  ? Object.fromEntries(binfo.validators.filter((v) => BigInt(v.earnedAtoms || 0) > 0n).map((v) => [v.address, BigInt(v.earnedAtoms)]))
+  : Object.fromEntries(Object.entries(st.accruedAtoms || {}).map(([a, v]) => [a, BigInt(v)]));
 const purses = Object.fromEntries(Object.entries(st.balances || {}).map(([a, v]) => [a, BigInt(v) * UNIT]));
 const sum = (o) => Object.values(o).reduce((s, v) => s + v, 0n);
 const beaconHeld = balances[BEACON] || 0n;
