@@ -1834,6 +1834,9 @@ function runRefusalTests()
   refused("removing an unknown validator refused", r, ob, "Unknown validator", s0)
   r, ob = send(wallet(F.owner, { Action = "Gov.Cancel", ["Gov-Id"] = "999" }))
   refused("cancelling an unknown id refused", r, ob, "Unknown-Gov-Id", s0)
+  r, ob = send(wallet(F.owner, { Action = "Gov.Cancel", ["Gov-Id"] = "code" }))
+  check("cancelling a code approval that is not there refused", r.error == "Unknown-Gov-Id" and next(ob) == nil
+    and snap() == s0 and GovState.approved == "", r.error)
 
   -- Governance refusals, from the DAO's queue.
   send(wallet(F.owner, { Action = "Gov.Set-Dao", Dao = F.dao }))
