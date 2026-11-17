@@ -363,6 +363,12 @@ export function retireRole(state, role, at = new Date().toISOString()) {
   return entry;
 }
 
+/** `{}` (publish spawns to Arweave) only when the deploy orchestrator set
+ *  PARALITH_DEPLOY_METADATA=1, as paralith-mono's hbclient deployMetadata(). */
+export function deployMetadata(env = process.env) {
+  return env.PARALITH_DEPLOY_METADATA === '1' ? {} : undefined;
+}
+
 /** The governed protocols and the key each publishes its owners in (`gov`). */
 export const PROTOCOL_ROLES = ['beacon', 'fair', 'fast'];
 export const INFO_KEY = { beacon: 'beaconinfo', fair: 'fairinfo', fast: 'beaconinfo' };
@@ -686,6 +692,14 @@ async function main(argv) {
 
   const NODE = process.env.HB_NODE;
   if (!NODE && !DRY) throw new Error('HB_NODE is required');
+  // paralith-mono: the DAO module, and in a deploy the ANS-104 spawn path.
+  const PM = path.resolve(process.env.PARALITH_MONO || path.join(ROOT, '..', 'paralith-mono'));
+  const imp = (p) => import(pathToFileURL(path.join(PM, p)).href);
+  // A deploy (PARALITH_DEPLOY_METADATA=1, fresh-deploy's prod stages) spawns
+  // ANS-104 through paralith-mono's hbclient and publishes each spawn to
+  // Arweave first, so its id is one Lunar can open. Anything else spawns httpsig
+  // through the vendored client and uploads nothing.
+  const metadata = deployMetadata();
   let jwk = null;
   if (process.env.HB_WALLET) jwk = JSON.parse(fs.readFileSync(process.env.HB_WALLET, 'utf8'));
   else if (!DRY) throw new Error('HB_WALLET is required');
@@ -715,7 +729,7 @@ async function main(argv) {
     return actual;
   }
 
-  async function spawn(role, { name, lua, executionDevice = 'lua@5.3a', extra = {} }) {
+  async function spawn(role, { name, ticker, lua, executionDevice = 'lua@5.3a', extra = {} }) {
     const scheduler = await pinScheduler();
     const rec = { role, name, executionDevice, scheduler, sourceBytes: Buffer.byteLength(lua), sourceSha256: sha256(lua) };
     let pid;
@@ -728,7 +742,10 @@ async function main(argv) {
       pid = placeholder(role);
       log({ op: 'spawn', pid, ...rec, ...extra });
     } else {
-      pid = await hb.spawnProcess({ node: NODE, jwk, lua, scheduler, executionDevice, name });
+      pid = metadata
+        ? await (await imp('backend/native/hbclient.mjs')).spawnProcess({ node: NODE, jwk, lua, scheduler, executionDevice,
+          name, ...(ticker ? { ticker } : {}), 'app-name': 'RNG', metadata })
+        : await hb.spawnProcess({ node: NODE, jwk, lua, scheduler, executionDevice, name });
       log({ op: 'spawn', pid, ...rec });
     }
     state.processes[pid] = { role, scheduler, executionDevice, sourceSha256: rec.sourceSha256, at: new Date().toISOString() };
@@ -817,7 +834,7 @@ async function main(argv) {
       state.tokenTicker = alloc.ticker;
       state.genesis = { rows: alloc.rows, reserveRng: alloc.reserveRng, treasuryRng: alloc.treasuryRng,
         validatorRng: alloc.validatorRng };
-      const pid = await spawn('token', { name: alloc.ticker, lua: tokenSource(prelude), extra: { prelude } });
+      const pid = await spawn('token', { name: alloc.ticker, ticker: alloc.ticker, lua: tokenSource(prelude), extra: { prelude } });
       await send(pid, 'Info');
       return alloc;
     },
@@ -829,8 +846,6 @@ async function main(argv) {
       const definition = Object.fromEntries(Object.entries(rules).map(([k, v]) => [k.toLowerCase(), v]));
       const device = flag('--lua53b') ? 'lua-patch@1.0' : 'lua@5.3a';
       // deploy-dao.mjs semantics, our rules: the module comes from paralith-mono.
-      const PM = path.resolve(process.env.PARALITH_MONO || path.join(ROOT, '..', 'paralith-mono'));
-      const imp = (p) => import(pathToFileURL(path.join(PM, p)).href);
       if (DRY) {
         const pid = placeholder('dao');
         // With PARALITH_MONO set, a dry run builds the module too: it proves the
@@ -854,12 +869,15 @@ async function main(argv) {
       const ti = await key(state.token, 'tokeninfo');
       if (ti?.ProcessTransferProtocol !== 'sequenced-v1') throw new Error(`token ${state.token} does not publish sequenced-v1`);
       const scheduler = await pinScheduler();
-      const spawner = throwawayKey(); // signs the definition and confers nothing
+      // Signs the definition and confers nothing. In a deploy it holds no Turbo
+      // credit either: the deployer pays the upload (`payer`).
+      const spawner = throwawayKey({ ans104: metadata !== undefined });
       const lua = device === 'lua-patch@1.0'
         ? dao53bModuleSources({ owner: hb.jwkToAddress(spawner), scheduler, definition })
         : daoModuleSources();
       const { id } = await spawnVanity({ node: hb.transportNode(NODE), jwk: spawner, lua, prefix: 'yap', ignoreCase: true,
-        executionDevice: device, scheduler, tags: { name: rules['Dao-Name'], ...definition } });
+        executionDevice: device, scheduler, tags: { name: rules['Dao-Name'], ...definition },
+        appName: 'RNG', metadata: metadata && { ...metadata, payer: jwk } });
       state.processes[id] = { role: 'dao', scheduler, executionDevice: device, sourceSha256: sha256(lua), at: new Date().toISOString() };
       state.dao = id;
       state.daoRules = rules;

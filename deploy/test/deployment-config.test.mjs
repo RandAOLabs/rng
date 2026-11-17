@@ -9,7 +9,7 @@ import {
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, setDaoErrors, renounceErrors, fundError,
   effectiveAt, isMoneyProposal, LABS_STAKE_RNG, floorFor, RESERVE_FLOOR_MS, buildErrors, watchAlerts,
   fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources, beaconRate, historyPoint, rateChecks, MIN_RATE,
-  retireRole, addRateSample, rateBase,
+  retireRole, addRateSample, rateBase, deployMetadata,
 } from '../deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -765,4 +765,10 @@ test('an idle beacon is held to its idle pace, a busy one to MIN_RATE', async ()
   assert.equal(expectedMinRate({ params, activeSubscriptions: 0, pendingCount: 2 }), MIN_RATE);
   assert.equal(expectedMinRate({ params: { idleIntervalMs: 0 } }), MIN_RATE);
   assert.equal(expectedMinRate(null), MIN_RATE);
+});
+
+test('only a deploy publishes spawns to Arweave (ANS-104 through paralith-mono)', () => {
+  assert.deepEqual(deployMetadata({ PARALITH_DEPLOY_METADATA: '1' }), {});
+  assert.equal(deployMetadata({}), undefined);
+  assert.equal(deployMetadata({ PARALITH_DEPLOY_METADATA: 'true' }), undefined);
 });
