@@ -267,6 +267,17 @@ function runBeaconTests()
   eq("signature not committing target refused", r.error, "Refused: the signature does not commit target")
   eq("door refusals changed nothing", Beacon.signerFee, fee)
 
+  -- What the committee daemons poll (validator/daemon.mjs): they sign
+  -- `roundMessage` for `nextRound` only while `roundPendingCount` > 0. A
+  -- configured fast tier nobody has paid gives them nothing to sign, which is
+  -- why an unpaid deployment stays at round 0 however healthy its committee.
+  local idle = info()
+  check("unpaid: nothing for the committee to sign", idle.round == 0 and idle.nextRound == 1
+    and idle.roundPendingCount == 0 and idle.roundMessage == "hyperbeam/rng/v1|" .. F.beacon .. "|1", encode(idle))
+  r = send(wallet(F.members[1], { Action = "Partial", Data = encode({ round = 1, signature = "p1" }) }))
+  check("unpaid: a partial is refused and locks nothing", r.error == "Nothing-Pending"
+    and (Beacon.lockedRound or 0) == 0, r.error)
+
   -- Requests.
   r, ob = send(wallet(F.stranger, { Action = "Request-Random", ["Request-Id"] = "x1" }))
   check("unfunded wallet request refused, no push to the wallet", r.error == "Insufficient-Balance" and next(ob) == nil)
@@ -281,6 +292,8 @@ function runBeaconTests()
   eq("balance debited 6", Beacon.balances[F.game], 8)
   eq("two pending", info().pendingCount, 2)
   eq("round message", info().roundMessage, "hyperbeam/rng/v1|" .. F.beacon .. "|1")
+  check("paid: the committee now has round 1 to sign", info().nextRound == 1 and info().roundPendingCount == 2,
+    encode(info()))
 
   -- Partials are exchanged through the beacon for the open round only.
   r = send(wallet(F.stranger, { Action = "Partial", Data = encode({ round = 1, signature = "aa" }) }))
