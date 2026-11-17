@@ -569,12 +569,12 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
         if (!acct || acct.reserved !== 0) { check(sc, `game ${g} account settled`, false, acct); continue; }
         if (acct.balance <= 0) { check(sc, `game ${g} account settled`, true, acct); continue; }
         if (game.process) { // back to the spawned game process, not this wallet
-          await hsend(game.address, { Action: 'Withdraw', Nonce: String((acct.nonce || 0) + 1) });
+          await hsend(game.address, { Action: 'Withdraw', Nonce: String((acct.nonce || 0) + 1), Quantity: String(acct.balance) });
           const after = await client.account(game.address);
           check(sc, `game ${g} leftover withdrawn to its process`, after?.balance === 0, { before: acct, after });
           continue;
         }
-        const w = await hsend(fair, fairWithdrawTags((acct.nonce || 0) + 1));
+        const w = await hsend(fair, fairWithdrawTags((acct.nonce || 0) + 1, acct.balance));
         if (w.out?.withdrawn > 0) spent.returnedAtoms += BigInt(w.out.withdrawn);
         check(sc, 'game 0 leftover withdrawn (Fair.Withdraw)', Number(w.out?.withdrawn) === acct.balance, { account: acct, reply: w.out });
       }
@@ -641,7 +641,8 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
         ['fast: unknown Tier', fast, { Action: 'Request-Random', 'Request-Id': rid('Fm', 2), Tier: 'bogus' }, 'Tier-Unavailable'],
         ['fast: no balance', fast, { Action: 'Request-Random', 'Request-Id': rid('Fm', 3) }, 'Insufficient-Balance'],
         ['token: negative Quantity', token, { Action: 'Transfer', Recipient: beacon, Quantity: '-5' }, null],
-        ['fair: Fair.Withdraw without nonce', fair, { Action: 'Fair.Withdraw' }, 'Bad-Nonce'],
+        ['fair: Fair.Withdraw without nonce', fair, { Action: 'Fair.Withdraw', Quantity: '1' }, 'Bad-Nonce'],
+        ['fair: Fair.Withdraw without Quantity', fair, { Action: 'Fair.Withdraw', Nonce: '999999' }, 'Missing-Quantity'],
       ];
       for (const [label, pid, tags, code] of refusals) {
         await run(sc, `F-malformed ${label}`, async () => {

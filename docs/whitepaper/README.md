@@ -237,7 +237,7 @@ The game, the fair process and every validator together still cannot predict
 `final`, because they never see `s` before `v_b` is fixed. The batch's 4 RNG is
 split over its sessions (the first `price mod n` pay one atom more), and the fair
 process tops its beacon balance back up after every bound batch. Games withdraw
-their free balance at any time (`Fair.Withdraw { Nonce }`). A game can also embed
+their free balance at any time (`Fair.Withdraw { Nonce, Quantity }`). A game can also embed
 `lib/fair.lua` and skip the hop.
 
 ## 7. Governance

@@ -368,8 +368,10 @@ back with:
 ```text
 Action: Fair.Withdraw
 Nonce: <greater than the last one used>
-Quantity: <atoms>                     optional; default all free balance
+Quantity: <atoms>                     required; missing or empty is refused
 ```
+
+To take everything, read `fairaccounts[<game>].balance` and send that.
 
 A game can embed `lib/fair.lua` instead of using the fair process, and skip
 the hop.

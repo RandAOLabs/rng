@@ -474,7 +474,8 @@ The counter only increases and never resets, as in dao.lua's payouts.
   lands). After each bound batch the fair process sends exactly what the games paid to the beacon
   (`Transfer`, credited to its balance, whole RNG; atoms below one wait in `surplus`), so the float is
   never spent. `requestPrice` is configured to the beacon's and must follow a governance change of it.
-- `Fair.Withdraw { Nonce [, Quantity] }` from the game pays its free balance back. `Nonce` must exceed
+- `Fair.Withdraw { Nonce, Quantity }` from the game pays that much of its free balance back (Quantity is
+  required: none is `Missing-Quantity`, never "all"). `Nonce` must exceed
   the last one used, so a redelivered withdrawal pays nothing. Every Transfer the fair process sends
   (top-up, refund, withdrawal) carries the next `X-Transfer-Sequence` of its own stream; a failing
   handler rolls the state back, so it takes no sequence number.

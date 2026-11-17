@@ -16,7 +16,7 @@
 --   RNG-Result / RNG-Error                                the configured beacon only (attested)
 --   Credit-Notice { Sender, Quantity, Reference,         the configured token only (attested): funds
 --                   X-Fair-Game | X-For }                 that game's balance (default: Sender)
---   Fair.Withdraw { Nonce [, Quantity] }                  the game: its free balance back (atoms);
+--   Fair.Withdraw { Nonce, Quantity }                     the game: free balance back (atoms, required);
 --                                                         Nonce strictly increasing per game
 --   Fair.Configure { Beacon, Token, Request-Price, Fair-Window-Ms, Keep,  an owner (the wallet
 --                    Max-Open, Min-Interval-Ms, Max-Games, Max-Per-Game }  or the DAO);
