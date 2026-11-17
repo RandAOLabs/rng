@@ -162,6 +162,8 @@ node deploy/deploy.mjs fund-reserve && node deploy/deploy.mjs fund-treasury
 node deploy/deploy.mjs spawn-fair && node deploy/deploy.mjs configure-fair && node deploy/deploy.mjs fund-fair 40
 node deploy/deploy.mjs bond-for 100000 deploy/anyhonest-validators.json
 node deploy/deploy.mjs spawn-fast && node deploy/deploy.mjs genesis-configure-fast
+# nodes.sh beacon/node/start on the committee (step 8b), then:
+node deploy/deploy.mjs fast-probe 3                 # a fast round exists only for a paid request
 node deploy/deploy.mjs dao-stake                    # Labs: 50,000,000 RNG
 node deploy/deploy.mjs dao-handover --confirm       # set-dao + renounce-wallet on all three, read back
 node deploy/deploy.mjs verify                       # includes "<role> wallet renounced"
@@ -270,13 +272,40 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
 **Fast tier (step 8b, before the handover).** On-demand 2-of-3 threshold BLS on
 the existing committee; no heartbeat, rounds open only for paid requests.
 
+Who makes its rounds: the three `rng-provider` daemons (`validator/daemon.mjs
+run`, docker container `rng-provider` on each committee host, files in
+`/opt/rng-provider`), one DKG share each. Not the in-node `rng-validator@1.0`
+(that serves the Any-Honest beacon only) and not the `~rng@1.0` device (it only
+verifies; with `verification = "device"` one valid Round finalizes, with the
+launch default `"attestations"` two identical Rounds do). A daemon signs only a
+round with `roundPendingCount > 0`, so a fast tier nobody pays stays at round 0
+forever, healthy or not. That is what happened to `SWhbDExE…` (2026-11-15
+deploy): spawned, configured, never paid, never probed.
+
 ```bash
 node deploy/deploy.mjs spawn-fast
 node deploy/deploy.mjs genesis-configure-fast deploy/committee.json   # v3 token, same DKG keys
-node deploy/deploy.mjs fund-fast 30                                   # a test balance; then request
-SSH_KEY=<committee key> deploy/nodes.sh install <app.tgz>           # daemon without the cadence gate (app/provider/ = validator/)
-SSH_KEY=<committee key> deploy/nodes.sh beacon <fast pid>            # repoint the 3 rng-provider daemons
-SSH_KEY=<committee key> deploy/nodes.sh start && deploy/nodes.sh status
+SSH_KEY=~/.ssh/randao_ethan deploy/nodes.sh install <app.tgz>      # daemon build (app/provider/ = validator/)
+SSH_KEY=~/.ssh/randao_ethan deploy/nodes.sh beacon <fast pid>      # repoint the 3 rng-provider daemons
+SSH_KEY=~/.ssh/randao_ethan deploy/nodes.sh node <rng node url>    # the node that schedules it (after a wipe, always)
+SSH_KEY=~/.ssh/randao_ethan deploy/nodes.sh start && deploy/nodes.sh status   # healthy:true on all three
+node deploy/deploy.mjs fast-probe 3                                  # pays 3 x 3 RNG, waits for the signed rounds
+node deploy/deploy.mjs verify                                        # includes "fast has signed a round"
+```
+
+`fast-probe` exits 1 if the committee does not sign within 180 s; the daemons
+are then not running, on another pid (`nodes.sh beacon`) or another node
+(`nodes.sh node`), or their shares do not match `committee.json` (the daemon
+log says `beacon committee configuration does not match share.json`).
+
+Rehearse the whole loop on a local node first (no live sends): a throwaway
+token and fast tier, a fresh DKG, the three real daemons, a paid request every
+250 ms:
+
+```bash
+node deploy/fast-e2e.mjs --image hbnode:<tag> --seconds 60
+# 2026-11-17, hbnode:gate-bef6f626f: 224/224 requests served, 23 rounds,
+# 0.37 rounds/s (~10 requests per round), request round trip p50 4.1 s, p95 7.3 s
 ```
 
 Then set `RNG_BEACON_ID` in `site/deploy/native-testnet.env` and `beacon`
@@ -298,6 +327,7 @@ subset:
 node deploy/deploy.mjs spawn-fast --replace
 node deploy/deploy.mjs genesis-configure-fast deploy/committee.json
 SSH_KEY=<committee key> deploy/nodes.sh beacon <new fast pid>       # repoint the rng-provider daemons
+node deploy/deploy.mjs fast-probe 3                               # rounds only exist for paid requests
 node deploy/deploy.mjs spawn-fair --replace
 node deploy/deploy.mjs configure-fair
 node deploy/deploy.mjs fund-fair 40

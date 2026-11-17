@@ -241,6 +241,9 @@ if (cmd === 'run') {
       lastError = e.message;
       log('loop error:', e.message);
     }
-    await sleep(1000);
+    // A round with paid requests is three hops away from done (partials,
+    // combine, attest), and each waits on this loop: poll fast while one is
+    // open, slowly while idle.
+    await sleep(info?.roundPendingCount > 0 ? 250 : 1000);
   }
 }

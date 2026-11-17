@@ -281,6 +281,15 @@ test('checkV3 passes on a healthy deployment and flags each problem', () => {
   assert.deepEqual(failingBuilt({}), ['fair runs the recorded build']);
   assert.deepEqual(failingBuilt({ beaconinfo: { ...good.beaconinfo, gov: { ...gov(pid('d'), true), code: 'b'.repeat(64), version: 1 } },
     fairinfo: { ...good.fairinfo, gov: { ...gov(pid('d'), false), code: 'a'.repeat(64), version: 1 } } }), ['beacon runs the recorded build']);
+  // The fast tier has no clock: verify fails until a paid request was signed
+  // (fast-probe), which is the only proof the committee daemons serve the pid.
+  const withFast = { ...s, fast: pid('q'), processes: { ...s.processes, [pid('q')]: { scheduler: S } } };
+  const fastinfo = { token: pid('t'), self: pid('q'), tier: 'fast', nextRoundAt: 0, threshold: 2,
+    committee: [{}, {}, {}], round: 1, gov: gov(pid('d'), true) };
+  const failingFast = (patch) => checkV3({ state: withFast, ...good, fastinfo: { ...fastinfo, ...patch } })
+    .filter((c) => !c.ok).map((c) => c.check);
+  assert.deepEqual(failingFast({}), []);
+  assert.deepEqual(failingFast({ round: 0 }), ['fast has signed a round']);
   // A cold restore runs the spawn module: the installed root comes back approved, code "".
   const restored = buildErrors({ state: built, role: 'fair', info: { gov: { ...gov(pid('d'), false), approved: 'a'.repeat(64), version: 1 } } });
   assert.match(restored.join(), /cold restore: resend the installed code/);

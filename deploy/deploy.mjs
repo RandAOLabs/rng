@@ -36,6 +36,9 @@
 //   genesis-configure-fast [committee.json] deployer Gov.Configure: v3 token, the existing committee
 //                                           (deploy/committee.json), fees; locks token/unit/self
 //   fund-fast <rng> [for]                   a fast-tier balance (X-For)
+//   fast-probe [n] [timeout s]              pay for n fast-tier requests (deployer) and wait until each
+//                                           round is signed: proves the committee daemons serve this pid
+//   nodes.sh beacon/node/start              (deploy/nodes.sh) point the 3 rng-provider daemons at it
 //   gov-fast <Gov.Action> [Tag=Value ...]   any wallet-path Gov.* on the fast tier
 //   dao-stake [rng] (default: Labs' launch stake) | dao-propose <template.json> [KEY=VALUE ...] | dao-vote <id> <Yes|No|NoWithVeto|Abstain>
 //   status | verify                         read and check token, DAO, beacon, fair (verify exits 1 on a failure;
@@ -569,6 +572,9 @@ export function checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fasti
     c('fast on demand', fastinfo?.tier === 'fast' && fastinfo?.nextRoundAt === 0, fastinfo?.mode);
     c('fast committee', Array.isArray(fastinfo?.committee) && fastinfo.committee.length >= fastinfo.threshold
       && fastinfo.threshold >= 2, `${fastinfo?.threshold}/${fastinfo?.committee?.length}`);
+    // No clock: only a paid request signed by the committee proves the
+    // daemons serve this pid (fast-probe).
+    c('fast has signed a round', Number(fastinfo?.round) >= 1, `round ${fastinfo?.round}; run fast-probe`);
   }
   if (state.fair) {
     c('fair bound to beacon', fairinfo?.beacon === state.beacon, fairinfo?.beacon);
@@ -1063,6 +1069,41 @@ async function main(argv) {
       return send(state.fast, 'Gov.Configure', { data: JSON.stringify(data) });
     },
     'fund-fast': async (rng, forWho) => fundBeacon(rng, { 'X-For': forWho || me }, 'fast'),
+    // The fast tier has no clock: a round exists only when a paid request
+    // waits for it, so a deploy proves the committee by paying for some.
+    async 'fast-probe'(count = '3', timeoutS = '180') {
+      const n = Number(count);
+      if (!Number.isSafeInteger(n) || n < 1 || n > 20) throw new Error('fast-probe [1-20 requests] [timeout s]');
+      const info = DRY ? { price: { fast: 3 }, round: 0 } : await key(state.fast, 'beaconinfo');
+      if (!DRY) {
+        const err = fundError({ state, beaconinfo: info, role: 'fast' });
+        if (err) throw new Error(err);
+      }
+      const price = Number(info?.price?.fast);
+      if (!Number.isSafeInteger(price) || price < 1) throw new Error(`fast tier publishes no price (${JSON.stringify(info?.price)})`);
+      const run = Date.now().toString(36);
+      const ids = Array.from({ length: n }, (_, i) => `probe-${run}-${i + 1}`);
+      const t0 = Date.now();
+      for (const id of ids) await fundBeacon(price, { 'X-Request-Id': id }, 'fast');
+      if (DRY) return { probe: ids };
+      const end = t0 + Number(timeoutS) * 1000;
+      for (;;) {
+        const st = await key(state.fast, 'beaconstate');
+        const bound = ids.map((id) => st?.seen?.[`${me}|${id}`]);
+        const served = bound.filter((r) => r !== undefined && Number(r) <= Number(st?.round));
+        if (served.length === n) {
+          const result = { fast: state.fast, served: n, round: st.round, seconds: (Date.now() - t0) / 1000 };
+          log({ op: 'fast-probe', ok: true, ...result });
+          return result;
+        }
+        if (Date.now() > end) {
+          log({ op: 'fast-probe', ok: false, bound, round: st?.round, pending: st?.pendingCount });
+          throw new Error(`fast tier served ${served.length}/${n} paid requests in ${timeoutS} s: `
+            + 'is every rng-provider daemon running on this fast pid (deploy/nodes.sh status)?');
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    },
     async 'gov-fast'(action, ...kv) {
       if (!/^Gov\.[A-Za-z-]+$/.test(action || '')) throw new Error('gov-fast <Gov.Action> [Tag=Value ...]');
       if (/^Gov\.(Set-Dao|Renounce-Wallet)$/.test(action)) throw new Error('use `set-dao fast` / `renounce-wallet fast`');
@@ -1152,6 +1193,9 @@ async function main(argv) {
       // daemons are repointed at it live (deploy/nodes.sh beacon <fast>).
       await v3['spawn-fast']();
       await v3['genesis-configure-fast']();
+      // Then nodes.sh beacon <fast> / node / start (on the hosts), and prove
+      // it: rounds exist only for paid requests, so pay for three.
+      await v3['fast-probe']('3');
       // A fresh deploy has no predecessor beacon (v3-params.json predecessor "").
       // RNG Labs stakes its launch stake (LABS_STAKE_RNG, or RNG_LABS_STAKE):
       // the majority of the stake at launch, said openly in PERMISSIONLESS.md.
