@@ -207,7 +207,7 @@ node deploy/deploy.mjs plan --dry-run      # review every message first
    every batch, never spent). Each game prepays its own draws:
    `fund-game <rng> <game>` (or any Transfer to the fair process with
    `X-Fair-Game = <game>`); an unfunded game gets `Game-Unfunded`, and a game
-   takes back its free balance with `Fair.Withdraw { Nonce }`. Re-run
+   takes back its free balance with `Fair.Withdraw { Nonce, Quantity }`. Re-run
    `configure-fair` before the handover; after it the DAO changes both prices
    by proposal (`002-configure.json` and `015-fair-configure.json`; prices
    are harmless, applied on receipt: balances keep their deposit price).

@@ -150,11 +150,18 @@ local function refusalTests()
   st.token = F.token
   fair.credit(st, { from = F.token, fromProcess = true, sender = F.payer, quantity = "30", reference = "t1", forGame = F.game })
   before = snap(st)
-  for _, q in ipairs({ "abc", "1.5", "-1", "" }) do
+  for _, q in ipairs({ "abc", "1.5", "-1" }) do
     d, e = fair.withdraw(st, { game = F.game, nonce = "1", quantity = q, now = 1000 })
     check("library: withdraw quantity '" .. q .. "' is Bad-Quantity", d == nil and e == "Bad-Quantity", e)
   end
   eq("library: Bad-Quantity changes nothing", snap(st), before)
+  -- The amount is always named: no Quantity is never read as "all".
+  for _, q in ipairs({ false, "" }) do
+    d, e = fair.withdraw(st, { game = F.game, nonce = "1", quantity = q or nil, now = 1000 })
+    check("library: withdraw with " .. (q and "an empty" or "no") .. " quantity is Missing-Quantity",
+      d == nil and e == "Missing-Quantity", e)
+  end
+  eq("library: Missing-Quantity changes nothing", snap(st), before)
   eq("library: balance and nonce kept", st.accounts[F.game].balance .. "/" .. tostring(st.accounts[F.game].nonce), "30/0")
 
   -- A fresh process: the wallet owner, a DAO, nothing configured.
@@ -573,7 +580,16 @@ local function runFairTests()
   -- Withdraw: the game's free balance only, once per nonce, own sequence stream.
   local free = math.tointeger(accounts()[F.game].balance)
   eq("unsigned withdraw refused", send({ target = SELF, Action = "Fair.Withdraw", Nonce = "1" }).error, "Unsigned")
-  eq("withdraw needs a nonce", send(delivery(F.game, { Action = "Fair.Withdraw" })).error, "Bad-Nonce")
+  eq("withdraw needs a nonce", send(delivery(F.game, { Action = "Fair.Withdraw", Quantity = "1" })).error, "Bad-Nonce")
+  -- The amount is always named (a blank field used to withdraw everything free).
+  -- Asserted on the raw reply; the balance and the nonce are untouched.
+  for _, q in ipairs({ false, "" }) do
+    local before = encode(accounts()[F.game])
+    r, ob = send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "1", Quantity = q or nil }))
+    check("a withdraw with " .. (q and "an empty" or "no") .. " Quantity is refused, balance and nonce kept",
+      base.results.output.data == '{"error":"Missing-Quantity"}' and ob["fair-withdraw"] == nil
+      and encode(accounts()[F.game]) == before, base.results.output.data)
+  end
   eq("more than the free balance refused", send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "1",
     Quantity = tostring(free + 1) })).error, "Insufficient-Balance")
   local seqNow = Fair.state.transferSeq
@@ -584,11 +600,12 @@ local function runFairTests()
   eq("withdrawal takes the next sequence", w and w["X-Transfer-Sequence"], string.format("%d", seqNow + 1))
   r, ob = send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "1", Quantity = "1000" }))
   check("replayed withdraw pays nothing", r.error == "Bad-Nonce" and ob["fair-withdraw"] == nil)
-  eq("an older nonce too", send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "0" })).error, "Bad-Nonce")
+  eq("an older nonce too", send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "0", Quantity = "1" })).error, "Bad-Nonce")
   eq("a stranger withdraws only its own", send(delivery(F.stranger, { Action = "Fair.Withdraw", Nonce = "1",
     Quantity = tostring(free) })).error, "Insufficient-Balance")
-  r = send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "7" }))
-  eq("withdraw all that is free", r.balance, 0)
+  r = send(delivery(F.game, { Action = "Fair.Withdraw", Nonce = "7",
+    Quantity = string.format("%d", accounts()[F.game].balance) }))
+  eq("withdraw all that is free (named)", r.balance, 0)
   check("reserved stays", r.reserved > 0)
   eq("then an open is unfunded", open(F.p1, "after-withdraw").error, "Game-Unfunded")
   local strictly = true
@@ -725,15 +742,15 @@ local function runFairTests()
   credit(st, A, 10)
   check("one funded session", oc(st, A, "d1", 1000, true) ~= nil)
   eq("the second is unfunded", select(2, oc(st, A, "d2", 1000, true)), "Game-Unfunded")
-  eq("reserved is not withdrawable", select(2, fair.withdraw(st, { game = A, nonce = "1", now = 1000 })), "Insufficient-Balance")
+  eq("reserved is not withdrawable", select(2, fair.withdraw(st, { game = A, nonce = "1", quantity = "10", now = 1000 })), "Insufficient-Balance")
   eq("another game's balance is not yours", select(2, oc(st, B, "d1", 1000, true)), "Game-Unfunded")
   eq("a commit for an unfunded game is not opened", select(2, fair.commit(st, { game = B, session = "d1", player = F.p1,
     commit = F.c1, now = 1000 })), "Not-Opened")
   eq("dust credit for a new game refunded", credit(st, B, 9).refunded, 9)
   -- Refund on expiry: an allowance that lapses unused gives its reserve back.
-  d = fair.withdraw(st, { game = A, nonce = "1", now = 1000 + 600001 })
+  d = fair.withdraw(st, { game = A, nonce = "1", quantity = "10", now = 1000 + 600001 })
   eq("lapsed reserve back and withdrawable", d and d.withdrawn, 10)
-  eq("withdraw replay pays nothing", select(2, fair.withdraw(st, { game = A, nonce = "1", now = 1000 + 600002 })), "Bad-Nonce")
+  eq("withdraw replay pays nothing", select(2, fair.withdraw(st, { game = A, nonce = "1", quantity = "10", now = 1000 + 600002 })), "Bad-Nonce")
   -- Eviction keeps the balance: the registry forgets A, its account stays.
   st = fair.new({ metered = true, token = F.token, price = 10, unit = 1, beacon = F.beacon, maxGames = 1 })
   credit(st, A, 25); credit(st, B, 10)
@@ -757,7 +774,7 @@ local function runFairTests()
   eq("then the newer batch, at its price", st.accounts[A].reserved, 35)
   eq("nothing left to open with", select(2, oc(st, A, "pd4", 1000, true)), "Game-Unfunded")
   -- Lapsed reserves come back at the price they were held at, and withdraw at face.
-  d = fair.withdraw(st, { game = A, nonce = "1", now = 1000 + 600001 })
+  d = fair.withdraw(st, { game = A, nonce = "1", quantity = "35", now = 1000 + 600001 })
   check("lapsed reserves back, withdrawable at face", d and d.withdrawn == 35 and #st.accounts[A].purse == 0, encode(d))
   -- Embedded (unmetered) mode needs no token or balance.
   st = fair.new({ beacon = F.beacon })

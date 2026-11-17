@@ -1,6 +1,6 @@
 -- Minimal AO process for the live smoke test (deploy/smoke.mjs, scenario E):
 -- a game process using the fair-play process. From its owner: `Open
--- { Session, Player }` sends Fair.Open, `Withdraw { Nonce }` sends
+-- { Session, Player }` sends Fair.Open, `Withdraw { Nonce, Quantity }` sends
 -- Fair.Withdraw (the free balance comes back to this process). Records each
 -- Fair-Result our scheduler attests comes from the fair process. Publishes
 -- `gamestate`.
@@ -47,7 +47,8 @@ function compute(base, req)
     outbox.open = { target = "__FAIR__", Action = "Fair.Open", Session = field(msg, "Session"), Player = field(msg, "Player") }
     Game.opened = (tonumber(Game.opened) or 0) + 1
   elseif action == "Withdraw" and owner then
-    outbox.withdraw = { target = "__FAIR__", Action = "Fair.Withdraw", Nonce = field(msg, "Nonce") }
+    outbox.withdraw = { target = "__FAIR__", Action = "Fair.Withdraw", Nonce = field(msg, "Nonce"),
+      Quantity = field(msg, "Quantity") }
   elseif action == "Fair-Result" then
     if from ~= "__FAIR__" or not signedBy(msg, "__SCHEDULER__") then
       Game.rejected = (tonumber(Game.rejected) or 0) + 1

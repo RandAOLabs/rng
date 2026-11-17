@@ -67,10 +67,17 @@ export function fairFundTags(fair: string, game: string, quantityAtoms: bigint |
   return { Action: "Transfer", Recipient: fair, Quantity: q, "X-Fair-Game": game };
 }
 
-/** Sent by the GAME to the fair process: its free balance back. `nonce` must exceed the last one used. */
-export function fairWithdrawTags(nonce: number, quantityAtoms?: bigint | number | string) {
+/**
+ * Sent by the GAME to the fair process: `quantityAtoms` of its free balance
+ * back. `nonce` must exceed the last one used. The amount is always named (the
+ * process refuses none with Missing-Quantity): to take everything, read
+ * `fairaccounts[game].balance` and pass it.
+ */
+export function fairWithdrawTags(nonce: number, quantityAtoms: bigint | number | string) {
   if (!Number.isSafeInteger(nonce) || nonce < 1) throw new Error("nonce must be a positive integer");
-  return { Action: "Fair.Withdraw", Nonce: String(nonce), ...(quantityAtoms !== undefined ? { Quantity: String(quantityAtoms) } : {}) };
+  const q = String(quantityAtoms ?? "");
+  if (!/^[1-9][0-9]*$/.test(q)) throw new Error("quantity must be a positive whole number of atoms");
+  return { Action: "Fair.Withdraw", Nonce: String(nonce), Quantity: q };
 }
 
 /**

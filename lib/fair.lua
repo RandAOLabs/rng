@@ -545,17 +545,21 @@ end
 
 --- Metered: the game (proven sender) takes back free balance. `Nonce` must
 --- exceed the last one it used, so a replayed Fair.Withdraw pays nothing.
+--- `Quantity` (atoms) is always named: absent or empty is refused, never read
+--- as "all" (a client that wants everything reads `fairaccounts` and sends it).
+--- Both refusals come before anything is pruned, so they change nothing.
 function fair.withdraw(st, p)
   if not isAddress(p.game) then return nil, "Unsigned" end
   if st.token == "" then return nil, "Not-Configured" end
+  if p.quantity == nil or p.quantity == "" then return nil, "Missing-Quantity" end
+  local amount = int(p.quantity)
+  if not amount then return nil, "Bad-Quantity" end
   local a = st.accounts and st.accounts[p.game]
   local g = st.games and st.games[p.game]
   if g then prune(st, p.game, g, p.now) end
   local nonce = int(p.nonce)
   if not nonce or nonce <= (a and a.nonce or 0) then return nil, "Bad-Nonce", { nonce = a and a.nonce or 0 } end
   local bal = a and a.balance or 0
-  local amount = bal
-  if p.quantity ~= nil then amount = int(p.quantity); if not amount then return nil, "Bad-Quantity" end end
   if amount <= 0 or amount > bal then return nil, "Insufficient-Balance", { balance = bal } end
   touch(st)
   rng.purseWithdraw(purseOf(st, a), amount)

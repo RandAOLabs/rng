@@ -87,9 +87,11 @@ test('a game prepays fair play with one Transfer (X-Fair-Game) and withdraws by 
     { Action: 'Transfer', Recipient: fairPid, Quantity: '40000000', 'X-Fair-Game': game });
   assert.throws(() => fair.fairFundTags(fairPid, game, 0));
   assert.throws(() => fair.fairFundTags('short', game, 1));
-  assert.deepEqual(fair.fairWithdrawTags(3), { Action: 'Fair.Withdraw', Nonce: '3' });
+  assert.throws(() => fair.fairWithdrawTags(3), /quantity/, 'Quantity is required: no default of all');
+  assert.throws(() => fair.fairWithdrawTags(3, ''), /quantity/);
+  assert.throws(() => fair.fairWithdrawTags(3, 0), /quantity/);
   assert.deepEqual(fair.fairWithdrawTags(4, 1000n), { Action: 'Fair.Withdraw', Nonce: '4', Quantity: '1000' });
-  assert.throws(() => fair.fairWithdrawTags(0));
+  assert.throws(() => fair.fairWithdrawTags(0, 1));
   assert.ok(fair.FAIR_ERRORS['Game-Unfunded']);
   assert.equal(fair.FAIR_ERRORS['Game-Not-Allowed'], undefined, 'no allowlist');
 });
