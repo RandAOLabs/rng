@@ -376,9 +376,11 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
   ].join('\n').replaceAll('__BEACON__', beacon).replaceAll('__FAIR__', fair).replaceAll('__OWNER__', me)
     .replaceAll('__SCHEDULER__', state.scheduler);
 
-  /** Free balance back from the beacon or the fast tier (Insufficient-Balance: there was none). */
+  /** Free balance back from the beacon or the fast tier (Insufficient-Balance: there was none).
+   *  Withdraw always names its Quantity, so "all" is the balance read first. */
   async function withdrawAll(pid) {
-    const { out } = await hsend(pid, { Action: 'Withdraw' });
+    const bal = await hsend(pid, { Action: 'Balance' });
+    const { out } = await hsend(pid, { Action: 'Withdraw', Quantity: String(Number(bal.out?.balance) || 0) });
     if (out?.withdrawn > 0) spent.returnedAtoms += BigInt(out.withdrawn) * BigInt(UNIT);
     return out;
   }
@@ -626,7 +628,7 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
       }
       const short = await hsend(beacon, { Action: 'Request-Random', 'Request-Id': rid('Fx', 0) });
       check(sc, 'insufficient balance refused', short.out?.error === 'Insufficient-Balance', short.out);
-      const empty = await hsend(beacon, { Action: 'Withdraw' });
+      const empty = await hsend(beacon, { Action: 'Withdraw', Quantity: '1' });
       check(sc, 'nothing was charged past the deposit (Withdraw finds 0)', empty.out?.error === 'Insufficient-Balance', empty.out);
       // F5: malformed.
       const refusals = [
@@ -634,6 +636,8 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
         ['129-char Request-Id', beacon, { Action: 'Request-Random', 'Request-Id': 'x'.repeat(129) }, 'Missing-Request-Id'],
         ['unknown Tier', beacon, { Action: 'Request-Random', 'Request-Id': rid('Fm', 1), Tier: 'bogus' }, 'Tier-Unavailable'],
         ['Withdraw Quantity=abc', beacon, { Action: 'Withdraw', Quantity: 'abc' }, 'Bad-Quantity'],
+        ['Withdraw without Quantity', beacon, { Action: 'Withdraw' }, 'Missing-Quantity'],
+        ['fast: Withdraw without Quantity', fast, { Action: 'Withdraw' }, 'Missing-Quantity'],
         ['fast: unknown Tier', fast, { Action: 'Request-Random', 'Request-Id': rid('Fm', 2), Tier: 'bogus' }, 'Tier-Unavailable'],
         ['fast: no balance', fast, { Action: 'Request-Random', 'Request-Id': rid('Fm', 3) }, 'Insufficient-Balance'],
         ['token: negative Quantity', token, { Action: 'Transfer', Recipient: beacon, Quantity: '-5' }, null],

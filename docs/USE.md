@@ -115,8 +115,10 @@ X-For: <account to credit>                                optional; default the 
   that covers it, so a later price change never reaches credit already bought.
   A deposit at a ninth price is refunded (`Too-Many-Price-Batches`).
 - **Withdraw** at any time, paused or not, newest batch first:
-  `Action: Withdraw` to the Fast or Any-Honest process, with an optional
-  `Quantity` in whole RNG (default: all). Fair play:
+  `Action: Withdraw` to the Fast or Any-Honest process, with `Quantity` in
+  whole RNG. Quantity is required: missing or empty is refused
+  (`Missing-Quantity`), never read as "all"; to empty a balance, read it
+  and send that amount. Fair play:
   `Action: Fair.Withdraw, Nonce: <n>, Quantity: <atoms>` (see below).
 - Balances: Fast publishes `beaconstate.balances[<account>]`. The Any-Honest
   beacon answers `Action: Balance, Account: <account>` in its reply, and every

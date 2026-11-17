@@ -207,7 +207,15 @@ function runBeaconTests()
     check("a withdraw of " .. q .. " of 14 is refused", r.error == "Insufficient-Balance" and next(ob) == nil
       and untouched(), r.error)
   end
-  r, ob = send(wallet(F.stranger, { Action = "Withdraw" }))
+  -- The amount is always named: no Quantity is never read as "all" (a blank
+  -- field used to withdraw the whole balance). Asserted on the raw reply.
+  for _, q in ipairs({ false, "" }) do
+    r, ob = send(wallet(F.game, { Action = "Withdraw", Quantity = q or nil }))
+    check("a withdraw with " .. (q and "an empty" or "no") .. " Quantity is refused, balance kept",
+      base.results.output.data == '{"error":"Missing-Quantity"}' and next(ob) == nil and untouched(),
+      base.results.output.data)
+  end
+  r, ob = send(wallet(F.stranger, { Action = "Withdraw", Quantity = "1" }))
   check("withdrawing an empty balance is refused", r.error == "Insufficient-Balance" and next(ob) == nil
     and Beacon.balances[F.stranger] == nil and untouched(), r.error)
   r, ob = send(delivery(F.game, { Action = "Claim" }))
@@ -620,7 +628,7 @@ function runBeaconTests()
   credited = credited + 6
   check("pay-and-request refused while paused: the credit stays", r.error == "Paused" and Beacon.balances[F.wallet] == 6, r.error)
   dao({ Action = "Gov.Resume" })
-  r, ob = send(wallet(F.wallet, { Action = "Withdraw" }))
+  r, ob = send(wallet(F.wallet, { Action = "Withdraw", Quantity = "6" }))
   paidOut = paidOut + 6
   check("withdraw pays the wallet back", ob["rng-withdraw"] and ob["rng-withdraw"].Recipient == F.wallet
     and ob["rng-withdraw"].Quantity == string.format("%d", 6 * U), r.error)

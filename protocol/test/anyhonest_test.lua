@@ -453,6 +453,14 @@ function runTimelockTests()
   check("an unsigned request is refused uncharged", r.error == "Unsigned" and Timelock.balances[F.game] == bal, r.error)
   r = send(wallet(F.stranger, { Action = "Withdraw", Quantity = "1.5" }))
   eq("withdraw needs an integer quantity", r.error, "Bad-Quantity")
+  -- The amount is always named: no Quantity is never read as "all" (a blank
+  -- field used to withdraw the whole balance). Asserted on the raw reply.
+  for _, q in ipairs({ false, "" }) do
+    r, ob = send(wallet(F.game, { Action = "Withdraw", Quantity = q or nil }))
+    check("a withdraw with " .. (q and "an empty" or "no") .. " Quantity is refused, balance kept",
+      base.results.output.data == '{"error":"Missing-Quantity"}' and next(ob) == nil
+      and Timelock.balances[F.game] == bal, base.results.output.data)
+  end
   local owed = Timelock.accruedAtoms[A]
   r, ob = send(wallet(A, { Action = "Claim" }))
   check("claim pays atomic rewards through the token", ob["rng-claim"] and ob["rng-claim"].Quantity == string.format("%d", owed), owed)
@@ -1544,7 +1552,7 @@ function runTimelockTests()
   r = reqQ("q-4")
   check("lower: credits bought at 6 still pay 6", r.price == 6 and Timelock.balances[Q] == 0, encode(r))
   fundQ(3, "t973")
-  r, ob = send(wallet(Q, { Action = "Withdraw" }))
+  r, ob = send(wallet(Q, { Action = "Withdraw", Quantity = "3" }))
   seqOf(ob)
   check("withdraw returns the unused balance at face", r.withdrawn == 3 and #Timelock.purses[Q] == 0, encode(r))
   -- Attack: no drain. Credits never pay less than they were bought at, and
@@ -1561,7 +1569,7 @@ function runTimelockTests()
   local sum = 0
   for _, b in ipairs(Timelock.purses[Q]) do sum = sum + b.n end
   eq("the purse always sums to the balance", sum, Timelock.balances[Q])
-  r, ob = send(wallet(Q, { Action = "Withdraw" }))
+  r, ob = send(wallet(Q, { Action = "Withdraw", Quantity = tostring(Timelock.balances[Q]) }))
   seqOf(ob)
   dao({ Action = "Gov.Configure", ["Request-Price"] = "4" })
 
@@ -1747,7 +1755,7 @@ function runRefusalTests()
   r, ob = req(F.stranger, { ["Request-Id"] = "broke" })
   check("an unfunded request refused, nothing bound", r.error == "Insufficient-Balance" and snap() == s0
     and seenOf(F.stranger .. "|broke") == nil, r.error)
-  r, ob = send(wallet(F.stranger, { Action = "Withdraw" }))
+  r, ob = send(wallet(F.stranger, { Action = "Withdraw", Quantity = "1" }))
   refused("withdrawing an empty balance refused", r, ob, "Insufficient-Balance", s0)
   r, ob = send(wallet(F.game, { Action = "Withdraw", Quantity = "41" }))
   refused("withdrawing more than the balance refused", r, ob, "Insufficient-Balance", s0)

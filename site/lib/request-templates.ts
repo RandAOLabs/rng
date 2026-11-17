@@ -53,8 +53,8 @@ export function requestTemplates(ids: TemplateIds, prices: TemplatePrices) {
       result: 'Every covered round: Action RNG-Subscription, Data { round, tier: "any-honest", roundValue, results: [{ subscriptionId, round, value }] }, value = sha256("hyperbeam/rng/subscription/v1|" + roundValue + "|" + subscriptionId + "|" + round).' },
     ...(["fast", "any-honest"] as const).map((tier): Template => ({
       id: `${tier}.withdraw`, tier, sender: "the account", target: tier === "fast" ? ids.fast : ids.anyHonest,
-      tags: { Action: "Withdraw", Quantity: "<whole RNG, optional: default all>" },
-      notes: "Works at any time, paused or not; newest price batch first.",
+      tags: { Action: "Withdraw", Quantity: "<whole RNG, required>" },
+      notes: "Works at any time, paused or not; newest price batch first. Quantity is required (missing or empty: Missing-Quantity); to take everything, read the balance and send it.",
       result: "Reply { withdrawn }; the process transfers the RNG back." })),
     { id: "fair.fund", tier: "fair", sender: "anyone (for a game)", target: ids.token,
       tags: { Action: "Transfer", Recipient: ids.fair, Quantity: String(prices.fairRequestAtoms), "X-Fair-Game": "<game wallet or process id>" },

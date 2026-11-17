@@ -1145,14 +1145,15 @@ H["Credit-Notice"] = function(base, msg, from, now)
   return reply(base, { credited = amount, account = who, balance = Timelock.balances[who] }, withDust({}))
 end
 
+--- Pays `Quantity` RNG of the sender's balance back through the token. The
+--- amount is always named: an absent or empty Quantity is refused, never read
+--- as "all" (a client that wants everything reads the balance and sends it).
 H["Withdraw"] = function(base, msg, from)
   if not from then return fail(base, "Unsigned") end
+  if msg.Quantity == nil or msg.Quantity == "" then return fail(base, "Missing-Quantity", from) end
+  local amount = int(msg.Quantity, nil)
+  if not amount then return fail(base, "Bad-Quantity", from) end
   local bal = int(Timelock.balances[from], 0)
-  local amount = bal
-  if msg.Quantity ~= nil then
-    amount = int(msg.Quantity, nil)
-    if not amount then return fail(base, "Bad-Quantity", from) end
-  end
   if amount <= 0 or amount > bal then return fail(base, "Insufficient-Balance", from) end
   rng.purseWithdraw(purseOf(from), amount)
   Timelock.balances[from] = bal - amount
