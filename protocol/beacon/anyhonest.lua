@@ -10,8 +10,8 @@
 --
 -- Rounds overlap: the next round takes commits as soon as the last one's
 -- commits close, so a slow (cracked) round never holds up the ones after it.
--- With `heartbeat` on, rounds run whether or not anyone is waiting (at most
--- every idleIntervalMs while nobody is: no live subscription, no request).
+-- With `heartbeat` on, rounds run every targetIntervalMs whether or not
+-- anyone is waiting.
 --
 -- Native ~lua@5.3a contract, same conventions as beacon.lua. Bundled after
 -- vendor/json.lua, vendor/jsonenc.lua and lib/rng.lua (global `rng`).
@@ -86,7 +86,6 @@ local function freshState()
     params = {
       T = 134217728, h = "", commitWindowMs = 5000, revealWindowMs = 30000, abandonAfterMs = 1800000,
       minCommits = 2, cadenceMs = 100, targetIntervalMs = 500, maxInFlight = 3, catchUpMs = 30000,
-      idleIntervalMs = 5000,
       stake = 25000, slash = 1000, heartbeat = 1,
       -- Each round takes at most maxActive validators (ranked: capped bond,
       -- then seniority); the registry holds at most maxValidators.
@@ -685,7 +684,7 @@ local function count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n 
 --- wait. Lateness beyond catchUpMs is forgiven when the next round opens, so an
 --- outage is not repaid in one burst. targetIntervalMs 0 turns the rhythm off.
 --- The anchor holds for the interval it was laid at (rhythmMs) only: a new
---- interval (a Configure, or the switch to or from idle) starts a fresh rhythm,
+--- interval (a Configure) starts a fresh rhythm,
 --- due one new interval after the last open, never extrapolated from the old.
 --- Rounds revealing and not yet past their reveal deadline. A late round
 --- (waiting for a crack) does not hold the pipeline: its withholder was
@@ -696,17 +695,9 @@ local function inFlight()
   return n
 end
 
---- The interval rounds are due at: idleIntervalMs while the heartbeat runs for
---- nobody (no live subscription covers the round taking commits and nothing
---- is pending for it), else targetIntervalMs. idleIntervalMs 0: no idle pace.
+--- The interval rounds are due at: targetIntervalMs, always.
 local function interval()
-  local p = Timelock.params
-  local target, idle, r = int(p.targetIntervalMs, 0), int(p.idleIntervalMs, 0), Timelock.next
-  if idle <= 0 or int(p.heartbeat, 1) == 0 or #(Timelock.pending[tostring(r)] or {}) > 0 then return target end
-  for _, sub in pairs(Timelock.subscriptions or {}) do
-    if sub.active and r >= int(sub.startRound, 0) and r <= int(sub.endRound, -1) then return target end
-  end
-  return idle
+  return int(Timelock.params.targetIntervalMs, 0)
 end
 
 local function nextOpenAt()
@@ -1600,9 +1591,6 @@ local function badParams(p)
      or p.subscriptionRounds < 1 or p.subscriptionRounds > 31536000
      or p.cadenceMs < 0 or p.cadenceMs > 60000 or p.targetIntervalMs < 0 or p.targetIntervalMs > 600000
      or p.maxInFlight < 1 or p.maxInFlight > 8 or p.catchUpMs < 0
-     -- 0 is no idle pace; otherwise never faster than the busy one.
-     or p.idleIntervalMs < 0 or p.idleIntervalMs > 600000
-     or (p.idleIntervalMs ~= 0 and p.idleIntervalMs < p.targetIntervalMs)
      -- One incident faults at most the committing round and the maxInFlight
      -- revealing ones (a fault suspends), each a slash plus at most one
      -- crack: together at most half the stake.
@@ -1819,11 +1807,11 @@ local MONEY_VERBS = { ["Gov.Set-Successor"] = true, ["Gov.Move-Reserve"] = true,
   ["Gov.Fund-Reserve"] = true, ["Gov.Remove-Validator"] = true, ["Gov.Set-Dao"] = true }
 --- Gov.Configure parameters that are money: crackBounty is taken from a
 --- withholder's bond per crack; maxInFlight bounds how many rounds one
---- incident can fault; cadenceMs, targetIntervalMs and idleIntervalMs set how
---- fast duties come; roundPrice is what the reserve pays per heartbeat round;
+--- incident can fault; cadenceMs and targetIntervalMs set how fast duties
+--- come; roundPrice is what the reserve pays per heartbeat round;
 --- T (with h) is the puzzle every output rests on.
 local MONEY_PARAMS = { "stake", "slash", "commitWindowMs", "revealWindowMs", "crackBounty", "maxInFlight",
-  "cadenceMs", "targetIntervalMs", "idleIntervalMs", "roundPrice", "T" }
+  "cadenceMs", "targetIntervalMs", "roundPrice", "T" }
 --- Money in one direction: fewer seats per round (maxActive) or in the
 --- registry (maxValidators) concentrates who makes the randomness, and more
 --- commits required (minCommits) can starve every round. Raising the seats

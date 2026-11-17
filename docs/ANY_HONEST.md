@@ -41,11 +41,10 @@ work and a Wesolowski proof verified by HyperBEAM's `~rng@1.0` device.
 
 ## Round lifecycle
 
-Rounds overlap. Rounds are due every `targetIntervalMs` (500), at most
-`maxInFlight` (3) at once, while earlier
-rounds reveal or wait for a crack. With no live subscription and nothing
-pending they are due every `idleIntervalMs` (5000) instead. A new interval
-starts a fresh rhythm one interval after the last open.
+Rounds overlap. Rounds are due every `targetIntervalMs` (500), whether or
+not anything is pending, at most `maxInFlight` (3) at once, while earlier
+rounds reveal or wait for a crack. A new interval starts a fresh rhythm one
+interval after the last open.
 
 1. **Open:** the first commit opens a round and fixes its set: the first
    `maxActive` (64) validators that are ready, not exiting and in good
@@ -276,7 +275,7 @@ was due lapses.
 
 | Action | Class | Effect |
 | --- | --- | --- |
-| `Gov.Configure` | money if it changes `stake`, `slash`, `commitWindowMs`, `revealWindowMs`, `crackBounty`, `maxInFlight`, `cadenceMs`, `targetIntervalMs`, `idleIntervalMs`, `roundPrice` or `T`/`h`; else harmless | parameters, inside hard bounds (`slash` at most a tenth of `stake`, one incident at most half, prices at most 1,000,000 RNG); token, unit, self and predecessor never change after genesis |
+| `Gov.Configure` | money if it changes `stake`, `slash`, `commitWindowMs`, `revealWindowMs`, `crackBounty`, `maxInFlight`, `cadenceMs`, `targetIntervalMs`, `roundPrice` or `T`/`h`; else harmless | parameters, inside hard bounds (`slash` at most a tenth of `stake`, one incident at most half, prices at most 1,000,000 RNG); token, unit, self and predecessor never change after genesis |
 | `Gov.Set-Successor`, `Gov.Move-Reserve` | money | name a successor (the newest replaces it); move the whole reserve to it once it has acked since it was named |
 | `Gov.Treasury-Spend`, `Gov.Fund-Reserve` | money | together at most 10 % of the treasury per 30-day window (`treasuryWindow`); never to the DAO, the beacon or the token |
 | `Gov.Remove-Validator` | money | remove a validator, bond refunded in full |

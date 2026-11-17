@@ -107,12 +107,10 @@ test('v3 params template is inside the beacon hard bounds, and each bound bites'
   const { predecessor, ...p } = readJson('deploy/v3-params.json');
   assert.equal(predecessor, '', 'a fresh deploy has no predecessor beacon');
   assert.deepEqual(badParams(p), []);
-  assert.deepEqual(badParams({ ...p, idleIntervalMs: 0 }), [], 'idleIntervalMs 0: no idle pace');
   for (const bad of [{ T: 2 ** 26 }, { revealWindowMs: 9999 }, { commitWindowMs: 10001 }, { abandonAfterMs: 1000 },
     { slash: 30000 }, { slash: 2501 }, { stake: 10 ** 7 + 1 },
     { minCommits: 1 }, { maxActive: 129 }, { maxActive: 7, minCommits: 2 }, { maxValidators: 63 }, { heartbeat: 2 }, { roundPrice: 0 },
-    { subscriptionRounds: 0 }, { maxInFlight: 0 }, { fairWindowMs: 0 }, { stake: 1.5 },
-    { idleIntervalMs: -1 }, { idleIntervalMs: 600001 }, { idleIntervalMs: 400 }, { idleIntervalMs: undefined }]) {
+    { subscriptionRounds: 0 }, { maxInFlight: 0 }, { fairWindowMs: 0 }, { stake: 1.5 }]) {
     assert.notDeepEqual(badParams({ ...p, ...bad }), [], JSON.stringify(bad));
   }
 });
@@ -757,14 +755,10 @@ test('the committee is three hosts, one per member, and nodes.sh reads them from
   for (const [, ip] of rows) assert.ok(!sh.includes(ip), `no second host table (${ip})`);
 });
 
-test('an idle beacon is held to its idle pace, a busy one to MIN_RATE', async () => {
-  const { expectedMinRate, MIN_RATE } = await import('../deploy.mjs');
-  const params = { idleIntervalMs: 5000 };
-  assert.equal(expectedMinRate({ params, activeSubscriptions: 0, pendingCount: 0 }), 0.16);
-  assert.equal(expectedMinRate({ params, activeSubscriptions: 1, pendingCount: 0 }), MIN_RATE);
-  assert.equal(expectedMinRate({ params, activeSubscriptions: 0, pendingCount: 2 }), MIN_RATE);
-  assert.equal(expectedMinRate({ params: { idleIntervalMs: 0 } }), MIN_RATE);
-  assert.equal(expectedMinRate(null), MIN_RATE);
+test('verify and watch hold the beacon to one rate: 90 % of a round per targetIntervalMs', async () => {
+  const { MIN_RATE } = await import('../deploy.mjs');
+  const p = readJson('deploy/v3-params.json');
+  assert.equal(MIN_RATE, 0.9 * 1000 / p.targetIntervalMs);
 });
 
 test('only a deploy publishes spawns to Arweave (ANS-104 through paralith-mono)', () => {

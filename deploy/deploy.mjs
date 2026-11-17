@@ -160,8 +160,6 @@ export function badParams(p) {
   need(p.subscriptionRounds >= 1 && p.subscriptionRounds <= 31536000, 'subscriptionRounds in [1, 31536000]');
   need(p.cadenceMs >= 0 && p.cadenceMs <= 60000 && p.targetIntervalMs >= 0 && p.targetIntervalMs <= 600000
     && p.maxInFlight >= 1 && p.maxInFlight <= 8 && p.catchUpMs >= 0, 'rhythm parameters (cadence <= 60 s, interval <= 10 min, maxInFlight <= 8)');
-  need(p.idleIntervalMs >= 0 && p.idleIntervalMs <= 600000 && (p.idleIntervalMs === 0 || p.idleIntervalMs >= p.targetIntervalMs),
-    'idleIntervalMs 0, or in [targetIntervalMs, 10 min]');
   need(p.crackBounty <= p.slash, 'crackBounty <= slash');
   need(2 * (1 + p.maxInFlight) * (p.slash + p.crackBounty) <= p.stake, 'one incident ((1 + maxInFlight) x (slash + crackBounty)) <= stake / 2');
   need(p.fairWindowMs >= 1, 'fairWindowMs >= 1');
@@ -266,12 +264,12 @@ const MONEY_VERBS = ['Gov.Set-Successor', 'Gov.Move-Reserve', 'Gov.Treasury-Spen
 // naming them carries Effective-At either way.
 const MONEY_TAGS = {
   beacon: ['Stake', 'Slash', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Crack-Bounty', 'Max-In-Flight', 'Cadence-Ms',
-    'Target-Interval-Ms', 'Idle-Interval-Ms', 'Round-Price', 'Max-Active', 'Max-Validators', 'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
+    'Target-Interval-Ms', 'Round-Price', 'Max-Active', 'Max-Validators', 'Min-Commits', 'T', 'H', 'H-Proof'].map(word),
   'fast-tier': ['Committee', 'Share-Public-Keys', 'Group-Key', 'Threshold', 'Verification'].map(word),
   fair: ['Beacon', 'Token'].map(word),
 };
 const CONFIGURE_TAGS = ['T', 'H', 'H-Proof', 'Commit-Window-Ms', 'Reveal-Window-Ms', 'Abandon-After-Ms', 'Min-Commits',
-  'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Idle-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',
+  'Max-Active', 'Max-Validators', 'Cadence-Ms', 'Target-Interval-Ms', 'Max-In-Flight', 'Catch-Up-Ms', 'Stake', 'Slash',
   'Heartbeat', 'Round-Price', 'Request-Price', 'Subscription-Price',
   'Subscription-Rounds', 'Crack-Bounty', 'Fair-Window-Ms'].map(word);
 
@@ -445,14 +443,6 @@ export function renounceErrors({ state, role, info, daoinfo }) {
  * pending action on the protocols. Each { what, detail }. */
 /** The live-rate warning: the beacon's average over RATE_WINDOW_MS below this. */
 export const MIN_RATE = 1.8;
-/** The floor for an IDLE beacon (no subscriber, nothing pending): 80 % of one
- *  round per idleIntervalMs. Busy, or with the idle pace off, it is MIN_RATE. */
-export function expectedMinRate(beaconinfo, busy = MIN_RATE) {
-  const idleMs = Number(beaconinfo?.params?.idleIntervalMs ?? 0);
-  const idle = idleMs > 0 && Number(beaconinfo?.activeSubscriptions ?? 0) === 0
-    && Number(beaconinfo?.pendingCount ?? 0) === 0;
-  return idle ? Math.min(busy, 0.8 * 1000 / idleMs) : busy;
-}
 export const RATE_WINDOW_MS = 300_000;
 
 /** The `timelockhistory` entry ([round, slot]) closest to `windowMs` of rounds
@@ -780,8 +770,7 @@ async function main(argv) {
   }
 
   // RNG_MIN_RATE: rounds/s below which verify fails and watch alerts (default MIN_RATE).
-  const minRate = (beaconinfo) => process.env.RNG_MIN_RATE ? Number(process.env.RNG_MIN_RATE)
-    : expectedMinRate(beaconinfo);
+  const minRate = process.env.RNG_MIN_RATE ? Number(process.env.RNG_MIN_RATE) : MIN_RATE;
   /** The beacon's average over the last ~5 minutes, from `now/beaconinfo`
    *  samples only: the node does not keep old slots (410). Samples persist in
    *  <state>.rate-samples.json, so a watch from cron measures against its last
@@ -916,7 +905,7 @@ async function main(argv) {
       return send(state.beacon, 'Gov.Configure', { data: JSON.stringify(data) });
     },
 
-    // The co-owning wallet's own Gov.Configure, by tag (Idle-Interval-Ms=500 ...):
+    // The co-owning wallet's own Gov.Configure, by tag (Target-Interval-Ms=500 ...):
     // what the contract applies at once, it applies; the rest it queues.
     'wallet-configure': (...kv) => {
       const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
@@ -1047,7 +1036,7 @@ async function main(argv) {
       const roles = PROTOCOL_ROLES.filter((r) => state[r]);
       const [proposals, stake, rate, ...infos] = await Promise.all([key(state.dao, 'proposals'),
         key(state.dao, `stake-${state.deployer || me}`), liveRate(), ...roles.map((r) => key(state[r], INFO_KEY[r]))]);
-      const alerts = watchAlerts({ proposals, stake, rate, minRate: minRate(infos[roles.indexOf('beacon')]),
+      const alerts = watchAlerts({ proposals, stake, rate, minRate,
         infos: Object.fromEntries(roles.map((r, i) => [r, infos[i]])) });
       for (const a of alerts) log({ op: 'watch', ...a });
       if (!DRY && (alerts.length || !proposals)) process.exitCode = 1;
@@ -1164,7 +1153,7 @@ async function main(argv) {
       const [tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo, rate] = await Promise.all([
         key(state.token, 'tokeninfo'), key(state.dao, 'daoinfo'), key(state.beacon, 'beaconinfo'), key(state.fair, 'fairinfo'),
         key(state.fast, 'beaconinfo'), liveRate()]);
-      const checks = checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo, rate, minRate: minRate(beaconinfo) });
+      const checks = checkV3({ state, tokeninfo, daoinfo, beaconinfo, fairinfo, fastinfo, rate, minRate });
       console.log(JSON.stringify({ token: state.token, dao: state.dao, beacon: state.beacon, fair: state.fair, fast: state.fast,
         scheduler: state.scheduler, mode: beaconinfo?.mode, round: beaconinfo?.round, health: beaconinfo?.health, rate,
         registered: beaconinfo?.registered, gov: { beacon: beaconinfo?.gov, fair: fairinfo?.gov, fast: fastinfo?.gov },
