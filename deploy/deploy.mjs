@@ -916,6 +916,14 @@ async function main(argv) {
       return send(state.beacon, 'Gov.Configure', { data: JSON.stringify(data) });
     },
 
+    // The co-owning wallet's own Gov.Configure, by tag (Idle-Interval-Ms=500 ...):
+    // what the contract applies at once, it applies; the rest it queues.
+    'wallet-configure': (...kv) => {
+      const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
+      if (!Object.keys(tags).length) throw new Error('wallet-configure Tag=value ...');
+      return send(state.beacon, 'Gov.Configure', { tags });
+    },
+
     'fund-reserve': async (rng) => fundBeacon(rng ?? state.genesis?.reserveRng, { 'X-Foundation': 'true' }),
     'fund-treasury': async (rng) => fundBeacon(rng ?? state.genesis?.treasuryRng, { 'X-Treasury': 'true' }),
     fund: async (rng, forWho) => fundBeacon(rng, { 'X-For': forWho || me }),
