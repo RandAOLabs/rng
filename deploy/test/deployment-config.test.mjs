@@ -773,14 +773,14 @@ test('only a deploy publishes spawns to Arweave (ANS-104 through paralith-mono)'
   assert.equal(deployMetadata({ PARALITH_DEPLOY_METADATA: 'true' }), undefined);
 });
 
-test('the token spawns on lua-patch@1.0: balances publish in 32 buckets, raw patches and replies', async (t) => {
+test('the token spawns on lua-patch@1.0: balances publish in 256 buckets, raw patches and replies', async (t) => {
   const wasm = process.env.AOS_WASM
     || path.join(process.env.PARALITH_ROOT || 'C:/REPO/paralith-mono', 'backend/native/module/AOS.wasm');
   if (!fs.existsSync(wasm)) return t.skip('AOS.wasm not available');
   const { default: AoLoader } = await import('@permaweb/ao-loader');
   const { tokenPatchSource } = await import('../deploy.mjs');
   const USER = pid('user'), RECIPIENT = pid('recipient'), SELF = 't'.repeat(43);
-  // Buckets by tokenBalanceKey: deployer 5, user 31, recipient 3.
+  // Buckets by tokenBalanceKey: deployer 165, user 191, recipient 163.
   const prelude = genesisPrelude({ table: { [DEPLOYER]: '999999999000000', [USER]: '1000000' } });
   const lua = tokenPatchSource(prelude, DEPLOYER, pid('sched'));
   assert.ok(/^[\x00-\x7f]*$/.test(lua), 'the spawned token is pure ASCII');
@@ -800,7 +800,7 @@ end
 local out = {}
 out[#out + 1] = call(1, "${USER}", { Action = "Info" })
 out[#out + 1] = call(2, "${USER}", { Action = "Transfer", Recipient = "${RECIPIENT}", Quantity = "10" })
-out[#out + 1] = Lua53bPublishedState["balances-31"] .. " " .. Lua53bPublishedState["balances-3"]
+out[#out + 1] = Lua53bPublishedState["balances-191"] .. " " .. Lua53bPublishedState["balances-163"]
 out[#out + 1] = call(3, "${USER}", { Action = "Admin.Checkpoint" })
 out[#out + 1] = call(4, "${DEPLOYER}", { Action = "Admin.Checkpoint" })
 return table.concat(out, "\\n")`;
@@ -814,11 +814,11 @@ return table.concat(out, "\\n")`;
   const out = (typeof r.Output?.data === 'string' ? r.Output.data : r.Output?.data?.output).split('\n');
   const genesis = out[0].split(' ');
   const buckets = genesis.filter((p) => /^\/balances-\d+$/.test(p));
-  assert.equal(buckets.length, 32, 'genesis publishes every bucket');
+  assert.equal(buckets.length, 256, 'genesis publishes every bucket');
   assert.ok(!genesis.some((p) => p.startsWith('/balance-')), 'no per-holder key');
   assert.ok(genesis.includes('/balances') && genesis.includes('/tokencommit'), 'genesis is a checkpoint');
   assert.match(out[1], /"Ticker":"RNG"/);
-  assert.equal(out[2], '/balances-3 /balances-31 /replies-2 /tokencommit /transferseq', 'a transfer patches its two buckets');
+  assert.equal(out[2], '/balances-163 /balances-191 /replies-2 /tokencommit /transferseq', 'a transfer patches its two buckets');
   assert.equal(out[3], `{"Action":"Transfer-Success","Balance":"999990","From":"${USER}","Quantity":"10",`
     + `"Recipient":"${RECIPIENT}","Reference":"t1"}`);
   assert.equal(out[4], `{"${USER}":"999990"} {"${RECIPIENT}":"10"}`);

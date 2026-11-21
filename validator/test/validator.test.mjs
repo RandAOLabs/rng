@@ -492,10 +492,10 @@ test('bond tops a registered validator up to the stake, or by a given amount', a
 });
 
 test('token balances read from their folded bucket, by rng-token.lua\'s rule', () => {
-  // Sum of the first four bytes mod 32, as rng-token.lua balanceBucket.
-  assert.equal(tl.tokenBalanceKey('process'.padEnd(43, '_')), 'balances-20');
-  assert.equal(tl.tokenBalanceKey('user'.padEnd(43, '_')), 'balances-31');
-  assert.equal(tl.tokenBalanceKey('recipient'.padEnd(43, '_')), 'balances-3');
+  // Sum of the first four bytes mod 256, as rng-token.lua balanceBucket.
+  assert.equal(tl.tokenBalanceKey('process'.padEnd(43, '_')), 'balances-180');
+  assert.equal(tl.tokenBalanceKey('user'.padEnd(43, '_')), 'balances-191');
+  assert.equal(tl.tokenBalanceKey('recipient'.padEnd(43, '_')), 'balances-163');
   const a = 'A'.repeat(43);
   assert.equal(tl.tokenAtomsFrom(`{"${a}":"25000000000"}`, a), '25000000000');
   assert.equal(tl.tokenAtomsFrom('{}', a), '0');

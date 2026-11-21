@@ -122,7 +122,7 @@ local function genesisTests()
   eq("genesis credits allocation", Balances[F.user], 1000000)
   eq("genesis credits owner allocation", Balances[F.owner], SUPPLY - 2000000)
   eq("genesis publishes totalsupply", base.totalsupply, "1000000000000000")
-  eq("genesis publishes the holder in its bucket", base["balances-20"], '{"' .. F.process .. '":"1000000"}')
+  eq("genesis publishes the holder in its bucket", base["balances-180"], '{"' .. F.process .. '":"1000000"}')
   local info = json.decode(base.tokeninfo)
   eq("tokeninfo Sealed", info.Sealed, "true")
   eq("tokeninfo Supply", info.Supply, "1000000000000000")
@@ -703,9 +703,9 @@ local function refusalTests()
   Lua53bPatchMode = previous
 end
 
---- Balances publish folded into 32 `balances-<n>` buckets, n = the sum of the
---- address's first four bytes mod 32 (paralith-mono `tokenBalanceKey`). The
---- fixtures' buckets by that rule: owner 25, user 31, process 20, recipient 3.
+--- Balances publish folded into 256 `balances-<n>` buckets, n = the sum of the
+--- address's first four bytes mod 256 (paralith-mono `tokenBalanceKey`). The
+--- fixtures' buckets by that rule: owner 185, user 191, process 180, recipient 163.
 local function foldTests()
   local function snapshot()
     local s = {}
@@ -735,30 +735,30 @@ local function foldTests()
     reset(goodAllocations())
     send(wallet(F.stranger, { Action = "Info" }))
     local n, legacy = bucketKeys()
-    eq(tag .. "genesis publishes all 32 buckets", n, 32)
+    eq(tag .. "genesis publishes all 256 buckets", n, 256)
     eq(tag .. "no per-holder balance- key", legacy, 0)
-    eq(tag .. "owner bucket", base["balances-25"], '{"' .. F.owner .. '":"' .. string.format("%d", SUPPLY - 2000000) .. '"}')
-    eq(tag .. "user bucket", base["balances-31"], '{"' .. F.user .. '":"1000000"}')
+    eq(tag .. "owner bucket", base["balances-185"], '{"' .. F.owner .. '":"' .. string.format("%d", SUPPLY - 2000000) .. '"}')
+    eq(tag .. "user bucket", base["balances-191"], '{"' .. F.user .. '":"1000000"}')
     eq(tag .. "an empty bucket is an empty object", base["balances-0"], "{}")
 
     local before = snapshot()
     local r = send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "10" }))
     eq(tag .. "transfer succeeds", r.Action, "Transfer-Success")
     eq(tag .. "a transfer rewrites only its two buckets (and the ledger witnesses)", changed(before),
-      mode and "balances-3,balances-31,tokencommit,transferseq"
-        or "balances,balances-3,balances-31,transferseq")
-    eq(tag .. "sender row", base["balances-31"], '{"' .. F.user .. '":"999990"}')
-    eq(tag .. "recipient row", base["balances-3"], '{"' .. F.recipient .. '":"10"}')
+      mode and "balances-163,balances-191,tokencommit,transferseq"
+        or "balances,balances-163,balances-191,transferseq")
+    eq(tag .. "sender row", base["balances-191"], '{"' .. F.user .. '":"999990"}')
+    eq(tag .. "recipient row", base["balances-163"], '{"' .. F.recipient .. '":"10"}')
 
     before = snapshot()
     send(wallet(F.user, { Action = "Balance" }))
     eq(tag .. "a read rewrites no bucket", changed(before):find("balances%-") , nil)
 
     r = send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "999990" }))
-    eq(tag .. "a holder sent to zero leaves its bucket", base["balances-31"], "{}")
-    eq(tag .. "recipient row grows", base["balances-3"], '{"' .. F.recipient .. '":"1000000"}')
+    eq(tag .. "a holder sent to zero leaves its bucket", base["balances-191"], "{}")
+    eq(tag .. "recipient row grows", base["balances-163"], '{"' .. F.recipient .. '":"1000000"}')
     n, legacy = bucketKeys()
-    check(tag .. "still 32 buckets and no balance- key", n == 32 and legacy == 0)
+    check(tag .. "still 256 buckets and no balance- key", n == 256 and legacy == 0)
     Lua53bPatchMode = previous
   end
 
@@ -785,13 +785,13 @@ local function foldTests()
   -- A cold restore from the checkpoint rebuilds the fold: every bucket republished.
   reset(goodAllocations())
   send(wallet(F.stranger, { Action = "Info" }))
-  local bucket31 = base["balances-31"]
-  for b = 0, 31 do base["balances-" .. b] = nil end
+  local bucket191 = base["balances-191"]
+  for b = 0, 255 do base["balances-" .. b] = nil end
   reset(nil, true)
   send(wallet(F.user, { Action = "Info" }))
   local n = bucketKeys()
-  eq("5.3b cold restore republishes every bucket", n, 32)
-  eq("5.3b cold restore bucket content", base["balances-31"], bucket31)
+  eq("5.3b cold restore republishes every bucket", n, 256)
+  eq("5.3b cold restore bucket content", base["balances-191"], bucket191)
   -- A transfer after the checkpoint: a cold VM is behind it, and refuses.
   send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" }))
   reset(nil, true)

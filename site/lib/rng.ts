@@ -290,13 +290,15 @@ export async function getNetworkStatus(requestedRound?: number) {
   };
 }
 
+/** rng-token.lua BALANCE_BUCKETS (validator/anyhonest.mjs TOKEN_BUCKETS). */
+const TOKEN_BUCKETS = 256;
 /** The token's folded balance key: `balances-<n>`, n = the sum of the
- *  address's first four bytes mod 32 (rng-token.lua balanceBucket). An
- *  address absent from its bucket holds 0. */
+ *  address's first four bytes mod TOKEN_BUCKETS (rng-token.lua balanceBucket).
+ *  An address absent from its bucket holds 0. */
 function tokenBalanceKey(address: string) {
   let sum = 0;
   for (let i = 0; i < 4 && i < address.length; i++) sum += address.charCodeAt(i);
-  return `balances-${sum % 32}`;
+  return `balances-${sum % TOKEN_BUCKETS}`;
 }
 
 export async function getAccountStatus(address: string) {

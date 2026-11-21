@@ -780,7 +780,13 @@ end
 --- folded-keys.mjs): change them together. A slot rewrites only the buckets
 --- its changed balances fall in. `balances` (no suffix) stays the 5.3b
 --- checkpoint, written only when one is due.
-local BALANCE_BUCKETS = 32
+---
+--- 256 buckets: a Transfer rewrites two whole buckets, so the bucket size is
+--- the bytes every slot writes. Measured at 10,000 holders (free ~lua@5.3a,
+--- a full collect per slot): 32 buckets ~34.3 KB written per Transfer and
+--- 30 ms of Lua, 128 ~7.8 KB and 22 ms, 256 ~4.6 KB and 15 ms. A fixed 256
+--- keys, whatever the holder count.
+local BALANCE_BUCKETS = 256
 
 local function balanceBucket(address)
   local a, b, c, d = string.byte(address, 1, 4)
