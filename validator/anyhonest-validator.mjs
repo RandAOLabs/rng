@@ -546,7 +546,7 @@ export async function main(argv = process.argv.slice(2)) {
     const t0 = Date.now(), info = await io.readInfo(beacon), t1 = Date.now();
     const mine = findMine(info.validators, me) ?? registryEntry(await io.readKey(beacon, 'now/beaconvalidators').catch(() => null), me);
     const offset = num(info.at) > 0 ? t1 - num(info.at) : 0;
-    const balance = isPid(info.token) ? await io.readKey(info.token, `now/balance-${me}`).catch(() => null) : null;
+    const balance = isPid(info.token) ? tl.tokenAtomsFrom(await io.readKey(info.token, `now/${tl.tokenBalanceKey(me)}`).catch(() => null), me) : null;
     let loop = null;
     try { loop = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'status.json'), 'utf8')); } catch { /* not running */ }
     const p = obj(info.params), unit = num(info.unit, 1_000_000) || 1;
@@ -626,7 +626,7 @@ export async function bondCommand({ io, me, beacon, amount, out = () => {} }) {
   if (!Number.isInteger(rng) || rng < 0) throw new Error(`bad amount ${amount}: whole RNG only`);
   if (rng === 0) { out({ bond, stake, note: 'already at the full stake' }); return 0; }
   if (!mine && rng < stake) throw new Error(`a first bond must be at least the stake (${stake} RNG); smaller ones are refunded`);
-  const balance = await io.readKey(info.token, `now/balance-${me}`).catch(() => null);
+  const balance = tl.tokenAtomsFrom(await io.readKey(info.token, `now/${tl.tokenBalanceKey(me)}`).catch(() => null), me);
   if (balance !== null && BigInt(balance) < BigInt(rng) * BigInt(unit)) {
     throw new Error(`wallet holds ${BigInt(balance) / BigInt(unit)} RNG, needs ${rng}: send RNG to ${me}`);
   }

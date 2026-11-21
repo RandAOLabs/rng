@@ -199,3 +199,28 @@ export function crackJobs(i, now) {
   }
   return out.sort((a, b) => a.round - b.round);
 }
+
+/**
+ * The RNG token publishes balances FOLDED into 32 keys `balances-<n>`, each a
+ * JSON object address -> atoms ("<integer>"); an address absent from its
+ * bucket holds 0. n = the sum of the address's first four bytes mod 32
+ * (rng-token.lua balanceBucket; paralith-mono's tokenBalanceKey).
+ */
+export const TOKEN_BUCKETS = 32;
+export function tokenBalanceKey(address) {
+  let sum = 0;
+  for (let i = 0; i < 4 && i < address.length; i++) sum += address.charCodeAt(i);
+  return `balances-${sum % TOKEN_BUCKETS}`;
+}
+/** Atoms `address` holds, as a decimal string, from its bucket's raw published
+ *  value; null when the bucket is unreadable (an absent key is the node's HTML page). */
+export function tokenAtomsFrom(raw, address) {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text.startsWith('{')) return null;
+  let bucket;
+  try { bucket = JSON.parse(text); } catch { return null; }
+  if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) return null;
+  const v = bucket[address];
+  if (v === undefined) return '0';
+  return /^\d+$/.test(String(v)) ? String(v) : null;
+}

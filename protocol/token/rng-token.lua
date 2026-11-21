@@ -262,8 +262,8 @@ local function actor(msg, base)
 end
 
 --- A wallet or process address: exactly 43 base64url characters. Every holder
---- becomes a `balance-<address>` key, so anything else would corrupt the
---- checkpoint. Same shape as pusd.lua.
+--- becomes a row of a published `balances-<n>` bucket, so anything else would
+--- corrupt the checkpoint. Same shape as pusd.lua.
 local function isAoAddress(s)
   return type(s) == "string" and #s == 43 and s:match("^[%w_%-]+$") ~= nil
 end
@@ -770,6 +770,78 @@ local function caseInsensitive(raw)
   })
 end
 
+--- Published balances, FOLDED (rune.lua's rule, verbatim). One published key
+--- per holder (`balance-<address>`) made every slot pay for every holder the
+--- token ever had: 10,031 keys at 9,617 holders (11-18). They fold into
+--- BALANCE_BUCKETS keys `balances-<n>`, each a JSON object address -> atoms
+--- ("<integer>") holding only the accounts with a balance; an absent address
+--- holds 0. n = the sum of the address's first four bytes mod BALANCE_BUCKETS,
+--- the rule of paralith-mono's `tokenBalanceKey` (packages/sdk/src/
+--- folded-keys.mjs): change them together. A slot rewrites only the buckets
+--- its changed balances fall in. `balances` (no suffix) stays the 5.3b
+--- checkpoint, written only when one is due.
+local BALANCE_BUCKETS = 32
+
+local function balanceBucket(address)
+  local a, b, c, d = string.byte(address, 1, 4)
+  return ((a or 0) + (b or 0) + (c or 0) + (d or 0)) % BALANCE_BUCKETS
+end
+
+--- The fold's index -- each bucket's members, sorted lists and encoded rows --
+--- derived from exactly one `Balances` table: a restore that replaces it
+--- rebuilds the index and republishes every bucket.
+local Fold = { balances = nil }
+
+local function foldPublish(result)
+  if Fold.balances ~= Balances then
+    Fold.balances, Fold.members, Fold.sorted, Fold.rows = Balances, {}, {}, {}
+    for b = 0, BALANCE_BUCKETS - 1 do Fold.members[b] = {} end
+    for address, amount in pairs(Balances) do
+      if isAoAddress(address) and int(amount, 0) > 0 then
+        Fold.members[balanceBucket(address)][address] = true
+      end
+    end
+    Fold.dirty = {}
+    for b = 0, BALANCE_BUCKETS - 1 do Fold.dirty[b] = true end
+  end
+  -- Only an address is ever a member: a `+link` or `/` in anything published
+  -- bricks the process on reload.
+  for address in pairs(ChangedBalances) do
+    if isAoAddress(address) then
+      local b = balanceBucket(address)
+      Fold.dirty[b] = true
+      Fold.rows[address] = nil
+      local holds = balanceOf(address) > 0
+      if (Fold.members[b][address] == true) ~= holds then
+        Fold.members[b][address] = holds or nil
+        Fold.sorted[b] = nil
+      end
+    end
+  end
+  for b = 0, BALANCE_BUCKETS - 1 do
+    if Fold.dirty[b] then
+      local list = Fold.sorted[b]
+      if not list then
+        list = {}
+        for address in pairs(Fold.members[b]) do list[#list + 1] = address end
+        table.sort(list)
+        Fold.sorted[b] = list
+      end
+      local parts = {}
+      for i, address in ipairs(list) do
+        local text = Fold.rows[address]
+        if not text then
+          text = '"' .. address .. '":"' .. asString(balanceOf(address)) .. '"'
+          Fold.rows[address] = text
+        end
+        parts[i] = text
+      end
+      result["balances-" .. asString(b)] = "{" .. table.concat(parts, ",") .. "}"
+    end
+  end
+  Fold.dirty = {}
+end
+
 local function resolveOwner(base)
   if Owner and Owner ~= "" then return Owner end
   local p = base and (base.process or base.Process)
@@ -859,16 +931,9 @@ function compute(base, req, opts)
       checkpointRevision = int(TokenCheckpointRevision, 0),
     })
   end
-  -- Every balance this message moved (genesis included), on both devices.
-  for address in pairs(ChangedBalances) do
-    if isAoAddress(address) then result["balance-" .. address] = asString(balanceOf(address)) end
-  end
-  if not Lua53bPatchMode then
-    local who = actor(msg, base) or msg.Recipient or msg.Account
-    if isAoAddress(who) then
-      result["balance-" .. who] = asString(balanceOf(who))
-    end
-  end
+  -- Balances, folded (`balances-<n>`): only the buckets this message changed
+  -- (genesis included) are rewritten. Both devices.
+  foldPublish(result)
   -- Compact the heap before the node photographs it (see game.lua's compute):
   -- a full `collect`, as a bare statement, never inside a pcall frame.
   collectgarbage("collect")

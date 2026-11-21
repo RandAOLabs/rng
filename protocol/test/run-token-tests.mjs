@@ -1,3 +1,6 @@
+// Runs the RNG token's Lua tests.
+//   node protocol/test/run-token-tests.mjs             local, AOS wasm via @permaweb/ao-loader
+//   node protocol/test/run-token-tests.mjs --live URL  a HyperBEAM node's ~lua@5.3a (Luerl)
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,18 +29,29 @@ const bundle = [
   read('protocol/test/token_test.lua'),
 ].join('\n');
 
-const handle = await AoLoader(fs.readFileSync(AOS_WASM), {
-  format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024,
-});
-const pid = addr('token-tests');
-const result = await handle(null, {
-  Id: 'eval-token-tests', Target: pid, Owner: pid, From: pid,
-  Tags: [{ name: 'Action', value: 'Eval' }], Data: bundle + '\nreturn runTokenTests()',
-  'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
-}, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
-if (result.Error) throw new Error(result.Error);
-const out = result.Output?.data;
-const text = typeof out === 'string' ? out : out?.output ?? JSON.stringify(out);
+let text;
+const live = process.argv.indexOf('--live');
+if (live !== -1) {
+  const node = process.argv[live + 1] || 'https://public-hb.tylerw.ai';
+  const res = await fetch(`${node}/~lua@5.3a/runTokenTests`, {
+    method: 'POST', headers: { 'content-type': 'application/lua' }, body: bundle,
+  });
+  text = await res.text();
+  if (res.status !== 200) { console.error(`${node}: HTTP ${res.status}\n${text.slice(0, 2000)}`); process.exit(1); }
+} else {
+  const handle = await AoLoader(fs.readFileSync(AOS_WASM), {
+    format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024,
+  });
+  const pid = addr('token-tests');
+  const result = await handle(null, {
+    Id: 'eval-token-tests', Target: pid, Owner: pid, From: pid,
+    Tags: [{ name: 'Action', value: 'Eval' }], Data: bundle + '\nreturn runTokenTests()',
+    'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+  }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
+  if (result.Error) throw new Error(result.Error);
+  const out = result.Output?.data;
+  text = typeof out === 'string' ? out : out?.output ?? JSON.stringify(out);
+}
 console.log(text);
 const verdict = /(\d+) passed, (\d+) failed\s*$/.exec(text);
 if (!verdict || verdict[2] !== '0') process.exit(1);

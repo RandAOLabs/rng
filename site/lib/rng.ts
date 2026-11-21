@@ -290,11 +290,20 @@ export async function getNetworkStatus(requestedRound?: number) {
   };
 }
 
+/** The token's folded balance key: `balances-<n>`, n = the sum of the
+ *  address's first four bytes mod 32 (rng-token.lua balanceBucket). An
+ *  address absent from its bucket holds 0. */
+function tokenBalanceKey(address: string) {
+  let sum = 0;
+  for (let i = 0; i < 4 && i < address.length; i++) sum += address.charCodeAt(i);
+  return `balances-${sum % 32}`;
+}
+
 export async function getAccountStatus(address: string) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(address)) throw new Error("address must be a 43-character AO address");
   const cfg = networkConfig();
   const [balances, beacon] = await Promise.all([
-    readJson<Record<string, string>>(`${cfg.node}/${cfg.token}~process@1.0/now/balances`),
+    readJson<Record<string, string>>(`${cfg.node}/${cfg.token}~process@1.0/now/${tokenBalanceKey(address)}`),
     readJson<AccountBeaconState>(`${cfg.node}/${cfg.beacon}~process@1.0/now/beaconstate`),
   ]);
   const info = await readJson<BeaconInfo>(`${cfg.node}/${cfg.beacon}~process@1.0/now/beaconinfo`);

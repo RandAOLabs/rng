@@ -73,7 +73,11 @@ const give = (address, atoms, why) => {
 };
 
 const token = await now(RNG_NODE, TOKEN);
-const balances = Object.fromEntries(Object.entries(json(token.balances)).map(([a, v]) => [a, BigInt(v)]));
+// A folded token publishes every balance in `balances-<n>` (its `balances` is
+// only the last checkpoint); an older one, in `balances`.
+const buckets = Object.keys(token).filter((k) => /^balances-\d+$/.test(k));
+const held = buckets.length ? Object.assign({}, ...buckets.map((k) => json(token[k]))) : json(token.balances);
+const balances = Object.fromEntries(Object.entries(held).map(([a, v]) => [a, BigInt(v)]));
 const total = Object.values(balances).reduce((s, v) => s + v, 0n);
 if (BigInt(token.totalsupply) !== SUPPLY || total !== SUPPLY) {
   throw new Error(`old token: totalsupply ${token.totalsupply}, balances sum ${total}, want ${SUPPLY}`);
