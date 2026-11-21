@@ -1,7 +1,10 @@
 // Builds lib/docs-content.generated.ts from the repo's docs/ markdown, the
 // architecture SVGs and deploy/v3-main.json, so the site has one source of
 // truth. Runs before dev, build and test (package.json pre-scripts).
-// Fails when a doc names a 43-character id that deploy/v3-main.json does not.
+// Docs name live processes as {{rng:<role>}} (or {{rng:<role>:short}}, the
+// first 8 characters), filled from deploy/v3-main.json, so a redeploy moves
+// every id at once. Fails when a doc names a 43-character id that
+// deploy/v3-main.json does not, or a role it has no id for.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,6 +130,15 @@ function sections(markdown, headings) {
   return out.map(({ id, heading, lines }) => ({ id, heading, text: lines.join("\n").trim() }));
 }
 
+/** `text` with each {{rng:<role>}} / {{rng:<role>:short}} filled from the deploy file. */
+export function fillIds(text, deploy) {
+  return text.replace(/\{\{rng:([a-z]+)(:short)?\}\}/g, (_, role, short) => {
+    const id = deploy[role];
+    if (typeof id !== "string" || id.length !== 43) throw new Error(`{{rng:${role}}}: deploy/v3-main.json has no ${role} id`);
+    return short ? `${id.slice(0, 8)}…` : id;
+  });
+}
+
 /** The 43-character ids in `text` that the deploy file does not know. */
 export function unknownIds(text, deploy) {
   const known = new Set([deploy.deployer, deploy.scheduler, ...Object.keys(deploy.processes)]);
@@ -142,7 +154,7 @@ export function build() {
   const params = JSON.parse(fs.readFileSync(path.join(ROOT, "deploy/v3-params.json"), "utf8"));
   const committee = JSON.parse(fs.readFileSync(path.join(ROOT, "deploy/committee.json"), "utf8"));
   const pages = PAGES.map((p) => {
-    const raw = fs.readFileSync(path.join(ROOT, p.source), "utf8").replace(/\r\n/g, "\n");
+    const raw = fillIds(fs.readFileSync(path.join(ROOT, p.source), "utf8").replace(/\r\n/g, "\n"), deploy);
     const unknown = unknownIds(raw, deploy);
     if (unknown.length) throw new Error(`${p.source} names ${unknown.join(", ")}, which deploy/v3-main.json does not know`);
     const title = raw.match(/^#\s+(.+)$/m)?.[1].trim() ?? p.slug;

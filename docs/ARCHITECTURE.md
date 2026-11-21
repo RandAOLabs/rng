@@ -11,12 +11,12 @@ The abandoned January 2026 multi-chain design is in
 
 | Role | Process id | Code | Runs on |
 |---|---|---|---|
-| RNG token | `P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g` | `protocol/token/rng-token.lua` | `lua@5.3a` |
-| RNG DAO (YapDAO `stake-dao/1`) | `yAPgKEpAGDHHFQUzyzdwlpcLuldu1bcsbl65UXupL7Y` | paralith-mono `dao.lua` (rules in `daoRules`) | `lua-patch@1.0` |
-| Any-Honest beacon | `0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI` | `protocol/beacon/anyhonest.lua` | `lua-patch@1.0` |
-| Fast tier | `SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg` | `protocol/beacon/beacon.lua` | `lua@5.3a` |
-| Fair play | `HaYtR4PwVPorZVkxQFi2o1vU9cQDL_mhnLIuGnlDHac` | `protocol/fair/fair.lua` + `lib/fair.lua` | `lua@5.3a` |
-| Scheduler (all of the above) | `BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU` | HyperBEAM `scheduler@1.0` | RNG node |
+| RNG token | `{{rng:token}}` | `protocol/token/rng-token.lua` | `lua@5.3a` |
+| RNG DAO (YapDAO `stake-dao/1`) | `{{rng:dao}}` | paralith-mono `dao.lua` (rules in `daoRules`) | `lua-patch@1.0` |
+| Any-Honest beacon | `{{rng:beacon}}` | `protocol/beacon/anyhonest.lua` | `lua-patch@1.0` |
+| Fast tier | `{{rng:fast}}` | `protocol/beacon/beacon.lua` | `lua@5.3a` |
+| Fair play | `{{rng:fair}}` | `protocol/fair/fair.lua` + `lib/fair.lua` | `lua@5.3a` |
+| Scheduler (all of the above) | `{{rng:scheduler}}` | HyperBEAM `scheduler@1.0` | RNG node |
 
 Retired: Fast `VIsVLEi6…`, fair `QsKxU7KZ…` (replaced 2026-11-08). The beacon,
 Fast tier and fair play are owned by the DAO only (`owners.*.walletRenounced`).

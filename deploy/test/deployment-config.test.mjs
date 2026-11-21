@@ -17,7 +17,8 @@ const readJson = (p) => JSON.parse(fs.readFileSync(path.join(ROOT, p), 'utf8'));
 const pid = (s) => s.padEnd(43, '_');
 const DEPLOYER = pid('deployer');
 const state = readJson('deploy/native-testnet.json');
-const live = readJson('deploy/v3-mainnet.json');
+// The current deployment record: what fresh-deploy writes and the console and docs read.
+const live = readJson('deploy/v3-main.json');
 const env = Object.fromEntries(
   fs.readFileSync(path.join(ROOT, 'site/deploy/native-testnet.env'), 'utf8')
     .split(/\r?\n/)
@@ -25,7 +26,10 @@ const env = Object.fromEntries(
     .map((line) => line.split(/=(.*)/s).slice(0, 2)),
 );
 
-test('console deployment follows the live v3 processes', () => {
+test('console deployment follows the live v3 processes', async () => {
+  const { consoleEnv } = await import('../../site/scripts/console-env.mjs');
+  assert.equal(fs.readFileSync(path.join(ROOT, 'site/deploy/native-testnet.env'), 'utf8').split(String.fromCharCode(13)).join(''), consoleEnv(live),
+    'site/deploy/native-testnet.env is stale: node site/scripts/console-env.mjs');
   assert.equal(env.RNG_TOKEN_ID, live.token);
   assert.equal(env.RNG_BEACON_ID, live.fast);
   assert.equal(env.RNG_ANYHONEST_ID, live.beacon);
@@ -691,10 +695,10 @@ test('relaunch: spawn-<role> --replace retires the old process; dao-handover tak
   const before = (st.retired || []).length;
   const oldFast = st.fast;
   const e = retireRole(st, 'fast', '2026-11-07T00:00:00.000Z');
-  assert.deepEqual([e.role, e.pid, e.owners.walletRenounced, e.expectedCode.version], ['fast', oldFast, true, 0]);
+  assert.deepEqual([e.role, e.pid, e.owners, e.expectedCode], ['fast', oldFast, live.owners.fast, live.expectedCode.fast]);
   assert.deepEqual([st.fast, st.owners.fast, st.expectedCode.fast], [undefined, undefined, undefined]);
   assert.equal(st.processes[oldFast].retired, '2026-11-07T00:00:00.000Z');
-  assert.equal(st.owners.beacon.walletRenounced, true, 'other roles untouched');
+  assert.deepEqual(st.owners.beacon, live.owners.beacon, 'other roles untouched');
   retireRole(st, 'fair');
   assert.deepEqual(st.retired.slice(before).map((r) => r.role), ['fast', 'fair']);
   assert.equal(retireRole(st, 'fair'), null, 'nothing to retire twice');

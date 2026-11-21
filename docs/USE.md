@@ -11,13 +11,13 @@ Process ids are from [`deploy/v3-main.json`](../deploy/v3-main.json).
 | Tier | Use it when | Safe unless | Price | Process |
 |---|---|---|---|---|
 | Local | the sender learning the result first does no harm | always predictable to the sender | free | none (`lib/rng.lua` in your process) |
-| Fast | you want one value quickly and trust 2 of 3 operators not to collude | 2 of the 3 committee operators collude | 3 RNG | `SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg` |
-| Any-Honest | nobody in the round may predict or steer the value | every validator in the round colludes | 4 RNG | `0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI` |
-| Fair play | a player must not have to trust the game, the operators or the validators | never, for an honest player | 4 RNG per batch, split over its sessions | `HaYtR4PwVPorZVkxQFi2o1vU9cQDL_mhnLIuGnlDHac` |
+| Fast | you want one value quickly and trust 2 of 3 operators not to collude | 2 of the 3 committee operators collude | 3 RNG | `{{rng:fast}}` |
+| Any-Honest | nobody in the round may predict or steer the value | every validator in the round colludes | 4 RNG | `{{rng:beacon}}` |
+| Fair play | a player must not have to trust the game, the operators or the validators | never, for an honest player | 4 RNG per batch, split over its sessions | `{{rng:fair}}` |
 
-All payments are in the RNG token `P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g`
+All payments are in the RNG token `{{rng:token}}`
 (6 decimals: 1 RNG = 1,000,000 atoms). There is no faucet. Every process here
-runs on the scheduler `BALLSyZq_a6-7zdU_dU85E2VkoRnEVEDqkdZWlFx6uU`.
+runs on the scheduler `{{rng:scheduler}}`.
 
 The prices above are the live defaults (`deploy/v3-params.json`). The DAO can
 change them, so read them before you pay:
@@ -99,7 +99,7 @@ balances. You fund one with a token Transfer to that process; the token sends
 it a `Credit-Notice` carrying your `X-` tags.
 
 ```text
-Target: P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g      (the RNG token)
+Target: {{rng:token}}      (the RNG token)
 Action: Transfer
 Recipient: <Fast, Any-Honest or fair process>
 Quantity: <atoms>
@@ -136,9 +136,9 @@ locked by its first partial signature).
 **From a wallet, in one message (pay and request).**
 
 ```text
-Target: P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g
+Target: {{rng:token}}
 Action: Transfer
-Recipient: SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg
+Recipient: {{rng:fast}}
 Quantity: 3000000                     price x unit; read beaconinfo first
 X-Request-Id: <1-128 characters, unique for you>
 ```
@@ -153,7 +153,7 @@ requester. Then:
    through `beaconhistory`.
 3. Your value is the Fast request value above, over the round's `value`. Check
    the round with the group key: BLS signature over
-   `hyperbeam/rng/v1|SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg|<round>`,
+   `hyperbeam/rng/v1|{{rng:fast}}|<round>`,
    and `value = SHA-256("hyperbeam/rng/v1/round|" message "|" signature)`.
 
 If the request is refused (paused, for example), the RNG stays in your Fast
@@ -162,7 +162,7 @@ balance; `Withdraw` takes it back.
 **From a process, against its balance.**
 
 ```text
-Target: SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg
+Target: {{rng:fast}}
 Action: Request-Random
 Tier: fast                            optional; "beacon" is the old name
 Request-Id: <1-128 characters>
@@ -180,8 +180,8 @@ Data: { "round": 12, "signature": "<hex>", "derivation": "hyperbeam/rng/fast/v2/
 With `lib/rng.lua`:
 
 ```lua
-rng.config({ fast = "SWhbDExECq-e85xWJvte-B89qOBjasWxmXb1Tqyepeg",
-             anyHonest = "0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI" })
+rng.config({ fast = "{{rng:fast}}",
+             anyHonest = "{{rng:beacon}}" })
 rng.handlers(Handlers)                 -- aos: routes RNG-Result to rng.handle
 rng.on("Loot", function(stream, ctx, info) grant(ctx.player, stream:int(1, 100)) end)
 rng.request(msg, { tier = "fast", on = "Loot", ctx = { player = msg.From } })
@@ -204,9 +204,9 @@ output is cracked, which takes longer.
 **From a wallet, in one message (pay and request).**
 
 ```text
-Target: P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g
+Target: {{rng:token}}
 Action: Transfer
-Recipient: 0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI
+Recipient: {{rng:beacon}}
 Quantity: 4000000                     priceSchedule.request x unit
 X-Request-Id: <1-128 characters>
 ```
@@ -228,7 +228,7 @@ Rounds older than the last 8 are read at their slot through `timelockhistory`
 **From a process, against its balance.**
 
 ```text
-Target: 0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI
+Target: {{rng:beacon}}
 Action: Request-Random
 Tier: any-honest                      optional; "timelock" also accepted
 Request-Id: <1-128 characters>
@@ -257,7 +257,7 @@ that is answered `{ duplicate = true }` and not charged again.
 **Subscriptions (processes only).** One message buys a value every round:
 
 ```text
-Target: 0s8Or-QN1-IV5YJX6zI8ODWmCmJ8eJq7GSjwNdvBQEI
+Target: {{rng:beacon}}
 Action: Subscribe
 Subscription-Id: <1-128 characters>
 Rounds: <1 to 31,536,000>             default: subscriptionRounds (1,000)
@@ -291,9 +291,9 @@ and every validator together still cannot predict the outcome.
 **1. The game prepays** (any game may play):
 
 ```text
-Target: P-pkFZLuyk1AHfz_L-x6TolvfIUpjwt-XXw4Mwj3F0g
+Target: {{rng:token}}
 Action: Transfer
-Recipient: HaYtR4PwVPorZVkxQFi2o1vU9cQDL_mhnLIuGnlDHac
+Recipient: {{rng:fair}}
 Quantity: <atoms, at least one request price>
 X-Fair-Game: <the game's wallet or process id>
 ```
@@ -304,7 +304,7 @@ X-Fair-Game: <the game's wallet or process id>
 **2. The game opens a session** for the player's browser key:
 
 ```text
-Target: HaYtR4PwVPorZVkxQFi2o1vU9cQDL_mhnLIuGnlDHac
+Target: {{rng:fair}}
 Action: Fair.Open
 Session: <1-64 of A-Z a-z 0-9 _ - . :>
 Player: <the browser key's address>

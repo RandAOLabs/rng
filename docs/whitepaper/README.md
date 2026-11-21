@@ -40,9 +40,9 @@ from published data alone.
 | Tier | Process | Safe unless | Latency | Price |
 |---|---|---|---|---|
 | Local | `lib/rng.lua` in the caller | always predictable to the sender | none | free |
-| Fast | Fast tier `SWhbDExE…` (`beacon.lua`) | 2 of the 3 committee operators collude | one message phase | 3 RNG |
-| Any-Honest | beacon `0s8Or-QN…` (`anyhonest.lua`) | every validator in the round colludes | commit 5 s + reveal, under 30 s; longer if cracked | 4 RNG |
-| Fair play | `HaYtR4Pw…` (`fair.lua`) or `lib/fair.lua` embedded | never, for an honest player | a beacon round plus the player's reveal | 4 RNG per batch, split |
+| Fast | Fast tier `{{rng:fast:short}}` (`beacon.lua`) | 2 of the 3 committee operators collude | one message phase | 3 RNG |
+| Any-Honest | beacon `{{rng:beacon:short}}` (`anyhonest.lua`) | every validator in the round colludes | commit 5 s + reveal, under 30 s; longer if cracked | 4 RNG |
+| Fair play | `{{rng:fair:short}}` (`fair.lua`) or `lib/fair.lua` embedded | never, for an honest player | a beacon round plus the player's reveal | 4 RNG per batch, split |
 
 `rng.install(msg)` gives a process a deterministic stream seeded from the
 message. `rng.request(msg, { tier = ... })` asks a tier for a value and calls
