@@ -90,20 +90,18 @@ const atomsOf = (rng) => {
 // ---------------------------------------------------------------------------
 
 /** Allocations file -> { table: { addr: atoms(BigInt) }, rows, ticker, reserveRng, treasuryRng, validatorRng }.
- * `$DEPLOYER` is the deployer's address, `$FUNDER` the address in RNG_FUNDER
- * (the wallet that seeds the book and pays the swarm when RNG deploys with
- * its own key); repeated addresses are summed.
+ * `$DEPLOYER` is the deployer's address; repeated addresses are summed.
  * `distribution` is what the runbook transfers on from the genesis holder
  * (reserve and treasury go under DAO control in the beacon; validatorRng is
  * each launch validator's grant, bonded whole). */
-export function loadAllocations(spec, { deployer, funder = process.env.RNG_FUNDER } = {}) {
+export function loadAllocations(spec, { deployer } = {}) {
   if (!spec || !Array.isArray(spec.allocations) || !spec.allocations.length) throw new Error('allocations[] is required');
   const table = {};
   const rows = [];
   let sum = 0n;
   const byRole = {};
   for (const row of spec.allocations) {
-    const address = row.address === '$DEPLOYER' ? deployer : row.address === '$FUNDER' ? funder : row.address;
+    const address = row.address === '$DEPLOYER' ? deployer : row.address;
     if (!isPid(address)) throw new Error(`allocation ${row.role || '?'}: invalid address ${address}`);
     let atoms;
     if (row.atoms !== undefined) {
