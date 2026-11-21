@@ -443,6 +443,17 @@ function runTimelockTests()
   tick()
   check("a parameter missing from the checkpoint takes its default", info().round == 8
     and Timelock.params.fairWindowMs == 60000 and Timelock.params.commitWindowMs == 3000)
+  -- A checkpoint from before empty accounts were dropped: they go on restore,
+  -- the ones holding something stay.
+  local E = string.rep("e", 43)
+  st = state()
+  st.balances[E], st.purses[E] = 0, {}
+  base.timelockstate, base.timelockrev = encode(st), string.format("%d", Timelock.rev + 1)
+  Timelock = { rev = 0 }
+  tick()
+  check("an empty account in an old checkpoint is dropped on restore", Timelock.balances[E] == nil
+    and Timelock.purses[E] == nil and Timelock.balances[F.game] == st.balances[F.game]
+    and #Timelock.purses[F.game] == #st.purses[F.game])
 
   -- Duplicates, stale requests, withdrawals, claims.
   local bal = Timelock.balances[F.game]
@@ -463,7 +474,7 @@ function runTimelockTests()
   local owed = Timelock.accruedAtoms[A]
   r, ob = send(wallet(A, { Action = "Claim" }))
   check("claim pays atomic rewards through the token", ob["rng-claim"] and ob["rng-claim"].Quantity == string.format("%d", owed), owed)
-  eq("accrued atoms reset", Timelock.accruedAtoms[A], 0)
+  eq("claimed earnings are dropped, not kept at 0", Timelock.accruedAtoms[A], nil)
 
   -- Identity: no owner means nobody is the owner; a Tags table can't forge
   -- a signature; a string Tags doesn't crash; bare from-process is nobody.
@@ -505,6 +516,22 @@ function runTimelockTests()
   check("lua-patch@1.0: a throwing request rolls back its charge and its guard", tostring(r.error):match("boom")
     and Timelock.balances[F.game] == gameBal and seenOf(F.game .. "|rollback-1") == nil
     and Timelock.transferSeq == seq0, encode(r))
+  -- The accounts are shared with the copy, not copied (a message costs what it
+  -- touches, not what every payer ever paid): the purse it spent from comes
+  -- back whole, and an account it never opened is the same table.
+  Timelock.purses[F.game] = { { n = gameBal, price = price(), sub = 1 } }
+  local purse0, other = encode(Timelock.purses[F.game]), Timelock.purses[F.stranger]
+  thrown = false
+  -- Thrown from the reply, after the charge and the purse were written.
+  encode = function(v)
+    if type(v) == "table" and v.requestId == "rollback-2" and not thrown then thrown = true; error("boom") end
+    return realEncode(v)
+  end
+  r = request("rollback-2")
+  encode = realEncode
+  check("lua-patch@1.0: a throwing request gives back the purse it spent from", thrown and tostring(r.error):match("boom")
+    and Timelock.balances[F.game] == gameBal and encode(Timelock.purses[F.game]) == purse0
+    and Timelock.purses[F.stranger] == other, encode(r))
   thrown = false
   encode = function(v) if not thrown then thrown = true; error("boom") end return realEncode(v) end
   r = send(delivery(F.token, { Action = "Credit-Notice", Sender = F.stranger, Quantity = tostring(3 * U), Reference = "t405" }))
@@ -1517,11 +1544,12 @@ function runTimelockTests()
   check("pay-and-request pays the price in force now", r.price == 6 and r.round ~= nil, encode(r))
   dao({ Action = "Gov.Configure", ["Request-Price"] = "2" })
   r = reqQ("q-4")
-  check("lower: credits bought at 6 still pay 6", r.price == 6 and Timelock.balances[Q] == 0, encode(r))
+  check("lower: credits bought at 6 still pay 6; the emptied account is dropped", r.price == 6
+    and Timelock.balances[Q] == nil and Timelock.purses[Q] == nil, encode(r))
   fundQ(3, "t973")
   r, ob = send(wallet(Q, { Action = "Withdraw", Quantity = "3" }))
   seqOf(ob)
-  check("withdraw returns the unused balance at face", r.withdrawn == 3 and #Timelock.purses[Q] == 0, encode(r))
+  check("withdraw returns the unused balance at face", r.withdrawn == 3 and Timelock.purses[Q] == nil, encode(r))
   -- Attack: no drain. Credits never pay less than they were bought at, and
   -- every RNG charged is what the payer's batch held.
   for i = 1, 8 do
@@ -1865,11 +1893,102 @@ function runRefusalTests()
   return table.concat(lines, "\n")
 end
 
+--- The beacon may cost a little more as it is used, never in proportion to
+--- use. The same messages (credit a fresh payer, withdraw it all, Get-Info)
+--- are timed and their published bytes summed with 100, 4,000 and 20,000
+--- addresses on the books, each both funded and left empty, in every
+--- address map. Before 2026-11-21 every message copied all of them.
+function runCostTests()
+  local U = F.unit
+  Lua53bPatchMode = true
+  local ref = 900000
+  local function addr43(s) return (s .. string.rep("_", 43)):sub(1, 43) end
+  local function cycle(payer)
+    ref = ref + 1
+    local credit = send(delivery(F.token, { Action = "Credit-Notice", Sender = payer, Quantity = tostring(2 * U),
+      Reference = "t" .. ref }))
+    local out = send(wallet(payer, { Action = "Withdraw", Quantity = "2" }))
+    local get = send(wallet(F.stranger, { Action = "Get-Info" }))
+    return credit.credited == 2 and out.withdrawn == 2 and get.ok == true
+  end
+  -- Work is counted in Lua VM instructions where the VM can hook them (AOS):
+  -- exact, and the same on a busy machine. Elsewhere (a node's Luerl), CPU time.
+  local hook = type(debug) == "table" and type(debug.sethook) == "function"
+  local function work(fn)
+    if not hook then local t0 = os.clock(); local r = fn(); return os.clock() - t0, r end
+    local ticks = 0
+    debug.sethook(function() ticks = ticks + 1 end, "", 1000)
+    local r = fn()
+    debug.sethook()
+    return ticks, r
+  end
+  -- 20 cycles, best of 3. Past `cap` it stops early (the old code would run
+  -- the harness out of gas) and reports what it reached.
+  local function measure(n, cap)
+    local added = {}
+    for i = 1, n do
+      local funded, empty = addr43("cost-f-" .. i), addr43("cost-e-" .. i)
+      Timelock.balances[funded], Timelock.purses[funded] = 1, { { n = 1, price = 4, sub = 1 } }
+      Timelock.accruedAtoms[funded] = 1
+      Timelock.balances[empty], Timelock.purses[empty], Timelock.accruedAtoms[empty] = 0, {}, 0
+      added[#added + 1] = funded
+      added[#added + 1] = empty
+    end
+    local best, bytes, worked = math.huge, 0, true
+    for rep = 1, 3 do
+      -- Clear of a checkpoint slot (every 1000 messages): that one writes the state.
+      Timelock.rev = (int0(Timelock.rev) // 1000 + 1) * 1000 + 1
+      local spent, b = 0, 0
+      for k = 1, 20 do
+        local before = {}
+        for key, v in pairs(base) do if type(v) == "string" then before[key] = v end end
+        local payer = addr43("cost-p-" .. n .. "-" .. rep .. "-" .. k)
+        local w, ok = work(function() return cycle(payer) end)
+        spent, worked = spent + w, ok and worked
+        for key, v in pairs(base) do if type(v) == "string" and before[key] ~= v then b = b + #v end end
+        if cap and spent > cap then break end
+      end
+      best, bytes = math.min(best, spent), b
+      if cap and spent > cap then break end
+    end
+    for _, a in ipairs(added) do
+      Timelock.balances[a], Timelock.purses[a], Timelock.accruedAtoms[a] = nil, nil, nil
+    end
+    return best, bytes, worked
+  end
+  -- Credit references the same width throughout, so `timelockguards` (the
+  -- last 1000) holds still while we measure.
+  Timelock.credited = {}
+  for i = 1, 1000 do Timelock.credited[tostring(899000 + i)] = true end
+  Timelock.creditFloor = 899000
+  local function books() local n = 0 for _ in pairs(Timelock.balances) do n = n + 1 end return n end
+  local before = books()
+  local t1, b1, ok1 = measure(100)
+  local t2, b2, ok2 = measure(4000, 10 * t1)
+  local t3, b3, ok3 = measure(20000, 10 * t1)
+  local after = books()
+  Lua53bPatchMode = nil
+  local unit = hook and "x100 instr" or "s"
+  local detail = string.format("100: %.3f %s %d B, 4000: %.3f %s %d B, 20000: %.3f %s %d B",
+    t1, unit, b1, t2, unit, b2, t3, unit, b3)
+  check("cost: the measured messages ran", ok1 and ok2 and ok3, detail)
+  check("cost: a payer funded then emptied leaves nothing behind", after == before,
+    string.format("%d -> %d", before, after))
+  check("cost: Lua time does not grow with the addresses on the books",
+    t2 <= 2 * t1 and t3 <= 2 * t1, detail)
+  check("cost: published bytes do not grow with the addresses on the books",
+    b2 <= b1 * 1.1 and b3 <= b1 * 1.1, detail)
+  lines[#lines + 1] = passed .. " passed, " .. failed .. " failed"
+  return table.concat(lines, "\n")
+end
+
 function rngtest()
   local ok, out = pcall(function()
     runTimelockTests()
     lines[#lines] = nil
-    return runRefusalTests()
+    runRefusalTests()
+    lines[#lines] = nil
+    return runCostTests()
   end)
   if ok then return out end
   return "ERROR " .. tostring(out) .. "\n" .. table.concat(lines, "\n")

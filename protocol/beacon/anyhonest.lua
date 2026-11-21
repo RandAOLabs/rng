@@ -160,6 +160,15 @@ local function withDefaults(t)
   p.rejoinBaseMs, p.rejoinCapMs = nil, nil
   for k, v in pairs(t) do out[k] = v end
   out.params = p
+  -- An address is kept only while it holds something (see touch): a state
+  -- from before that rule drops its empty entries here, once.
+  local balances, purses, accrued, accruedAtoms = {}, {}, {}, {}
+  for addr, n in pairs(t.balances or {}) do
+    if n ~= 0 then balances[addr], purses[addr] = n, (t.purses or {})[addr] end
+  end
+  for addr, n in pairs(t.accrued or {}) do if n ~= 0 then accrued[addr] = n end end
+  for addr, n in pairs(t.accruedAtoms or {}) do if n ~= 0 then accruedAtoms[addr] = n end end
+  out.balances, out.purses, out.accrued, out.accruedAtoms = balances, purses, accrued, accruedAtoms
   return out
 end
 Timelock = Timelock and withDefaults(Timelock) or freshState()
@@ -224,11 +233,41 @@ local function deepCopy(v)
   return t
 end
 
---- The state before a handler runs, `seen` left out (see SeenUndo), and
---- `history` (handlers never touch it: compute appends after success).
+--- The maps keyed by address that every payer, cracker and validator who ever
+--- paid or earned lands in. A message reaches an address in them only through
+--- touch(), so it costs what it touches, never how many addresses there are.
+local ADDRESS_MAPS = { "balances", "purses", "accrued", "accruedAtoms" }
+
+--- The addresses this message touched, each as it was before: address ->
+--- { map -> value }. A handler that throws is undone from here, and an entry
+--- left at nothing is dropped once the message is done.
+local Touched = {}
+
+--- Call before writing anything of `addr`'s in ADDRESS_MAPS.
+local function touch(addr)
+  if Touched[addr] then return end
+  local was = {}
+  for _, m in ipairs(ADDRESS_MAPS) do was[m] = deepCopy((Timelock[m] or {})[addr]) end
+  Touched[addr] = was
+end
+
+--- An entry holding nothing is not kept (a purse goes with its balance).
+local function dropEmpty(addr)
+  if int(Timelock.balances[addr], 0) == 0 then Timelock.balances[addr], Timelock.purses[addr] = nil, nil end
+  if int(Timelock.accrued[addr], 0) == 0 then Timelock.accrued[addr] = nil end
+  if int(Timelock.accruedAtoms[addr], 0) == 0 then Timelock.accruedAtoms[addr] = nil end
+end
+
+--- The state before a handler runs. Shared, not copied: `seen` (undone from
+--- SeenUndo), `history` (handlers never touch it: compute appends after
+--- success), and ADDRESS_MAPS (undone from Touched). Copying the address maps
+--- made each message cost more than the last: on 2026-11-21, 1,068 accounts
+--- (two holding anything) were three quarters of a slot.
+local SHARED = { seen = true, history = true }
+for _, m in ipairs(ADDRESS_MAPS) do SHARED[m] = true end
 local function snapshot()
   local out = {}
-  for k, v in pairs(Timelock) do if k ~= "seen" and k ~= "history" then out[k] = deepCopy(v) end end
+  for k, v in pairs(Timelock) do out[k] = SHARED[k] and v or deepCopy(v) end
   return out
 end
 
@@ -237,6 +276,9 @@ local function rollback(saved)
     local u = SeenUndo[i]
     Timelock.seen[u[1]] = Timelock.seen[u[1]] or {}
     Timelock.seen[u[1]][u[2]] = u[3]
+  end
+  for addr, was in pairs(Touched) do
+    for _, m in ipairs(ADDRESS_MAPS) do if saved[m] then saved[m][addr] = was[m] end end
   end
   local seen, history = Timelock.seen, Timelock.history
   Timelock = saved
@@ -464,9 +506,11 @@ local function nowPrices()
 end
 
 --- `addr`'s purse, matched to its balance (a balance from before purses
---- joins at today's prices).
+--- joins at today's prices). The one way into a balance: a handler writes
+--- `balances[addr]` only after it.
 local function purseOf(addr)
   Timelock.purses = type(Timelock.purses) == "table" and Timelock.purses or {}
+  touch(addr)
   local p = rng.purseMatch(Timelock.purses[addr] or {}, int(Timelock.balances[addr], 0), nowPrices())
   Timelock.purses[addr] = p
   return p
@@ -491,6 +535,7 @@ end
 local function transferOut(to, rngAmount, note) return transferAtoms(to, rngAmount * int(Timelock.unit, 1), note) end
 
 local function addAtoms(map, key, atoms)
+  touch(key) -- only ever accruedAtoms
   map[key] = int(map[key], 0) + int(atoms, 0)
 end
 
@@ -1368,6 +1413,7 @@ end
 H["Claim"] = function(base, msg, from)
   local atoms = from and earnedAtoms(from) or 0
   if atoms <= 0 then return fail(base, "Nothing-To-Claim") end
+  touch(from)
   Timelock.accrued[from], Timelock.accruedAtoms[from] = 0, 0
   return reply(base, { claimedAtoms = tostring(atoms) },
     { ["rng-claim"] = transferAtoms(from, atoms, "RNG validator and crack rewards") })
@@ -1473,6 +1519,7 @@ H["Ready"] = function(base, msg, from, now)
       earnedAtoms = tostring(earnedAtoms(from)) })
   end
   if refill > 0 then
+    touch(from)
     Timelock.accrued[from], Timelock.accruedAtoms[from] = 0, earnedAtoms(from) - refill * unit
     add(Timelock.bonds, from, refill)
   end
@@ -2207,7 +2254,7 @@ function compute(base, req)
   local msg = caseInsensitive(type(raw) == "table" and raw or {})
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
-  Notices, GuardsChanged, SeenDirty, SeenUndo = {}, false, {}, {}
+  Notices, GuardsChanged, SeenDirty, SeenUndo, Touched = {}, false, {}, {}, {}
   HistoryNew, Abandoned = {}, {}
   Slot = int(req and (req.slot or (type(req.body) == "table" and req.body.slot)), nil)
   Timelock.history = Timelock.history or {}
@@ -2252,6 +2299,7 @@ function compute(base, req)
     end
     result = ok and out or fail(base, tostring(out))
   end
+  for addr in pairs(Touched) do dropEmpty(addr) end
   for k, v in pairs(Notices) do result.results.outbox[k] = v end
   for _, e in ipairs(HistoryNew) do rng.history(Timelock.history, e, HISTORY_KEEP) end
   if #Abandoned > 0 then result.beaconabandoned = encode(Abandoned) end
