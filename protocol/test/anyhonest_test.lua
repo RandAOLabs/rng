@@ -443,6 +443,17 @@ function runTimelockTests()
   tick()
   check("a parameter missing from the checkpoint takes its default", info().round == 8
     and Timelock.params.fairWindowMs == 60000 and Timelock.params.commitWindowMs == 3000)
+  -- A checkpoint from before empty accounts were dropped: they go on restore,
+  -- the ones holding something stay.
+  local E = string.rep("e", 43)
+  st = state()
+  st.balances[E], st.purses[E] = 0, {}
+  base.timelockstate, base.timelockrev = encode(st), string.format("%d", Timelock.rev + 1)
+  Timelock = { rev = 0 }
+  tick()
+  check("an empty account in an old checkpoint is dropped on restore", Timelock.balances[E] == nil
+    and Timelock.purses[E] == nil and Timelock.balances[F.game] == st.balances[F.game]
+    and #Timelock.purses[F.game] == #st.purses[F.game])
 
   -- Duplicates, stale requests, withdrawals, claims.
   local bal = Timelock.balances[F.game]
@@ -505,6 +516,22 @@ function runTimelockTests()
   check("lua-patch@1.0: a throwing request rolls back its charge and its guard", tostring(r.error):match("boom")
     and Timelock.balances[F.game] == gameBal and seenOf(F.game .. "|rollback-1") == nil
     and Timelock.transferSeq == seq0, encode(r))
+  -- The accounts are shared with the copy, not copied (a message costs what it
+  -- touches, not what every payer ever paid): the purse it spent from comes
+  -- back whole, and an account it never opened is the same table.
+  Timelock.purses[F.game] = { { n = gameBal, price = price(), sub = 1 } }
+  local purse0, other = encode(Timelock.purses[F.game]), Timelock.purses[F.stranger]
+  thrown = false
+  -- Thrown from the reply, after the charge and the purse were written.
+  encode = function(v)
+    if type(v) == "table" and v.requestId == "rollback-2" and not thrown then thrown = true; error("boom") end
+    return realEncode(v)
+  end
+  r = request("rollback-2")
+  encode = realEncode
+  check("lua-patch@1.0: a throwing request gives back the purse it spent from", thrown and tostring(r.error):match("boom")
+    and Timelock.balances[F.game] == gameBal and encode(Timelock.purses[F.game]) == purse0
+    and Timelock.purses[F.stranger] == other, encode(r))
   thrown = false
   encode = function(v) if not thrown then thrown = true; error("boom") end return realEncode(v) end
   r = send(delivery(F.token, { Action = "Credit-Notice", Sender = F.stranger, Quantity = tostring(3 * U), Reference = "t405" }))
@@ -1517,11 +1544,12 @@ function runTimelockTests()
   check("pay-and-request pays the price in force now", r.price == 6 and r.round ~= nil, encode(r))
   dao({ Action = "Gov.Configure", ["Request-Price"] = "2" })
   r = reqQ("q-4")
-  check("lower: credits bought at 6 still pay 6", r.price == 6 and Timelock.balances[Q] == 0, encode(r))
+  check("lower: credits bought at 6 still pay 6; the emptied account is dropped", r.price == 6
+    and Timelock.balances[Q] == nil and Timelock.purses[Q] == nil, encode(r))
   fundQ(3, "t973")
   r, ob = send(wallet(Q, { Action = "Withdraw", Quantity = "3" }))
   seqOf(ob)
-  check("withdraw returns the unused balance at face", r.withdrawn == 3 and #Timelock.purses[Q] == 0, encode(r))
+  check("withdraw returns the unused balance at face", r.withdrawn == 3 and Timelock.purses[Q] == nil, encode(r))
   -- Attack: no drain. Credits never pay less than they were bought at, and
   -- every RNG charged is what the payer's batch held.
   for i = 1, 8 do

@@ -160,6 +160,13 @@ local function withDefaults(t)
   p.rejoinBaseMs, p.rejoinCapMs = nil, nil
   for k, v in pairs(t) do out[k] = v end
   out.params = p
+  -- An account is kept only while it holds something (see purseOf): a state
+  -- from before that rule drops its empty ones here, once.
+  local balances, purses = {}, {}
+  for addr, n in pairs(t.balances or {}) do
+    if n ~= 0 then balances[addr], purses[addr] = n, (t.purses or {})[addr] end
+  end
+  out.balances, out.purses = balances, purses
   return out
 end
 Timelock = Timelock and withDefaults(Timelock) or freshState()
@@ -224,11 +231,21 @@ local function deepCopy(v)
   return t
 end
 
---- The state before a handler runs, `seen` left out (see SeenUndo), and
---- `history` (handlers never touch it: compute appends after success).
+--- The accounts this message opened (purseOf), each as it was before:
+--- address -> { balance, purse }. A handler that throws is undone from here,
+--- and an account left empty is dropped once the message succeeds.
+local Accounts = {}
+
+--- The state before a handler runs. Shared, not copied: `seen` (undone from
+--- SeenUndo), `history` (handlers never touch it: compute appends after
+--- success), and `balances` and `purses` (undone from Accounts). Every payer
+--- that ever paid was in those two, so copying them made each message cost
+--- more than the last: on 2026-11-21, 1,068 accounts (two holding anything)
+--- were three quarters of a slot.
+local SHARED = { seen = true, history = true, balances = true, purses = true }
 local function snapshot()
   local out = {}
-  for k, v in pairs(Timelock) do if k ~= "seen" and k ~= "history" then out[k] = deepCopy(v) end end
+  for k, v in pairs(Timelock) do out[k] = SHARED[k] and v or deepCopy(v) end
   return out
 end
 
@@ -237,6 +254,10 @@ local function rollback(saved)
     local u = SeenUndo[i]
     Timelock.seen[u[1]] = Timelock.seen[u[1]] or {}
     Timelock.seen[u[1]][u[2]] = u[3]
+  end
+  for addr, a in pairs(Accounts) do
+    if saved.balances then saved.balances[addr] = a.balance end
+    if saved.purses then saved.purses[addr] = a.purse end
   end
   local seen, history = Timelock.seen, Timelock.history
   Timelock = saved
@@ -464,9 +485,14 @@ local function nowPrices()
 end
 
 --- `addr`'s purse, matched to its balance (a balance from before purses
---- joins at today's prices).
+--- joins at today's prices). The one way into an account: a handler writes
+--- `balances[addr]` only after it, so Accounts holds every account a
+--- message may change.
 local function purseOf(addr)
   Timelock.purses = type(Timelock.purses) == "table" and Timelock.purses or {}
+  if not Accounts[addr] then
+    Accounts[addr] = { balance = Timelock.balances[addr], purse = deepCopy(Timelock.purses[addr]) }
+  end
   local p = rng.purseMatch(Timelock.purses[addr] or {}, int(Timelock.balances[addr], 0), nowPrices())
   Timelock.purses[addr] = p
   return p
@@ -2207,7 +2233,7 @@ function compute(base, req)
   local msg = caseInsensitive(type(raw) == "table" and raw or {})
   -- The scheduler's assignment time only; a Timestamp tag is the caller's word.
   local now = int(req and (req.timestamp or req.Timestamp), 0)
-  Notices, GuardsChanged, SeenDirty, SeenUndo = {}, false, {}, {}
+  Notices, GuardsChanged, SeenDirty, SeenUndo, Accounts = {}, false, {}, {}, {}
   HistoryNew, Abandoned = {}, {}
   Slot = int(req and (req.slot or (type(req.body) == "table" and req.body.slot)), nil)
   Timelock.history = Timelock.history or {}
@@ -2251,6 +2277,10 @@ function compute(base, req)
       HistoryNew, Abandoned = {}, {}
     end
     result = ok and out or fail(base, tostring(out))
+  end
+  -- An account is kept only while it holds something.
+  for addr in pairs(Accounts) do
+    if int(Timelock.balances[addr], 0) == 0 then Timelock.balances[addr], Timelock.purses[addr] = nil, nil end
   end
   for k, v in pairs(Notices) do result.results.outbox[k] = v end
   for _, e in ipairs(HistoryNew) do rng.history(Timelock.history, e, HISTORY_KEEP) end
