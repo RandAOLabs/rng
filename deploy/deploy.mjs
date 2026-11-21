@@ -2,13 +2,13 @@
 // stake-dao/1), the permissionless beacon and fair play. docs/PERMISSIONLESS.md.
 //
 // v3 (state: RNG_STATE, default deploy/v3-testnet.json):
-//   spawn-token <allocations.json>          RNG with GenesisAllocations (sealed after slot 1)
-//   spawn-dao [--lua53b]                    the RNG DAO, stake-dao/1 staking RNG (needs PARALITH_MONO)
+//   spawn-token <allocations.json>          RNG with GenesisAllocations (sealed after slot 1), lua-patch@1.0
+//   spawn-dao [--lua53a]                    the RNG DAO, stake-dao/1 staking RNG (lua-patch@1.0; needs PARALITH_MONO)
 //   spawn-beacon [--lua53a]                 the v3 beacon (lua-patch@1.0 by default)
 //   genesis-configure [params.json]         deployer Gov.Configure naming the token (locks token/unit/self/predecessor)
 //   fund-reserve <rng> | fund-treasury <rng>  deployer Transfer with X-Foundation / X-Treasury
 //   fund <rng> [for]                        a beacon balance (X-For)
-//   spawn-fair | configure-fair [windowMs]  fair play (token, beacon requestPrice from v3-params.json)
+//   spawn-fair | configure-fair [windowMs]  fair play on lua-patch@1.0 (token, beacon requestPrice from v3-params.json)
 //   fund-fair <rng>                         the fair process's beacon float (X-For = fair; not spent:
 //                                           every bound batch is topped up from the games' balances)
 //   fund-game <rng> <game>                  prepay a game's fair-play balance (X-Fair-Game); any game
@@ -32,7 +32,7 @@
 //                                           average < RNG_MIN_RATE, default 1.8 rounds/s); exits 1 when one needs a look
 //   expect-code <beacon|fair|fast> <root> <version>   record an upgrade the DAO installed as the build verify expects
 // Fast tier (on-demand 2-of-3 threshold BLS, beacon/beacon.lua; not a heartbeat):
-//   spawn-fast                              the fast-tier process (lua@5.3a)
+//   spawn-fast                              the fast-tier process (lua-patch@1.0)
 //   genesis-configure-fast [committee.json] deployer Gov.Configure: v3 token, the existing committee
 //                                           (deploy/committee.json), fees; locks token/unit/self
 //   fund-fast <rng> [for]                   a fast-tier balance (X-For)
@@ -611,24 +611,31 @@ const anyHonestSource = () => [...json(), 'rng = (function()', read('lib/rng.lua
   read('protocol/beacon/anyhonest.lua')].join('\n');
 // lua-patch@1.0 (paralith-mono's lua53b.lua adapter): only changed keys are
 // published and the VM keeps state between messages. The adapter's compute
-// calls the beacon's, so the beacon's final full collect moves out to it; the
-// bootstrap gives the owner and scheduler facts lua@5.3a reads from `base.process`.
-const anyHonestPatchSource = (owner, scheduler) => {
-  const src = anyHonestSource();
+// calls the contract's, so the contract's final full collect moves out to it;
+// the bootstrap gives the owner and scheduler facts lua@5.3a reads from
+// `base.process`. `keepalive` is a published key that always exists. A
+// contract with no full collect of its own (fair) says `finalCollect: false`.
+export const patchSource = (src, { owner, scheduler, keepalive, name, finalCollect = true }) => {
   const collect = 'collectgarbage("collect")';
-  const at = src.lastIndexOf(collect);
-  if (at === -1) throw new Error('beacon has no final full collect');
+  const at = finalCollect ? src.lastIndexOf(collect) : src.length;
+  if (at === -1) throw new Error(`${name} has no final full collect`);
   const q = JSON.stringify;
   return [
     src.slice(0, at) + src.slice(at + collect.length),
     `Lua53bBootstrapBase = { process = { commitments = { owner = { committer = ${q(owner)}, type = "rsa-pss-sha512" } },`
       + ` ["scheduler-location"] = ${q(scheduler)} }, ["scheduler-location"] = ${q(scheduler)} }`,
-    'Lua53bKeepaliveKey = "timelockrev"',
+    `Lua53bKeepaliveKey = ${q(keepalive)}`,
     'Lua53bGcStep = 5000',
     'Lua53bPatchMode = true',
     read('protocol/vendor/lua53b.lua'),
   ].join('\n');
 };
+const anyHonestPatchSource = (owner, scheduler) => patchSource(anyHonestSource(),
+  { owner, scheduler, keepalive: 'timelockrev', name: 'beacon' });
+/** The token on lua-patch@1.0. `owner` (the deployer) may ask for a balance
+ *  checkpoint (Admin.Checkpoint) and nothing else. */
+export const tokenPatchSource = (prelude, owner, scheduler) => patchSource(tokenSource(prelude),
+  { owner, scheduler, keepalive: 'ticker', name: 'token' });
 const fairSource = () => [
   read('protocol/vendor/json.lua'),
   'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
@@ -639,9 +646,14 @@ const fairSource = () => [
   ...govSource(),
   read('protocol/fair/fair.lua'),
 ].join('\n');
-// The fast tier: on-demand threshold BLS (lua@5.3a, whole state per message).
+// The fast tier: on-demand threshold BLS (whole state per message).
 const fastSource = () => [...json(), 'rng = (function()', read('lib/rng.lua'), 'end)()', ...govSource(),
   read('protocol/beacon/beacon.lua')].join('\n');
+// Fair and the fast tier on lua-patch@1.0, like the beacon.
+const fairPatchSource = (owner, scheduler) => patchSource(fairSource(),
+  { owner, scheduler, keepalive: 'fairrev', name: 'fair', finalCollect: false });
+const fastPatchSource = (owner, scheduler) => patchSource(fastSource(),
+  { owner, scheduler, keepalive: 'beaconrev', name: 'fast' });
 /** gov.lua's code root: the code in parts of at most PART_MAX bytes; the
  *  manifest is each part's sha256 hex joined by newlines; root = sha256(manifest). */
 export const GOV_PART_MAX = 16 * 1024;
@@ -658,12 +670,21 @@ export function codeRoot(code) {
   const manifest = parts.map((p) => createHash('sha256').update(p).digest('hex')).join('\n');
   return { root: sha256(manifest), manifest, parts };
 }
-/** The full bundle an upgrade installs on a role (the beacon's wrapped for lua-patch@1.0). */
-export const upgradeSource = (role, owner, scheduler) => role === 'beacon' ? anyHonestPatchSource(owner, scheduler)
-  : role === 'fast' ? fastSource() : fairSource();
+/** The full bundle an upgrade installs on a role: wrapped for lua-patch@1.0,
+ *  unless the process runs lua@5.3a (`device`, from the deploy state). */
+export const upgradeSource = (role, owner, scheduler, device = 'lua-patch@1.0') => {
+  const lua53a = device === 'lua@5.3a';
+  if (role === 'beacon') return lua53a ? anyHonestSource() : anyHonestPatchSource(owner, scheduler);
+  if (role === 'fast') return lua53a ? fastSource() : fastPatchSource(owner, scheduler);
+  return lua53a ? fairSource() : fairPatchSource(owner, scheduler);
+};
 
-/** The bundle each protocol role is spawned with (lua@5.3a; the beacon's lua-patch@1.0 wraps its own). */
+/** Each protocol role's contract (the lua@5.3a form; the spawn and upgradeSource wrap it for lua-patch@1.0). */
 export const protocolSources = { anyHonest: anyHonestSource, fair: fairSource, fast: fastSource };
+/** The lua-patch@1.0 bundles, for tests. */
+export const patchSources = {
+  anyHonest: anyHonestPatchSource, fair: fairPatchSource, fast: fastPatchSource,
+};
 const subscriptionConsumerSource = (beacon, id) => [...json(), read('protocol/test/subscription-consumer.lua')]
   .join('\n').replaceAll('__BEACON__', beacon).replaceAll('__SUBSCRIPTION_ID__', id);
 
@@ -823,7 +844,9 @@ async function main(argv) {
       state.tokenTicker = alloc.ticker;
       state.genesis = { rows: alloc.rows, reserveRng: alloc.reserveRng, treasuryRng: alloc.treasuryRng,
         validatorRng: alloc.validatorRng };
-      const pid = await spawn('token', { name: alloc.ticker, ticker: alloc.ticker, lua: tokenSource(prelude), extra: { prelude } });
+      const scheduler = await pinScheduler();
+      const pid = await spawn('token', { name: alloc.ticker, ticker: alloc.ticker, executionDevice: 'lua-patch@1.0',
+        lua: tokenPatchSource(prelude, me, scheduler), extra: { prelude } });
       await send(pid, 'Info');
       return alloc;
     },
@@ -833,7 +856,7 @@ async function main(argv) {
       sameScheduler(state, ['token']);
       const rules = daoRules({ token: state.token, ticker: state.tokenTicker || 'RNG' });
       const definition = Object.fromEntries(Object.entries(rules).map(([k, v]) => [k.toLowerCase(), v]));
-      const device = flag('--lua53b') ? 'lua-patch@1.0' : 'lua@5.3a';
+      const device = flag('--lua53a') ? 'lua@5.3a' : 'lua-patch@1.0';
       // deploy-dao.mjs semantics, our rules: the module comes from paralith-mono.
       if (DRY) {
         const pid = placeholder('dao');
@@ -929,7 +952,9 @@ async function main(argv) {
 
     async 'spawn-fair'() {
       if (state.fair && !flag('--replace')) throw new Error(`fair already deployed (${state.fair})`);
-      const pid = await spawn('fair', { name: 'RNG-Fair-Play', lua: fairSource() });
+      const scheduler = await pinScheduler();
+      const pid = await spawn('fair', { name: 'RNG-Fair-Play', executionDevice: 'lua-patch@1.0',
+        lua: fairPatchSource(me, scheduler) });
       await send(pid, 'Get-Info');
       return pid;
     },
@@ -1051,7 +1076,7 @@ async function main(argv) {
       if (!PROTOCOL_ROLES.includes(role)) throw new Error('code-root <beacon|fair|fast> [--send]');
       const scheduler = state.scheduler || process.env.RNG_SCHEDULER;
       const owner = state.deployer || me;
-      const code = upgradeSource(role, owner, scheduler);
+      const code = upgradeSource(role, owner, scheduler, state.processes?.[state[role]]?.executionDevice);
       const { root, manifest, parts } = codeRoot(code);
       log({ op: 'code-root', role, root, bytes: Buffer.byteLength(code), parts: parts.length, sourceSha256: sha256(code) });
       if (!flag('--send')) return root;
@@ -1073,7 +1098,9 @@ async function main(argv) {
     // Fast tier: on-demand threshold BLS, paid per request; no heartbeat.
     async 'spawn-fast'() {
       if (state.fast && !flag('--replace')) throw new Error(`fast tier already deployed (${state.fast})`);
-      const pid = await spawn('fast', { name: 'RNG-Fast-Threshold', lua: fastSource() });
+      const scheduler = await pinScheduler();
+      const pid = await spawn('fast', { name: 'RNG-Fast-Threshold', executionDevice: 'lua-patch@1.0',
+        lua: fastPatchSource(me, scheduler) });
       await send(pid, 'Get-Info');
       return pid;
     },

@@ -180,8 +180,9 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
   }
   const tokenRefusal = (out) => (out && typeof out === 'object' && out.error ? out.error : null);
   async function tokenBalance() {
-    const r = await hb.readState({ node, process: token, path: `now/balance-${me}` });
-    return r.status === 200 && /^\d+$/.test(r.value.trim()) ? BigInt(r.value.trim()) : null;
+    const r = await hb.readState({ node, process: token, path: `now/${ah.tokenBalanceKey(me)}` });
+    const atoms = r.status === 200 ? ah.tokenAtomsFrom(r.value, me) : null;
+    return atoms === null ? null : BigInt(atoms);
   }
 
   // ------------------------------------------------------------ Any-Honest reads and checks

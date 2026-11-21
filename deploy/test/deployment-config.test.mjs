@@ -8,7 +8,7 @@ import {
   loadAllocations, genesisPrelude, badParams, genesisConfig, daoRules, sameScheduler,
   fillTemplate, proposalErrors, checkV3, SUPPLY_ATOMS, setDaoErrors, renounceErrors, fundError,
   effectiveAt, isMoneyProposal, LABS_STAKE_RNG, floorFor, RESERVE_FLOOR_MS, buildErrors, watchAlerts,
-  fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources, beaconRate, historyPoint, rateChecks, MIN_RATE,
+  fastGenesisConfig, PROTOCOL_ROLES, INFO_KEY, protocolSources, patchSources, beaconRate, historyPoint, rateChecks, MIN_RATE,
   retireRole, addRateSample, rateBase, deployMetadata,
 } from '../deploy.mjs';
 
@@ -306,10 +306,9 @@ test('dry-run plan prints the whole v3 sequence and sends nothing', () => {
   assert.deepEqual(spawns.map((l) => l.role), ['token', 'dao', 'beacon', 'fair', 'fast']);
   assert.ok(spawns.every((l) => l.scheduler === pid('sched')), 'one scheduler');
   const [token, dao, beacon, fair, fast] = spawns.map((l) => l.pid);
-  assert.equal(spawns[4].executionDevice, 'lua@5.3a');
+  assert.deepEqual(spawns.map((l) => l.executionDevice), Array(5).fill('lua-patch@1.0'), 'every process on lua-patch@1.0');
   assert.match(spawns[0].prelude, new RegExp(`\\["${DEPLOYER}"\\] = 1000000000000000,`));
   assert.equal(spawns[1].definition['dao-token'], token);
-  assert.equal(spawns[2].executionDevice, 'lua-patch@1.0');
   const sends = lines.filter((l) => l.op === 'send');
   const at = (action) => sends.findIndex((l) => l.action === action);
   const cfg = sends[at('Gov.Configure')];
@@ -616,7 +615,10 @@ local function send(signer, fields, fromProcess)
   for k, v in pairs(fields) do body[k] = v end
   body["from-process"] = fromProcess
   slot = slot + 1
-  base = compute(base, { body = body, timestamp = 1700000000000 + slot, process = "${SELF}", slot = slot })
+  local req = { body = body, timestamp = 1700000000000 + slot, process = "${SELF}", slot = slot }
+  -- lua-patch@1.0: the adapter's one-argument compute, owner and scheduler from its bootstrap.
+  if Lua53bPatchMode then return compute(req).results.output.data end
+  base = compute(base, req)
   return base.results.output.data
 end
 local out = {}
@@ -643,7 +645,11 @@ return table.concat(out, "\\n")`;
     '{"ok":true,"wallet":false}',
     '{"error":"Not authorised","ok":false}',
   ].join('\n');
-  for (const [name, build] of Object.entries(protocolSources)) {
+  const bundles = [
+    ...Object.entries(protocolSources),
+    ...Object.entries(patchSources).map(([name, build]) => [`${name} (lua-patch@1.0)`, () => build(OWNER, SCHED)]),
+  ];
+  for (const [name, build] of bundles) {
     const handle = await AoLoader(fs.readFileSync(wasm), { format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024 });
     const id = pid(`bundle-${name}`);
     const r = await handle(null, {
@@ -765,4 +771,59 @@ test('only a deploy publishes spawns to Arweave (ANS-104 through paralith-mono)'
   assert.deepEqual(deployMetadata({ PARALITH_DEPLOY_METADATA: '1' }), {});
   assert.equal(deployMetadata({}), undefined);
   assert.equal(deployMetadata({ PARALITH_DEPLOY_METADATA: 'true' }), undefined);
+});
+
+test('the token spawns on lua-patch@1.0: balances publish in 256 buckets, raw patches and replies', async (t) => {
+  const wasm = process.env.AOS_WASM
+    || path.join(process.env.PARALITH_ROOT || 'C:/REPO/paralith-mono', 'backend/native/module/AOS.wasm');
+  if (!fs.existsSync(wasm)) return t.skip('AOS.wasm not available');
+  const { default: AoLoader } = await import('@permaweb/ao-loader');
+  const { tokenPatchSource } = await import('../deploy.mjs');
+  const USER = pid('user'), RECIPIENT = pid('recipient'), SELF = 't'.repeat(43);
+  // Buckets by tokenBalanceKey: deployer 165, user 191, recipient 163.
+  const prelude = genesisPrelude({ table: { [DEPLOYER]: '999999999000000', [USER]: '1000000' } });
+  const lua = tokenPatchSource(prelude, DEPLOYER, pid('sched'));
+  assert.ok(/^[\x00-\x7f]*$/.test(lua), 'the spawned token is pure ASCII');
+  const driver = `
+Owner = nil -- aos's own global; the device has none
+local SELF = "${SELF}"
+local function call(slot, signer, fields)
+  local body = { target = SELF, commitments = { c = { type = "rsa-pss-sha512", committer = signer,
+    committed = { "target", "action" } } } }
+  for k, v in pairs(fields) do body[k] = v end
+  local r = compute({ process = SELF, slot = slot, body = body, timestamp = 1700000000000 + slot })
+  local paths = {}
+  for _, p in ipairs(r.patches) do paths[#paths + 1] = p.path end
+  table.sort(paths)
+  return table.concat(paths, " ") .. "\\n" .. r.results.output.data
+end
+local out = {}
+out[#out + 1] = call(1, "${USER}", { Action = "Info" })
+out[#out + 1] = call(2, "${USER}", { Action = "Transfer", Recipient = "${RECIPIENT}", Quantity = "10" })
+out[#out + 1] = Lua53bPublishedState["balances-191"] .. " " .. Lua53bPublishedState["balances-163"]
+out[#out + 1] = call(3, "${USER}", { Action = "Admin.Checkpoint" })
+out[#out + 1] = call(4, "${DEPLOYER}", { Action = "Admin.Checkpoint" })
+return table.concat(out, "\\n")`;
+  const handle = await AoLoader(fs.readFileSync(wasm), { format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024 });
+  const id = pid('token-53b');
+  const r = await handle(null, {
+    Id: 'eval-token-53b', Target: id, Owner: id, From: id, Tags: [{ name: 'Action', value: 'Eval' }],
+    Data: `${lua}\n${driver}`, 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+  }, { Process: { Id: id, Owner: id, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
+  assert.equal(r.Error, undefined, r.Error);
+  const out = (typeof r.Output?.data === 'string' ? r.Output.data : r.Output?.data?.output).split('\n');
+  const genesis = out[0].split(' ');
+  const buckets = genesis.filter((p) => /^\/balances-\d+$/.test(p));
+  assert.equal(buckets.length, 256, 'genesis publishes every bucket');
+  assert.ok(!genesis.some((p) => p.startsWith('/balance-')), 'no per-holder key');
+  assert.ok(genesis.includes('/balances') && genesis.includes('/tokencommit'), 'genesis is a checkpoint');
+  assert.match(out[1], /"Ticker":"RNG"/);
+  assert.equal(out[2], '/balances-163 /balances-191 /replies-2 /tokencommit /transferseq', 'a transfer patches its two buckets');
+  assert.equal(out[3], `{"Action":"Transfer-Success","Balance":"999990","From":"${USER}","Quantity":"10",`
+    + `"Recipient":"${RECIPIENT}","Reference":"t1"}`);
+  assert.equal(out[4], `{"${USER}":"999990"} {"${RECIPIENT}":"10"}`);
+  assert.equal(out[5], '/replies-3', 'a refused checkpoint publishes only its reply');
+  assert.equal(out[6], '{"error":"Not authorised"}');
+  assert.equal(out[7], '/balances /replies-4 /tokencommit', 'the deployer\'s checkpoint');
+  assert.equal(out[8], '{"checkpoint":true,"revision":"2"}');
 });

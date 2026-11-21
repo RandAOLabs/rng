@@ -122,7 +122,7 @@ local function genesisTests()
   eq("genesis credits allocation", Balances[F.user], 1000000)
   eq("genesis credits owner allocation", Balances[F.owner], SUPPLY - 2000000)
   eq("genesis publishes totalsupply", base.totalsupply, "1000000000000000")
-  eq("genesis publishes holder balance key", base["balance-" .. F.process], "1000000")
+  eq("genesis publishes the holder in its bucket", base["balances-180"], '{"' .. F.process .. '":"1000000"}')
   local info = json.decode(base.tokeninfo)
   eq("tokeninfo Sealed", info.Sealed, "true")
   eq("tokeninfo Supply", info.Supply, "1000000000000000")
@@ -703,9 +703,108 @@ local function refusalTests()
   Lua53bPatchMode = previous
 end
 
+--- Balances publish folded into 256 `balances-<n>` buckets, n = the sum of the
+--- address's first four bytes mod 256 (paralith-mono `tokenBalanceKey`). The
+--- fixtures' buckets by that rule: owner 185, user 191, process 180, recipient 163.
+local function foldTests()
+  local function snapshot()
+    local s = {}
+    for k, v in pairs(base) do if k ~= "results" then s[k] = v end end
+    return s
+  end
+  local function changed(before)
+    local keys = {}
+    for k, v in pairs(base) do if k ~= "results" and before[k] ~= v then keys[#keys + 1] = k end end
+    for k in pairs(before) do if base[k] == nil then keys[#keys + 1] = k end end
+    table.sort(keys)
+    return table.concat(keys, ",")
+  end
+  local function bucketKeys()
+    local n, legacy = 0, 0
+    for k in pairs(base) do
+      if type(k) == "string" and k:match("^balances%-%d+$") then n = n + 1 end
+      if type(k) == "string" and k:sub(1, 8) == "balance-" then legacy = legacy + 1 end
+    end
+    return n, legacy
+  end
+
+  for _, mode in ipairs({ false, true }) do
+    local previous = Lua53bPatchMode
+    Lua53bPatchMode = mode
+    local tag = mode and "5.3b " or "5.3a "
+    reset(goodAllocations())
+    send(wallet(F.stranger, { Action = "Info" }))
+    local n, legacy = bucketKeys()
+    eq(tag .. "genesis publishes all 256 buckets", n, 256)
+    eq(tag .. "no per-holder balance- key", legacy, 0)
+    eq(tag .. "owner bucket", base["balances-185"], '{"' .. F.owner .. '":"' .. string.format("%d", SUPPLY - 2000000) .. '"}')
+    eq(tag .. "user bucket", base["balances-191"], '{"' .. F.user .. '":"1000000"}')
+    eq(tag .. "an empty bucket is an empty object", base["balances-0"], "{}")
+
+    local before = snapshot()
+    local r = send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "10" }))
+    eq(tag .. "transfer succeeds", r.Action, "Transfer-Success")
+    eq(tag .. "a transfer rewrites only its two buckets (and the ledger witnesses)", changed(before),
+      mode and "balances-163,balances-191,tokencommit,transferseq"
+        or "balances,balances-163,balances-191,transferseq")
+    eq(tag .. "sender row", base["balances-191"], '{"' .. F.user .. '":"999990"}')
+    eq(tag .. "recipient row", base["balances-163"], '{"' .. F.recipient .. '":"10"}')
+
+    before = snapshot()
+    send(wallet(F.user, { Action = "Balance" }))
+    eq(tag .. "a read rewrites no bucket", changed(before):find("balances%-") , nil)
+
+    r = send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "999990" }))
+    eq(tag .. "a holder sent to zero leaves its bucket", base["balances-191"], "{}")
+    eq(tag .. "recipient row grows", base["balances-163"], '{"' .. F.recipient .. '":"1000000"}')
+    n, legacy = bucketKeys()
+    check(tag .. "still 256 buckets and no balance- key", n == 256 and legacy == 0)
+    Lua53bPatchMode = previous
+  end
+
+  -- 5.3b warm VM: a Transfer never decodes the `balances` checkpoint.
+  local previous = Lua53bPatchMode
+  Lua53bPatchMode = true
+  reset(goodAllocations())
+  send(wallet(F.stranger, { Action = "Info" }))
+  local checkpoint = base.balances
+  local decodeOf, decodes = json.decode, 0
+  json.decode = function(s, ...)
+    if s == checkpoint then decodes = decodes + 1 end
+    return decodeOf(s, ...)
+  end
+  local ok, err = pcall(function()
+    for i = 1, 5 do send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" })) end
+    pay("1")
+  end)
+  json.decode = decodeOf
+  check("5.3b warm transfers ran", ok, err)
+  eq("5.3b warm transfers never decode balances", decodes, 0)
+  eq("5.3b the checkpoint is not rewritten by a transfer", base.balances, checkpoint)
+
+  -- A cold restore from the checkpoint rebuilds the fold: every bucket republished.
+  reset(goodAllocations())
+  send(wallet(F.stranger, { Action = "Info" }))
+  local bucket191 = base["balances-191"]
+  for b = 0, 255 do base["balances-" .. b] = nil end
+  reset(nil, true)
+  send(wallet(F.user, { Action = "Info" }))
+  local n = bucketKeys()
+  eq("5.3b cold restore republishes every bucket", n, 256)
+  eq("5.3b cold restore bucket content", base["balances-191"], bucket191)
+  -- A transfer after the checkpoint: a cold VM is behind it, and refuses.
+  send(wallet(F.user, { Action = "Transfer", Recipient = F.recipient, Quantity = "1" }))
+  reset(nil, true)
+  local r = send(wallet(F.user, { Action = "Info" }))
+  eq("5.3b cold VM behind the checkpoint is refused", base.results.output.data,
+    '{"error":"RNG balance checkpoint is stale"}')
+  check("and restores nothing", next(Balances) == nil and TotalSupply == 0, r.error)
+  Lua53bPatchMode = previous
+end
+
 function runTokenTests()
   local suites = { genesisTests, sealTests, walletTests, identityTests, sequenceTests, receiptBoundTests, lostNoticeTests,
-                   restoreTests, patchModeTests, refusalTests }
+                   restoreTests, patchModeTests, refusalTests, foldTests }
   for i, suite in ipairs(suites) do
     local ok, err = pcall(suite)
     check("suite " .. i .. " ran", ok, err)

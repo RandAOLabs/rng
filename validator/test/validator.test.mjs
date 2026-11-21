@@ -71,7 +71,12 @@ function mockNode({ skew = 0, delay = 100 } = {}) {
         if (!node.infos[pid]) throw new Error('unknown process');
         return structuredClone(node.infos[pid]);
       },
-      readKey: async (pid, key) => (key.startsWith('now/balance-') ? node.balances[key.slice(12)] ?? null : null),
+      // The token's folded buckets; one nobody holds in is not published (null).
+      readKey: async (pid, key) => {
+        if (!key.startsWith('now/balances-')) return null;
+        const rows = Object.entries(node.balances).filter(([a]) => `now/${tl.tokenBalanceKey(a)}` === key);
+        return rows.length ? JSON.stringify(Object.fromEntries(rows)) : null;
+      },
       post: async (pid, action, data) => { const slot = ++node.slot; node.posts.push({ pid, action, data, slot, t: clock.t }); return slot; },
       transfer: async (token, tags) => { node.transfers.push({ token, tags }); return ++node.slot; },
     },
@@ -484,4 +489,16 @@ test('bond tops a registered validator up to the stake, or by a given amount', a
   const n = node.transfers.length;
   await bondCommand({ io: node.io, me: ME, beacon: BEACON });
   assert.equal(node.transfers.length, n);
+});
+
+test('token balances read from their folded bucket, by rng-token.lua\'s rule', () => {
+  // Sum of the first four bytes mod 256, as rng-token.lua balanceBucket.
+  assert.equal(tl.tokenBalanceKey('process'.padEnd(43, '_')), 'balances-180');
+  assert.equal(tl.tokenBalanceKey('user'.padEnd(43, '_')), 'balances-191');
+  assert.equal(tl.tokenBalanceKey('recipient'.padEnd(43, '_')), 'balances-163');
+  const a = 'A'.repeat(43);
+  assert.equal(tl.tokenAtomsFrom(`{"${a}":"25000000000"}`, a), '25000000000');
+  assert.equal(tl.tokenAtomsFrom('{}', a), '0');
+  assert.equal(tl.tokenAtomsFrom('<html>', a), null);
+  assert.equal(tl.tokenAtomsFrom(null, a), null);
 });
