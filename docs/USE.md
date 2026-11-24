@@ -147,7 +147,9 @@ The Credit-Notice credits the sender and runs `Request-Random` for it in the
 same slot, at today's price. `X-For` is ignored here: the payer is the
 requester. Then:
 
-1. Read the round from `beaconstate.seen["<wallet>|<request id>"]`.
+1. Read the round from `beaconseen-<n>["<wallet>|<request id>"][0]`, where
+   `n` is FNV-1a (32-bit) of `"<wallet>|<request id>"` mod 256 (lib/js
+   `fastSeenKey`; each entry is `[round, forget-at]`).
 2. Once `beaconinfo.round` reaches it, read the round record:
    `beaconstate.rounds["<round>"]` (the last 32), or older rounds at their slot
    through `beaconhistory`.

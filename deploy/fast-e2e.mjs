@@ -4,7 +4,7 @@
 // (validator/daemon.mjs), and paid requests. Proves rounds advance and
 // measures them. Never point it at a live node: it spawns and spends.
 //
-//   node deploy/fast-e2e.mjs --image hbnode:<tag> [--port 18201] [--seconds 60] [--every-ms 250] [--keep]
+//   node deploy/fast-e2e.mjs --image hbnode:<tag> [--port 18201] [--seconds 60] [--every-ms 250] [--sample-ms 250] [--keep]
 //     starts its own node (docker container rng-fast-e2e) and removes it after
 //   HB_NODE=http://127.0.0.1:<port> node deploy/fast-e2e.mjs ...
 //     an already running local node; it must have an LMDB store, or it will
@@ -20,6 +20,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as bls from '../validator/bls.mjs';
 import * as hb from '../validator/vendor/hbclient.mjs';
+import { fastSeenKey, fastSeenRound } from '../lib/js/fast.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -32,6 +33,7 @@ if (!NODE || !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(NODE)) {
 }
 const SECONDS = Number(arg('--seconds', 60));
 const EVERY_MS = Number(arg('--every-ms', 250));
+const SAMPLE_MS = Number(arg('--sample-ms', 250)); // how often the round is read: the round trip's resolution
 const UNIT = 1_000_000n;
 const PRICE = 3n; // signerFee 1 x 2 signers + protocolFee 1
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,6 +55,10 @@ if (IMAGE) {
     'scheduling-mode': 'local_confirmation', 'scheduler-lookahead': false, 'scheduler-publish-remote': false,
     'force-signed': false, 'store-all-signed': false,
     'rate-limit-requests': 100000, 'rate-limit-period': 60, 'rate-limit-max': 100000, 'rate-limit-min': -100000,
+    // The production nodes' snapshot cadence (paralith-mono infra/nodes/node-config.v011.json): the
+    // default snapshots a process every slot, which for wasm-patch is its whole linear memory.
+    'process-snapshot-time': 900, 'process-snapshot-slots': 1000, 'process-snapshot-target': false,
+    'process-delta-checkpoint-slots': 1000,
     store: [lmdb, { 'store-module': 'hb_store_fs', name: '/app/cache-mainnet', 'ao-types': 'store-module="atom"' }],
   };
   fs.mkdirSync(path.join(dir, 'node', 'keys'), { recursive: true });
@@ -129,7 +135,7 @@ const sampler = (async () => {
   while (sampling) {
     const info = await key('beaconinfo').catch(() => null);
     if (info) samples.push({ at: Date.now(), round: info.round, pending: info.pendingCount });
-    await sleep(250);
+    await sleep(SAMPLE_MS);
   }
 })();
 
@@ -154,7 +160,8 @@ const deadline = Date.now() + 180_000;
 let st;
 for (;;) {
   st = await key('beaconstate');
-  const bound = sent.map((s) => st?.seen?.[`${me}|${s.id}`]);
+  const bound = await Promise.all(sent.map(async (s) => fastSeenRound(await key(fastSeenKey(me, s.id)), me, s.id)));
+  for (let i = 0; i < sent.length; i++) sent[i].round = bound[i];
   if (bound.every((r) => r !== undefined) && Math.max(...bound.map(Number)) <= st.round) break;
   if (Date.now() > deadline) break;
   await sleep(500);
@@ -167,7 +174,7 @@ stop();
 const latencies = [];
 const unserved = [];
 for (const s of sent) {
-  const r = Number(st?.seen?.[`${me}|${s.id}`]);
+  const r = Number(s.round);
   const hit = samples.find((x) => x.at >= s.at && x.round >= r);
   if (!Number.isFinite(r) || !hit) unserved.push(s.id); else latencies.push(hit.at - s.at);
 }

@@ -47,6 +47,7 @@ import * as ah from '../validator/anyhonest.mjs';
 import * as bls from '../validator/bls.mjs';
 import { findRound, httpReader } from '../lib/js/history.ts';
 import { fastRequestPreimage } from '../lib/js/derive.ts';
+import { fastSeenKey, fastSeenRound } from '../lib/js/fast.ts';
 import {
   FairClient, FairError, memoryStore, fairOpenTags, fairExpireTags, fairWithdrawTags, fairFundTags,
   payAndRequestTags, findRequest, verifySession, sessionValue, finalValue, forfeitValue, requestValue, fairRevealTags,
@@ -255,8 +256,7 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
   async function fastSeen(requester, id, timeoutMs = 30_000) {
     const end = Date.now() + timeoutMs;
     while (Date.now() < end) {
-      const st = await cachedKey(fast, 'beaconstate', 500);
-      const r = st?.seen?.[`${requester}|${id}`];
+      const r = fastSeenRound(await cachedKey(fast, fastSeenKey(requester, id), 500), requester, id);
       if (r !== undefined) return Number(r);
       await sleep(500);
     }

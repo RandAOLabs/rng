@@ -8,6 +8,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
+import { orderPrelude, transcriptHook, evalTail } from './order-check.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -63,6 +64,7 @@ const lua = (v) => Array.isArray(v) ? `{ ${v.map(lua).join(', ')} }`
   : typeof v === 'number' || typeof v === 'boolean' ? String(v) : luaString(v);
 
 const bundle = [
+  orderPrelude(),
   read('protocol/vendor/json.lua'),
   'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
@@ -73,6 +75,7 @@ const bundle = [
   read('protocol/vendor/gov.lua'),
   read('protocol/fair/fair.lua'),
   `F = ${lua(F)}`,
+  transcriptHook(),
   fixture(read('protocol/test/fair_test.lua')),
 ].join('\n');
 
@@ -91,11 +94,11 @@ if (live !== -1) {
   if (res.status !== 200) { console.error(`${node}: HTTP ${res.status}\n${body.slice(0, 3000)}`); process.exit(1); }
   verdict(body);
 } else {
-  const handle = await AoLoader(fs.readFileSync(AOS_WASM), { format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024 });
+  const handle = await AoLoader(fs.readFileSync(AOS_WASM), { format: 'wasm32-unknown-emscripten', computeLimit: process.env.RNG_PAIRS ? 9e15 : 9e12, memoryLimit: 512 * 1024 * 1024 });
   const pid = addr('fair-tests');
   const result = await handle(null, {
     Id: 'eval-fair-tests', Target: pid, Owner: pid, From: pid, Tags: [{ name: 'Action', value: 'Eval' }],
-    Data: bundle + '\nreturn fairtest()', 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+    Data: bundle + evalTail('fairtest'), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
   }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
   if (result.Error) { console.error(result.Error); process.exit(1); }
   const out = result.Output?.data;

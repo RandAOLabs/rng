@@ -18,7 +18,8 @@
 -- message (Transfer with X-Request-Id: pay and request). The request binds to
 -- the next unsigned round; the committee signs that round; the process derives
 -- one value per request and sends each requesting PROCESS one RNG-Result.
--- A wallet reads its round from `beaconstate.seen["<wallet>|<id>"]` and its
+-- A wallet reads its round from `beaconseen-<shard>["<wallet>|<id>"][1]` (shard:
+-- seenShard below; lib/js fastSeenKey) and its
 -- value from the round record (pushes to wallets stall the node's delivery).
 -- A round the committee does not sign in time is abandoned: its requests are
 -- refunded in full and requesting processes get RNG-Error Round-Abandoned.
@@ -63,6 +64,13 @@ local HISTORY_KEEP = 1024    -- rounds listed in `beaconhistory` (round -> slot)
 -- `seen` window below is only belt and braces, keyed by scheduler time (the
 -- assignment's timestamp, never a time the sender writes).
 local GUARD_MS = 600000      -- a request id is remembered this long (scheduler time)
+-- `seen` (every request id of the last GUARD_MS) is published in SEEN_SHARDS
+-- keys `beaconseen-<n>`, not in `beaconstate`, and kept out of the per-message
+-- rollback copy: it grows with the request rate, and copying and publishing
+-- it whole made every message cost ~10 us per remembered request (wasm-patch,
+-- 6,000 at 10 requests/s: 59 ms a message, 766 KB published).
+local SEEN_SHARDS = 256
+local SEEN_PREFIX = "beaconseen-"
 local CREDIT_KEEP = 1000     -- token references kept before the oldest fold into `creditFloor`
 local EXECUTED_KEEP = 256    -- DAO proposals remembered as executed (see markExecuted)
 -- A round left unsigned abandonAfterMs after its oldest request is abandoned
@@ -150,6 +158,8 @@ local function deflate(v)
   return v
 end
 
+local restoreSeen -- the `seen` window from its shards (with the seen helpers below)
+
 local function restore(base)
   local published = int(base and base.beaconrev, 0)
   if published <= int(Beacon.rev, 0) then return false end
@@ -159,6 +169,8 @@ local function restore(base)
     -- A published state without owners has none: never re-arm the wallet.
     Beacon.owners = freshOwners(false)
     for k, v in pairs(deflate(saved)) do Beacon[k] = v end
+    -- `seen` is published in shards (an older state still carries it whole).
+    if type(saved.seen) ~= "table" then restoreSeen(base) end
     local hok, history = pcall(json.decode, base.beaconhistory or "")
     if hok and type(history) == "table" and type(history.rounds) == "table" then
       Beacon.history = deflate(history.rounds)
@@ -189,6 +201,135 @@ local function deepCopy(v)
   local t = {}
   for k, x in pairs(v) do t[k] = deepCopy(x) end
   return t
+end
+
+--- The request-id window: never copied for a rollback nor in `beaconstate`.
+local GUARDS = { seen = true, seenQueue = true }
+
+--- A copy of the state for a rollback, sharing the guard window (its one
+--- change in a message is undone from SeenUndo).
+local function copyState(b)
+  local t = {}
+  for k, v in pairs(b) do t[k] = GUARDS[k] and v or deepCopy(v) end
+  return t
+end
+
+--- FNV-1a (32-bit) of a `seen` key, mod SEEN_SHARDS: the `beaconseen-<n>`
+--- key it is published in (lib/js fastSeenKey is the same rule).
+local function seenShard(key)
+  local h = 2166136261
+  for i = 1, #key do h = ((h ~ string.byte(key, i)) * 16777619) & 0xffffffff end
+  return h % SEEN_SHARDS
+end
+
+--- Shards whose entries changed this message (republished), and this
+--- message's insert, to undo if its handler fails.
+local SeenDirty, SeenUndo = {}, {}
+
+--- shard -> { key -> forget-at }: derived from exactly one `Beacon.seen`
+--- (with its queue); a restore that replaces it rebuilds the index and
+--- republishes every shard (the token's fold index does the same).
+local Shards = { seen = nil }
+
+local function shardIndex()
+  if Shards.seen ~= Beacon.seen then
+    Shards.seen, Shards.rows = Beacon.seen, {}
+    for _, e in ipairs(Beacon.seenQueue) do
+      local n = seenShard(e[1])
+      Shards.rows[n] = Shards.rows[n] or {}
+      Shards.rows[n][e[1]] = int(e[2], 0)
+      SeenDirty[n] = true
+    end
+  end
+  return Shards.rows
+end
+
+local function seenAdd(key, round, forgetAt)
+  local rows = shardIndex()
+  Beacon.seen[key] = round
+  local q = Beacon.seenQueue
+  q[#q + 1] = { key, forgetAt }
+  local n = seenShard(key)
+  rows[n] = rows[n] or {}
+  rows[n][key] = forgetAt
+  SeenDirty[n] = true
+  SeenUndo[#SeenUndo + 1] = key
+end
+
+local function seenDrop(key)
+  local rows = shardIndex()
+  Beacon.seen[key] = nil
+  local n = seenShard(key)
+  if rows[n] then
+    rows[n][key] = nil
+    if next(rows[n]) == nil then rows[n] = nil end
+  end
+  SeenDirty[n] = true
+end
+
+--- Forget request ids past their guard (scheduler time).
+local function forgetSeen(now)
+  local q, expired = Beacon.seenQueue, 0
+  while expired < #q and int(q[expired + 1][2], 0) < now do expired = expired + 1 end
+  if expired > 0 then
+    for i = 1, expired do seenDrop(q[i][1]) end
+    local n = #q
+    for i = 1, n - expired do q[i] = q[i + expired] end
+    for i = n, n - expired + 1, -1 do q[i] = nil end
+  end
+end
+
+--- A failed handler's insert, taken back (the queue's last entries).
+local function undoSeen()
+  for i = #SeenUndo, 1, -1 do
+    local key = SeenUndo[i]
+    seenDrop(key)
+    local q = Beacon.seenQueue
+    if q[#q] and q[#q][1] == key then q[#q] = nil end
+  end
+  SeenUndo = {}
+end
+
+--- Publish the changed shards: each a JSON object key -> [round, forget-at],
+--- so a restore rebuilds the window exactly; an empty shard is removed.
+local function publishSeen(result)
+  local rows = shardIndex()
+  for n in pairs(SeenDirty) do
+    local part = rows[n]
+    if part then
+      local out = {}
+      for key, forgetAt in pairs(part) do out[key] = { int(Beacon.seen[key], 0), forgetAt } end
+      result[SEEN_PREFIX .. n] = encode(jsonObject(out))
+    else
+      result[SEEN_PREFIX .. n] = nil
+    end
+  end
+  SeenDirty = {}
+end
+
+--- The window from published shards (a restore): every `beaconseen-<n>` key
+--- of `base`, in forget-at order (ties by key), as the queue keeps it.
+restoreSeen = function(base)
+  local entries = {}
+  for k, v in pairs(base) do
+    if type(k) == "string" and k:sub(1, #SEEN_PREFIX) == SEEN_PREFIX and type(v) == "string" then
+      local ok, part = pcall(json.decode, v)
+      if ok and type(part) == "table" then
+        for key, e in pairs(part) do
+          if type(e) == "table" then entries[#entries + 1] = { key, int(e[1], 0), int(e[2], 0) } end
+        end
+      end
+    end
+  end
+  table.sort(entries, function(a, b)
+    if a[3] ~= b[3] then return a[3] < b[3] end
+    return a[1] < b[1]
+  end)
+  Beacon.seen, Beacon.seenQueue = {}, {}
+  for _, e in ipairs(entries) do
+    Beacon.seen[e[1]] = e[2]
+    Beacon.seenQueue[#Beacon.seenQueue + 1] = { e[1], e[3] }
+  end
 end
 
 --- A message must be signed for THIS beacon: a member's Round or Partial, or
@@ -542,9 +683,7 @@ H["Request-Random"] = function(base, msg, from, now)
   -- Request-Id grinding against already-published partials.
   local r = int(Beacon.round, 0) + 1
   if int(Beacon.lockedRound, 0) == r then r = r + 1 end
-  Beacon.seen[key] = r
-  local q = Beacon.seenQueue
-  q[#q + 1] = { key, now + GUARD_MS }
+  seenAdd(key, r, now + GUARD_MS)
   local keyRound = tostring(r)
   local list = Beacon.pending[keyRound] or {}
   list[#list + 1] = { requester = from, requestId = requestId, charged = cost,
@@ -705,14 +844,7 @@ end
 --- deterministic and published partials may already reveal it, so a locked
 --- number is skipped and never carries a value.
 local function advance(now)
-  local q, expired = Beacon.seenQueue, 0
-  while expired < #q and int(q[expired + 1][2], 0) < now do expired = expired + 1 end
-  if expired > 0 then
-    for i = 1, expired do Beacon.seen[q[i][1]] = nil end
-    local n = #q
-    for i = 1, n - expired do q[i] = q[i + expired] end
-    for i = n, n - expired + 1, -1 do q[i] = nil end
-  end
+  forgetSeen(now)
   local r = int(Beacon.round, 0) + 1
   local due = abandonAt(r)
   if not due or now < due then return end
@@ -1134,7 +1266,7 @@ local function propose(base, verb, msg, from, now)
   local v = msg["Effective-At"]
   if class == "harmless" and (v == nil or int(v, 0) <= now) then return applyVerb(base, verb, msg, from, now) end
   local real = Beacon
-  Beacon = deepCopy(real)
+  Beacon = copyState(real)
   GovState = Beacon.owners
   local ok, res = pcall(applyVerb, base, verb, msg, from, now)
   Beacon, GovState = real, real.owners
@@ -1267,7 +1399,8 @@ function compute(base, req, opts)
   elseif not handler then
     result = fail(base, "unknown action '" .. tostring(msg.Action) .. "'")
   else
-    local saved = deepCopy(Beacon)
+    local saved = copyState(Beacon)
+    SeenUndo = {}
     local ok, out = pcall(function()
       local from = actor(msg, base)
       Who = Gov.ownerOf(base, type(raw) == "table" and raw or nil)
@@ -1294,6 +1427,7 @@ function compute(base, req, opts)
       -- A handler that failed sends nothing, so it takes no sequence number,
       -- and leaves no half-applied state.
       Beacon = saved
+      undoSeen()
       bindOwners(false)
       FromProcess = false
       Notices, HistoryNew, Finalized, Abandoned = {}, {}, nil, nil
@@ -1306,8 +1440,12 @@ function compute(base, req, opts)
   if Abandoned then result.beaconabandoned = encode(Abandoned) end
   Beacon.rev = int(Beacon.rev, 0) + 1
   local state = {}
-  for k, v in pairs(Beacon) do if type(v) ~= "function" and k ~= "history" then state[k] = v end end
+  for k, v in pairs(Beacon) do
+    if type(v) ~= "function" and k ~= "history" and not GUARDS[k] then state[k] = v end
+  end
   result.beaconstate = encode(state)
+  -- `seen`: only the shards this message changed (all of them after a restore).
+  publishSeen(result)
   -- Round -> slot for the last HISTORY_KEEP rounds; rewritten only when it moves.
   if #HistoryNew > 0 or result.beaconhistory == nil then
     result.beaconhistory = encode({ keep = HISTORY_KEEP, rounds = Beacon.history })

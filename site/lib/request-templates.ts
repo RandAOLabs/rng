@@ -26,7 +26,7 @@ export function requestTemplates(ids: TemplateIds, prices: TemplatePrices) {
     { id: "fast.pay-and-request", tier: "fast", sender: "wallet or process", target: ids.token,
       tags: { Action: "Transfer", Recipient: ids.fast, Quantity: fastAtoms, "X-Request-Id": "<1-128 chars, unique per sender>" },
       notes: "Credits the sender and requests in the same slot at today's price. X-For is ignored: the payer is the requester. A refused request leaves the credit (Withdraw).",
-      result: `Wallet: round = Fast beaconstate.seen["<sender>|<request id>"]; then beaconstate.rounds["<round>"] (last 32) or beaconhistory -> slot -> beaconround. value = sha256("hyperbeam/rng/fast/v2/request|" + round.value + "|" + sender + "|" + requestId). A process also gets RNG-Result.` },
+      result: `Wallet: round = Fast beaconseen-<n>["<sender>|<request id>"][0] (n = FNV-1a 32-bit of "<sender>|<request id>" mod 256, lib/js fastSeenKey); then beaconstate.rounds["<round>"] (last 32) or beaconhistory -> slot -> beaconround. value = sha256("hyperbeam/rng/fast/v2/request|" + round.value + "|" + sender + "|" + requestId). A process also gets RNG-Result.` },
     { id: "fast.fund", tier: "fast", sender: "anyone", target: ids.token,
       tags: { Action: "Transfer", Recipient: ids.fast, Quantity: "<atoms; whole RNG are credited, dust refunded>", "X-For": "<account to credit, default the sender>" },
       notes: "Prepays a Fast balance at the prices in force now (pay at deposit, up to 8 price batches).",
