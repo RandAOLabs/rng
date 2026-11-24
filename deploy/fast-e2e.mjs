@@ -171,6 +171,9 @@ for (;;) {
 }
 sampling = false;
 await sampler.catch(() => {});
+// The loop above can see the last round final before the sampler does: one
+// last sample, so those requests count (at this later time, an upper bound).
+samples.push({ at: Date.now(), round: st?.round ?? 0 });
 stop();
 
 // Round trip per request: sent -> the first sample at which its round was final.
@@ -188,6 +191,7 @@ const spanS = first && last && last.at > first.at ? (last.at - first.at) / 1000 
 const rounds = finalRound - before;
 const report = {
   node: NODE, fast, requests: sent.length, served: latencies.length, unserved: unserved.length,
+  ...(unserved.length ? { unservedIds: unserved.slice(0, 10).map((id) => ({ id, round: sent.find((x) => x.id === id)?.round ?? null })) } : {}),
   rounds, roundsPerSecond: spanS ? Number(((rounds - 1) / spanS).toFixed(3)) : null,
   requestsPerRound: rounds ? Number((latencies.length / rounds).toFixed(2)) : null,
   roundTripMs: { p50: pct(latencies, 0.5), p95: pct(latencies, 0.95), max: pct(latencies, 1) },

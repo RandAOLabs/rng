@@ -188,6 +188,9 @@ for (;;) {
 }
 sampling = false;
 await sampler.catch(() => {});
+// The loop above can see the last round final before the sampler does: one
+// last sample, so those requests count (at this later time, an upper bound).
+samples.push({ at: Date.now(), round: info?.round ?? 0 });
 const recent = await key(beacon, 'beaconrecent').catch(() => []) || [];
 
 // 5. Fair draws, one at a time, while the beacon keeps running.
