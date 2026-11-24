@@ -984,7 +984,18 @@ local function finalize(base, o, now)
   local bySubscriber, subscriberOrder = {}, {}
   -- A subscription is deleted once its last round has passed (finalized or
   -- not), so the map holds only live ones.
-  for subKey, sub in pairs(Timelock.subscriptions or {}) do
+  -- Sorted, as lua-patch@1.0 (Luerl) walks `pairs`: which subscriber gets
+  -- rng-subscription-<i>, and its results' order, must not depend on the VM's
+  -- table order (wasm-patch@1.0 is PUC).
+  local subs = Timelock.subscriptions or {}
+  local subKeys = {}
+  for subKey in pairs(subs) do subKeys[#subKeys + 1] = subKey end
+  table.sort(subKeys, function(a, b)
+    if type(a) ~= type(b) then return type(a) < type(b) end
+    return a < b
+  end)
+  for _, subKey in ipairs(subKeys) do
+    local sub = subs[subKey]
     if sub.active and r >= int(sub.startRound, 0) and r <= int(sub.endRound, -1) then
       local results = bySubscriber[sub.subscriber]
       if not results then

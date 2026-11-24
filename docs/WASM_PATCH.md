@@ -85,9 +85,10 @@ Reading it:
 - **Iteration order.** Luerl walks `pairs` sorted, PUC in hash order.
   `node protocol/test/order-check.mjs` runs every contract suite with `pairs`
   forced ascending, then descending, and compares a digest of every compute
-  result. One leak found and fixed: the token's genesis refusal named the
-  first bad allocation in `pairs` order (now sorted, Luerl's order, so
-  lua-patch output is unchanged).
+  result. Two leaks found and fixed, both now walking keys sorted (Luerl's
+  order, so lua-patch output is unchanged): the token's genesis refusal named
+  the first bad allocation in `pairs` order, and the Any-Honest beacon handed
+  out `rng-subscription-<i>` (and each subscriber's results) in `pairs` order.
 - **Suites.** `test:protocol`, `test:node`, deploy config tests and the
   fast/Any-Honest e2e runs pass on the branch.
 
