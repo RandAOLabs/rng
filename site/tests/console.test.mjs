@@ -120,7 +120,8 @@ test('FairClient commits, waits for reveal-due, then reveals (memory store)', as
   let view = null, info = {};
   const sent = [];
   const fetchStub = async (url, init) => {
-    if (url.endsWith('/now/fairsessions')) return new Response(JSON.stringify(view ? { [game]: [view] } : {}));
+    // Sessions are published in shards, fairsessions-<n> (lib/js fairShardKey).
+    if (/\/now\/fairsessions-\d+$/.test(url)) return new Response(JSON.stringify(view ? { [game]: [view] } : {}));
     if (url.endsWith('/now/fairinfo')) return new Response(JSON.stringify(info));
     if (url.includes('/schedule')) { sent.push(init.body); return new Response('', { headers: { slot: String(sent.length) } }); }
     if (url.includes('/push&')) return new Response('{}');

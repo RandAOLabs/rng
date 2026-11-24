@@ -23,6 +23,16 @@ export async function sha256Hex(text: string | Uint8Array) {
   return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Fair play publishes sessions and accounts in 256 shards per kind,
+ *  `fairsessions-<n>` / `fairaccounts-<n>`, n = FNV-1a (32-bit) of the game
+ *  mod 256 (protocol/fair/fair.lua shardOf: change them together). */
+export function fairShard(game: string): number {
+  let h = 2166136261;
+  for (const b of new TextEncoder().encode(game)) h = Math.imul(h ^ b, 16777619) >>> 0;
+  return h % 256;
+}
+export const fairShardKey = (kind: "sessions" | "accounts", game: string) => `fair${kind}-${fairShard(game)}`;
+
 export const commitHash = (game: string, session: string, secret: string) =>
   sha256Hex(`rng/fair/v1/commit|${game}|${session}|${secret}`);
 export const sessionValue = (beaconValue: string, game: string, session: string) =>
@@ -374,17 +384,18 @@ export class FairClient {
 
   /** The game's prepaid balance (null: never funded). */
   async account(game: string) {
-    const all = await this.read<Record<string, FairAccount>>("fairaccounts");
+    // A shard with no account yet is not published.
+    const all = await this.read<Record<string, FairAccount>>(fairShardKey("accounts", game)).catch(() => null);
     return all?.[game] ?? null;
   }
 
   async sessions(game: string) {
-    const all = await this.read<Record<string, FairSession[]>>("fairsessions");
+    const all = await this.read<Record<string, FairSession[]>>(fairShardKey("sessions", game)).catch(() => null);
     return Array.isArray(all?.[game]) ? all[game] : [];
   }
 
   /**
-   * A resolved session no longer in `fairsessions` (each game keeps its last
+   * A resolved session no longer in its `fairsessions-<n>` shard (each game keeps its last
    * `keep`): `fairhistory` names the slot whose output is its full view.
    * Null once it has aged out of the index too (then scan the game's
    * Fair-Result messages, deploy/README.md "History"). NotRetainedError when

@@ -301,7 +301,7 @@ X-Fair-Game: <the game's wallet or process id>
 ```
 
 `fairFundTags(fair, game, atoms)` builds it. The balance is in
-`fairaccounts[<game>]` as `{ balance, reserved, nonce }` (atoms).
+`fairaccounts-<n>[<game>]` as `{ balance, reserved, nonce }` (atoms).
 
 **2. The game opens a session** for the player's browser key:
 
@@ -332,7 +332,7 @@ retries `Not-Opened` while the game's `Fair.Open` is on its way.
 outstanding and, when the beacon value `v_b` arrives, gives each session
 `v = SHA-256("rng/fair/v1/beacon|" v_b "|" game "|" session)` and a deadline
 `revealBy` (now + `fairWindowMs`, 60 s). The session's status in
-`fairsessions[<game>]` becomes `reveal-due`.
+`fairsessions-<n>[<game>]` becomes `reveal-due`.
 
 **5. The browser reveals** before `revealBy`:
 
@@ -359,7 +359,8 @@ Final: <hex>        Round: <beacon round>
 Data: <the session view, JSON>
 ```
 
-A wallet game reads `fairsessions` (unresolved sessions plus the last few
+A wallet game reads its `fairsessions-<n>` shard (n = lib/js `fairShard(game)`:
+FNV-1a of the game mod 256; unresolved sessions plus the last few
 resolved), then `fairhistory` for older ones (`FairClient.history`).
 `verifySession(view)` in `lib/js/fair-client.ts` rechecks every hash.
 
@@ -373,7 +374,7 @@ Nonce: <greater than the last one used>
 Quantity: <atoms>                     required; missing or empty is refused
 ```
 
-To take everything, read `fairaccounts[<game>].balance` and send that.
+To take everything, read `fairaccounts-<n>[<game>].balance` and send that.
 
 A game can embed `lib/fair.lua` instead of using the fair process, and skip
 the hop.

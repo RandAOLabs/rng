@@ -27,7 +27,7 @@ import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as hb from '../validator/vendor/hbclient.mjs';
-import { commitHash, newSecret } from '../lib/js/fair-client.ts';
+import { commitHash, newSecret, fairShardKey } from '../lib/js/fair-client.ts';
 import { benchNode, startBenchNode } from './bench-target.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -175,7 +175,7 @@ if (FAIR > 0) {
   const player = rsa();
   const playerAddress = hb.jwkToAddress(player);
   const sessionView = async (session) => {
-    const all = await key(fair, 'fairsessions').catch(() => null);
+    const all = await key(fair, fairShardKey('sessions', me)).catch(() => null);
     return (all?.[me] || []).find((v) => v.session === session && v.player === playerAddress) || null;
   };
   for (let i = 1; i <= FAIR; i++) {

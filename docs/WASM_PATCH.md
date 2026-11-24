@@ -50,7 +50,7 @@ mostly the contract; store = writing the slot)
 |---|---:|---:|---:|---:|
 | fast: Credit-Notice / Partial / Round | 88 / 55 / 102 ms | 7.6 / 6.9 / 9.4 ms | 8 ms | 24 ms |
 | beacon: Act / Credit-Notice | 134 / 54 ms | 13.4 / 6.5 ms | 14 ms | 18 ms |
-| fair: Open / Commit / Reveal / RNG-Result | 38 / 34 / 67 / 51 ms | 5.0 / 3.9 / 5.8 / 6.1 ms | 13 ms | 13 ms |
+| fair: Open / Commit / Reveal / RNG-Result | 38 / 34 / 67 / 51 ms | 2.7 / 2.6 / 4.1 / 3.0 ms (flat fix; 5.0 / 3.9 / 5.8 / 6.1 before it) | 13 ms | 11 ms |
 | token: Transfer | 5.2-9.5 ms | 2.0-3.0 ms | 13-18 ms | 28-31 ms |
 
 **rng@1.0 per call** (direct, `hb-integ:204a7862d` vs the branch)
@@ -110,13 +110,40 @@ and outside `beaconstate`, published in 256 shards `beaconseen-<n>` (FNV-1a of
 `"<requester>|<id>"` mod 256; lib/js `fastSeenKey`). Readers of
 `beaconstate.seen` moved to it.
 
-## Not done (measured or found, left for later)
+## Fair play
 
-- **Fair play is not flat-cost.** Every state-changing message deep-copies
-  and re-encodes all of `fairstate` (sessions, up to 1024 history entries,
-  1024 credit references, accounts). Same fix as the fast tier (shards,
-  undo log); it changes the published read layout (`fairstate`,
-  `fairsessions`), so the site and `lib/js/fair-client.ts` move with it.
+The same pattern as the fast tier, wider: every state change deep-copied the
+whole state for rollback and re-encoded every session, account and the
+history (`fairstate`, `fairsessions`, `fairaccounts`, `fairhistory`).
+`bench-wasm.mjs --role fair`, one funded `Fair.Open` (wasm):
+
+| open sessions | before | after |
+|---:|---:|---:|
+| 0 (full history, credits) | 7.1 ms, 40 KB published | 0.5 ms, 0.8 KB |
+| 1,000 | 92 ms, 628 KB | 0.4 ms, 0.8 KB |
+| 10,000 (deploy's maxOpen) | 1,369 ms, 5.9 MB | 1.1-2.9 ms, 1.0 KB |
+
+- Rollback: on wasm-patch through `ao.atomic` (the runtime's write journal,
+  lua-atomic@1.0's contract), no copy; on lua-patch the deep copy as before.
+  The suite runs both (`RNG_FAKE_ATOMIC=1 node protocol/test/run-fair-tests.mjs`).
+- Sessions and accounts are published in 256 shards each,
+  `fairsessions-<n>` / `fairaccounts-<n>` (n = FNV-1a of the game mod 256;
+  lib/js `fairShard`, `fairShardKey`; `FairClient` reads them); a message
+  rewrites only the shards of the games it touched. A shard holds every game
+  that hashes to it, so its size is open sessions / 256: flat up to the
+  configured `maxOpen`, slowly growing past it (50,000 open: ~9 ms).
+- `fairstate` is a recovery checkpoint every 1000 changes (and on any owner
+  or queue change), anyhonest.lua's rule; a restore from an older checkpoint
+  counts on from `fairrev`. `fairhistory` is rewritten only when it moves.
+- Pruned session keys (`done`) expire from a time-ordered queue instead of a
+  scan of the whole map on every resolution.
+- Measured end to end (`anyhonest-e2e --fair 10`, wasm): fair slot exec
+  3.9 -> 1.9 ms (Open 2.7, Commit 2.6, Reveal 4.1, RNG-Result 3.0 ms); the
+  draw round trip is fair's batching window (~5.6 s) either way.
+
+## Left as is
+
 - **The fast tier's `balances`/`purses`/`accrued` and `credited`** stay in
   `beaconstate`: bounded (CREDIT_KEEP 1000) or growing with accounts, not
-  with requests.
+  with requests. Fair's and the beacon's credit windows (1024) are scanned
+  per credit: bounded.

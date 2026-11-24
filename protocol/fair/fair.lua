@@ -74,6 +74,115 @@ local function deflate(v)
   return v
 end
 
+--- Published per game, flat per message. A state change used to deep-copy
+--- and re-encode every session, account and the history (wasm-patch, a
+--- funded Fair.Open: 7 ms empty, 92 ms at 1,000 open sessions, 1.4 s and
+--- 6 MB published at 10,000). Now sessions and accounts are published in
+--- SHARDS keys each, `fairsessions-<n>` / `fairaccounts-<n>` (n = FNV-1a of
+--- the game mod SHARDS: lib/js fairShardKey), and a message rewrites only the
+--- shards of the games it touched; `fairstate`, the whole state, is a recovery
+--- checkpoint every CHECKPOINT_EVERY changes (anyhonest.lua's rule).
+local SHARDS = 256
+local CHECKPOINT_EVERY = 1000
+
+local function shardOf(game)
+  local h = 2166136261
+  for i = 1, #game do h = ((h ~ string.byte(game, i)) * 16777619) & 0xffffffff end
+  return h % SHARDS
+end
+
+--- Derived from exactly one state (never published, never copied): game ->
+--- its session keys, shard -> its games with sessions, shard -> its games
+--- with an account. A state that is replaced (a restore, a rollback by copy)
+--- is indexed again and every shard republished.
+local Index = { sessions = nil }
+local Dirty = {}
+
+local function indexOf(st)
+  if Index.sessions == st.sessions and Index.accounts == st.accounts then return Index end
+  Index = { sessions = st.sessions, accounts = st.accounts, keys = {}, sessionShards = {}, accountShards = {}, all = true }
+  for k, sess in pairs(st.sessions) do
+    local game = sess.game
+    Index.keys[game] = Index.keys[game] or {}
+    Index.keys[game][k] = true
+    local n = shardOf(game)
+    Index.sessionShards[n] = Index.sessionShards[n] or {}
+    Index.sessionShards[n][game] = true
+  end
+  for game in pairs(st.accounts or {}) do
+    local n = shardOf(game)
+    Index.accountShards[n] = Index.accountShards[n] or {}
+    Index.accountShards[n][game] = true
+  end
+  return Index
+end
+
+--- lib/fair.lua's observer: a game whose sessions or account may have
+--- changed, and every session added (sess) or dropped (false).
+fair.watch = function(game, k, sess)
+  if type(game) ~= "string" then return end
+  Dirty[game] = true
+  local st = Fair.state
+  local ix = indexOf(st)
+  local n = shardOf(game)
+  if st.accounts and st.accounts[game] then
+    ix.accountShards[n] = ix.accountShards[n] or {}
+    ix.accountShards[n][game] = true
+  end
+  if k == nil then return end
+  local keys = ix.keys[game] or {}
+  ix.keys[game] = keys
+  keys[k] = sess and true or nil
+  ix.sessionShards[n] = ix.sessionShards[n] or {}
+  ix.sessionShards[n][game] = next(keys) ~= nil or nil
+end
+
+--- The changed shards into `result` (all of them after a re-index).
+local function publishShards(result, st)
+  local ix = indexOf(st)
+  -- A new account (credited before any session) is indexed here too.
+  for game in pairs(Dirty) do
+    if st.accounts and st.accounts[game] then
+      local n = shardOf(game)
+      ix.accountShards[n] = ix.accountShards[n] or {}
+      ix.accountShards[n][game] = true
+    end
+  end
+  local sessionShards, accountShards = {}, {}
+  if ix.all then
+    for n = 0, SHARDS - 1 do sessionShards[n], accountShards[n] = true, true end
+    ix.all = nil
+  else
+    for game in pairs(Dirty) do local n = shardOf(game); sessionShards[n], accountShards[n] = true, true end
+  end
+  Dirty = {}
+  for n in pairs(sessionShards) do
+    local out = {}
+    for game in pairs(ix.sessionShards[n] or {}) do
+      local list = {}
+      for k in pairs(ix.keys[game] or {}) do
+        local sess = st.sessions[k]
+        if sess then list[#list + 1] = fair.view(sess) end
+      end
+      -- fair.sessionsView's order.
+      table.sort(list, function(a, b)
+        if a.committedAt ~= b.committedAt then return a.committedAt < b.committedAt end
+        return a.session .. a.player < b.session .. b.player
+      end)
+      if #list > 0 then out[game] = list end
+    end
+    result["fairsessions-" .. n] = next(out) and encode(jsonObject(out)) or nil
+  end
+  for n in pairs(accountShards) do
+    local out = {}
+    for game in pairs(ix.accountShards[n] or {}) do
+      local a = st.accounts and st.accounts[game]
+      if a then out[game] = { balance = a.balance, reserved = a.reserved, nonce = a.nonce } end
+    end
+    result["fairaccounts-" .. n] = next(out) and encode(jsonObject(out)) or nil
+  end
+end
+
 local function restore(base)
   if tonumber(base.fairrev or "0") <= Fair.rev then return false end
   local ok, saved = pcall(json.decode, base.fairstate or "")
@@ -83,7 +192,10 @@ local function restore(base)
     -- A published state without owners has none: never re-arm the wallet.
     local owners = type(saved.owners) == "table" and deflate(saved.owners) or freshOwners(false)
     local gov = type(saved.gov) == "table" and deflate(saved.gov) or { pending = {}, nextId = 1 }
-    Fair = { rev = math.tointeger(saved.rev) or 0, owner = saved.owner or "", owners = owners, gov = gov, state = st }
+    -- The checkpoint may be older than the last change published (fairrev):
+    -- this VM continues from it, counting on from fairrev.
+    local rev = math.max(math.tointeger(saved.rev) or 0, math.tointeger(tonumber(base.fairrev or "0")) or 0)
+    Fair = { rev = rev, owner = saved.owner or "", owners = owners, gov = gov, state = st }
     return true
   end
   return false
@@ -465,8 +577,7 @@ function compute(base, req)
     base.results.outbox = {}
     result = base
   else
-    local saved = deepCopy(st)
-    local ok, data, outbox, extra = pcall(function()
+    local function handle()
       local from, fromProcess = actor(raw, base)
       local a = action:lower()
       if norm(a) == "fair.configure" then return configure(raw, Gov.ownerOf(base, raw)) end
@@ -477,11 +588,25 @@ function compute(base, req)
       local d, o, x = fair.dispatch(st, action, msg, from, fromProcess, now, slot)
       if d == nil and o == nil then return nil, "unknown action '" .. action .. "'" end
       return d, o, x
-    end)
+    end
+    -- A handler that failed sends nothing, so it takes no sequence number
+    -- and leaves no half-applied state (the beacon's rule). wasm-patch@1.0
+    -- has ao.atomic (lua-atomic@1.0's rule: a journal, rolled back on
+    -- failure): no copy of the state per message. Elsewhere, a deep copy.
+    local ok, data, outbox, extra
+    if type(ao) == "table" and type(ao.atomic) == "function" and ao.atomic_version == 1 then
+      local r = table.pack(ao.atomic(function()
+        local p = table.pack(pcall(handle))
+        if not p[1] then return false, tostring(p[2]):sub(1, 4096) end
+        return true, table.unpack(p, 2, p.n)
+      end))
+      ok, data, outbox, extra = r[1], r[2], r[3], r[4]
+    else
+      local saved = deepCopy(st)
+      ok, data, outbox, extra = pcall(handle)
+      if not ok then Fair.state, st = saved, saved end
+    end
     if not ok then
-      -- A handler that failed sends nothing, so it takes no sequence number
-      -- and leaves no half-applied state (the beacon's rule).
-      Fair.state, st = saved, saved
       result = reply(base, { error = tostring(data) })
     elseif data == nil then
       local e = { error = outbox }
@@ -498,6 +623,11 @@ function compute(base, req)
   if (st.changes or 0) == changesBefore and base.fairstate ~= nil then return result end
   Fair.rev = Fair.rev + 1
   result.fairrev = string.format("%d", Fair.rev)
+  -- The whole state: under 5.3b only every CHECKPOINT_EVERY changes, or when
+  -- the owners or the queue moved (a restore must never bring back a
+  -- renounced wallet or lose a pending action), or when none is published.
+  if Lua53bPatchMode ~= true or Fair.rev % CHECKPOINT_EVERY == 0 or base.fairstate == nil
+     or ownersKey() ~= ownersBefore then
   result.fairstate = encode({ rev = Fair.rev, owner = Fair.owner, owners = Fair.owners,
     gov = { pending = jsonObject(Fair.gov.pending or {}), nextId = Fair.gov.nextId or 1 }, state = {
     beacon = st.beacon, windowMs = st.windowMs, keep = st.keep, maxOpen = st.maxOpen,
@@ -508,11 +638,18 @@ function compute(base, req)
     games = jsonObject(gamesState(st.games)), gameCount = st.gameCount, lastRequestAt = st.lastRequestAt,
     token = st.token, price = st.price, unit = st.unit, accounts = jsonObject(st.accounts),
     credited = jsonObject(st.credited), creditFloor = st.creditFloor, transferSeq = st.transferSeq,
-    surplus = st.surplus, changes = st.changes, history = st.history } })
-  result.fairhistory = encode({ keep = 1024, entries = st.history or {} })
-  result.fairsessions = encode(jsonObject(fair.sessionsView(st)))
+    surplus = st.surplus, changes = st.changes, history = st.history, doneQueue = st.doneQueue } })
+  end
+  -- The history only when it moved (a session resolved or a batch bound).
+  local h = st.history or {}
+  if base.fairhistory == nil or Index.history ~= h[#h] or Index.historyLen ~= #h then
+    result.fairhistory = encode({ keep = 1024, entries = h })
+    Index.history, Index.historyLen = h[#h], #h
+  end
+  publishShards(result, st)
+  -- Superseded by the shards: a process upgraded from a whole-key build drops them.
+  result.fairsessions, result.fairaccounts = nil, nil
   result.fairbatches = encode(fair.batchesView(st))
-  result.fairaccounts = encode(jsonObject(fair.accountsView(st)))
   result.fairinfo = encode({ beacon = st.beacon, fairWindowMs = st.windowMs, keep = st.keep, maxOpen = st.maxOpen,
     open = st.open, next = st.next, outstanding = st.outstanding, at = now, protocol = "rng/fair/v1",
     minIntervalMs = st.minIntervalMs, maxGames = st.maxGames, maxPerGame = st.maxPerGame, games = st.gameCount,

@@ -484,7 +484,7 @@ export async function main({ args = process.argv.slice(2), node = process.env.HB
       const fairPrice = BigInt(fairInfo.requestPriceAtoms);
       // Game 0 is this wallet; the others are game processes this run spawns
       // (protocol/test/fair-game.lua), which also get the Fair-Result push; a wallet
-      // game reads its result from fairsessions.
+      // game reads its result from its fairsessions-<n> shard.
       const games = [{ address: me }];
       for (let g = 1; g < GAMES; g++) {
         const lua = testSource('fair-game.lua');

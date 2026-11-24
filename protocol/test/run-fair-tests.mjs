@@ -75,6 +75,27 @@ const bundle = [
   read('protocol/vendor/gov.lua'),
   read('protocol/fair/fair.lua'),
   `F = ${lua(F)}`,
+  // RNG_FAKE_ATOMIC=1: an ao.atomic (lua-atomic@1.0's contract: commit on
+  // true, roll back and answer false, msg otherwise) by copy and restore in
+  // place, so the suite runs fair.lua's wasm-patch rollback path too.
+  process.env.RNG_FAKE_ATOMIC ? `do
+  local function copy(v) if type(v) ~= "table" then return v end local t = {} for k, x in pairs(v) do t[k] = copy(x) end return t end
+  ao = ao or {}
+  ao.atomic_version = 1
+  ao.atomic = function(fn)
+    local st = Fair.state
+    local snap = copy(st)
+    local r = table.pack(pcall(fn))
+    if r[1] and r[2] == true then return table.unpack(r, 2, r.n) end
+    for k in pairs(st) do st[k] = nil end
+    for k, v in pairs(snap) do st[k] = v end
+    if r[1] and r[2] == false and type(r[3]) == "string" then return false, r[3] end
+    return false, "Atomic callback raised an error"
+  end
+  FakeAtomicUsed = 0
+  local inner = ao.atomic
+  ao.atomic = function(fn) FakeAtomicUsed = FakeAtomicUsed + 1 return inner(fn) end
+end` : '',
   transcriptHook(),
   fixture(read('protocol/test/fair_test.lua')),
 ].join('\n');
@@ -98,7 +119,9 @@ if (live !== -1) {
   const pid = addr('fair-tests');
   const result = await handle(null, {
     Id: 'eval-fair-tests', Target: pid, Owner: pid, From: pid, Tags: [{ name: 'Action', value: 'Eval' }],
-    Data: bundle + evalTail('fairtest'), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+    Data: bundle + (process.env.RNG_FAKE_ATOMIC
+      ? '\nlocal __v = fairtest()\nreturn "atomic calls " .. FakeAtomicUsed .. "\\n" .. __v'
+      : evalTail('fairtest')), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
   }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
   if (result.Error) { console.error(result.Error); process.exit(1); }
   const out = result.Output?.data;
