@@ -13,6 +13,8 @@
 // Equal digests under asc and desc mean no order leak the suite exercises:
 //   node protocol/test/order-check.mjs        runs every suite both ways
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -70,7 +72,9 @@ export const transcriptHook = () => (!ORDER ? '' : `do
     local t = type(v)
     if t == "string" then return "s" .. #v .. ":" .. v end
     if t == "number" then return (mathtype(v) or "n") .. ":" .. tostring(v) end
-    if t ~= "table" then return t .. ":" .. tostring(v) end
+    if t == "boolean" or t == "nil" then return t .. ":" .. tostring(v) end
+    -- A function (userdata, thread) prints its address, which differs between runs.
+    if t ~= "table" then return t end
     if seen[v] then return "<cycle>" end
     seen[v] = true
     local keys = {}
@@ -100,6 +104,17 @@ export const transcriptHook = () => (!ORDER ? '' : `do
   end
 end`);
 
+/** A suite's Lua fixtures, kept for the second run when RNG_FIXTURES names a
+ *  file: the beacon suites deal fresh keys every run, so both orders must
+ *  see the same ones for their transcripts to compare. */
+export function sameFixtures(build) {
+  const file = process.env.RNG_FIXTURES;
+  if (file && fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
+  const text = build();
+  if (file) fs.writeFileSync(file, text);
+  return text;
+}
+
 /** The Eval's last line: the suite's verdict, the digest line first when on. */
 export const evalTail = (runner) => (!ORDER ? `\nreturn ${runner}()`
   : `\nlocal __r = ${runner}()\nreturn RngTranscriptDigest() .. "\\n" .. __r`);
@@ -110,9 +125,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   let failed = false;
   for (const suite of suites) {
     const digest = {};
+    const fixtures = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rng-order-')), 'fixtures.lua');
     for (const order of ['asc', 'desc']) {
       const out = execFileSync(process.execPath, [path.join(HERE, suite)],
-        { env: { ...process.env, RNG_PAIRS: order }, maxBuffer: 1 << 28 }).toString();
+        { env: { ...process.env, RNG_PAIRS: order, RNG_FIXTURES: fixtures }, maxBuffer: 1 << 28 }).toString();
       const line = /TRANSCRIPT [0-9a-f]+ \d+/.exec(out);
       if (!line) throw new Error(`${suite}: no TRANSCRIPT line`);
       digest[order] = line[0];

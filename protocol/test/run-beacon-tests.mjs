@@ -10,7 +10,7 @@ import AoLoader from '@permaweb/ao-loader';
 import * as bls from '../../validator/bls.mjs';
 import { fastRequestValue } from '../../lib/js/derive.ts';
 import { fastSeenShard } from '../../lib/js/fast.ts';
-import { orderPrelude, transcriptHook, evalTail } from './order-check.mjs';
+import { orderPrelude, transcriptHook, evalTail, sameFixtures } from './order-check.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -69,7 +69,7 @@ F.config = JSON.stringify({ self: F.beacon, token: F.token, threshold: 2,
 const luaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const luaValue = (v) => Array.isArray(v) ? `{ ${v.map(luaValue).join(', ')} }`
   : typeof v === 'number' ? String(v) : luaString(v);
-const fixtures = `F = { ${Object.entries(F).map(([k, v]) => `${k} = ${luaValue(v)}`).join(',\n  ')} }`;
+const fixtures = sameFixtures(() => `F = { ${Object.entries(F).map(([k, v]) => `${k} = ${luaValue(v)}`).join(',\n  ')} }`);
 
 const bundle = [
   orderPrelude(),

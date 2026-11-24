@@ -160,8 +160,11 @@ const deadline = Date.now() + 180_000;
 let st;
 for (;;) {
   st = await key('beaconstate');
-  const bound = await Promise.all(sent.map(async (s) => fastSeenRound(await key(fastSeenKey(me, s.id)), me, s.id)));
-  for (let i = 0; i < sent.length; i++) sent[i].round = bound[i];
+  // Each shard still needed, read once (a shard holds many requests).
+  const need = [...new Set(sent.filter((x) => x.round === undefined).map((x) => fastSeenKey(me, x.id)))];
+  const shards = Object.fromEntries(await Promise.all(need.map(async (k) => [k, await key(k)])));
+  for (const x of sent) if (x.round === undefined) x.round = fastSeenRound(shards[fastSeenKey(me, x.id)], me, x.id);
+  const bound = sent.map((x) => x.round);
   if (bound.every((r) => r !== undefined) && Math.max(...bound.map(Number)) <= st.round) break;
   if (Date.now() > deadline) break;
   await sleep(500);

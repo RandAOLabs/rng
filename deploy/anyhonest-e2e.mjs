@@ -213,6 +213,7 @@ if (FAIR > 0) {
     await hb.sendMessage({ node: NODE, jwk: player, process: fair, action: 'Fair.Commit',
       tags: { Game: me, Session: session, Commit: await commitHash(me, session, secret) } });
     let revealed = false;
+    let poked = 0;
     const end = Date.now() + 120_000;
     for (;;) {
       const view = await sessionView(session);
@@ -223,6 +224,12 @@ if (FAIR > 0) {
       } else if (revealed && (!view || view.status === 'revealed')) {
         fairMs.push(Date.now() - at);
         break;
+      }
+      // Fair sends a due beacon request when a message arrives (any Get-Info
+      // pumps it); live, other games' traffic does that. Poke it once a second.
+      if (view?.status === 'committed' && Date.now() - poked >= 1000) {
+        poked = Date.now();
+        hb.sendMessage({ node: NODE, jwk: deployer, process: fair, action: 'Get-Info' }).catch(() => {});
       }
       if (Date.now() > end) { log(`fair draw ${session} not resolved in 120 s (last ${view?.status})`); break; }
       await sleep(SAMPLE_MS);

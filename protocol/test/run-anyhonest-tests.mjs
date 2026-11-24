@@ -8,7 +8,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
-import { orderPrelude, transcriptHook, evalTail } from './order-check.mjs';
+import { orderPrelude, transcriptHook, evalTail, sameFixtures } from './order-check.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -162,7 +162,7 @@ const luaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"
 const lua = (v) => Array.isArray(v) ? `{ ${v.map(lua).join(', ')} }`
   : typeof v === 'object' ? `{ ${Object.entries(v).map(([k, x]) => `[${luaString(k)}] = ${lua(x)}`).join(', ')} }`
   : typeof v === 'number' ? String(v) : typeof v === 'boolean' ? String(v) : luaString(v);
-const fixtures = `F = ${lua(F)}\nP = ${lua(P)}\nDEVICE_FIELDS = ${lua(FIELDS)}`;
+const fixtures = sameFixtures(() => `F = ${lua(F)}\nP = ${lua(P)}\nDEVICE_FIELDS = ${lua(FIELDS)}`);
 
 const bundle = [
   orderPrelude(),
