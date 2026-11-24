@@ -1,6 +1,6 @@
 {
-  "comment": "The wasm-lua runtime RNG's contracts run on under wasm-patch@1.0 (paralith-mono feat/wasm-lua-rng: rng@1.0 for ao.resolve over the node's wp_rng_* natives, hyperbeam feat/wasm-patch-rng). The bytes come from PARALITH_MONO's backend/native/wasm-lua/<file>, or WASM_LUA_RUNTIME; deploy.mjs refuses any other hash.",
-  "file": "release/wasm-lua-5c6497d71b82.wasm",
-  "sha256": "5c6497d71b829e414efbc7aceb0dd3e60bebefb2e4ae19de69b9c61a4e9ce1e9",
+  "comment": "The wasm-lua runtime RNG's contracts run on under wasm-patch@1.0 (paralith-mono release/wasm-lua-next 059fa875: rng@1.0 for ao.resolve over the node's wp_rng_* natives, hyperbeam feat/wasm-patch-rng; and the C JSON encoder, which RNG's vendored jsonenc.lua does not opt into). The bytes come from PARALITH_MONO's backend/native/wasm-lua/<file>, or WASM_LUA_RUNTIME; deploy.mjs refuses any other hash.",
+  "file": "release/wasm-lua-0c60afa65180.wasm",
+  "sha256": "0c60afa6518021c25b2b41ec6696e74733c2801d750c1e091446582d8f9c5f95",
   "imports": ["env.wp_rng_bls", "env.wp_rng_reveal", "env.wp_rng_crack"]
 }
