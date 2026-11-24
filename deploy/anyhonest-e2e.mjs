@@ -243,6 +243,8 @@ if (process.argv.includes('--keep')) {
   }));
 }
 console.log(JSON.stringify(report, null, 1));
+// --out <file>: the report as one JSON document (stdout is indented, then a PASS/FAIL line).
+if (arg('--out')) fs.writeFileSync(arg('--out'), JSON.stringify(report));
 const ok = rounds > 1 && unserved.length === 0 && latencies.length === sent.length && fairMs.length === FAIR;
 if (!ok) { console.error('FAIL: the beacon did not serve every paid request'); process.exit(1); }
 console.log(`PASS: ${device} ${rounds} rounds, ${report.roundsPerSecond} rounds/s, request round trip p50 ${report.roundTripMs.p50} ms p95 ${report.roundTripMs.p95} ms`);
