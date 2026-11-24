@@ -154,7 +154,7 @@ Gov.PENDING_EXPIRE_MS = 14 * DAY_MS -- a pending action not applied this long af
 Gov.MAX_AHEAD_MS = 90 * DAY_MS      -- Effective-At at most this far ahead
 Gov.MAX_PENDING = 32                -- pending actions held at once
 
-local SIG = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+local SIG = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
 
 local function validId(v)
   return type(v) == "string" and #v == 43 and string.find(v, "^[A-Za-z0-9_-]+$") ~= nil

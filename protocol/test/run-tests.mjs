@@ -14,9 +14,14 @@ const AO_LOADER = process.env.AO_LOADER || path.join(PARALITH, 'node_modules/@pe
 const AOS_WASM = process.env.AOS_WASM || path.join(PARALITH, 'backend/native/module/AOS.wasm');
 
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+// TEST_SIG_TYPE=ed25519-sha512: every fixture signature (wallet and scheduler)
+// an Ed25519 one, as a node's Ed25519 scheduling key (HyperBEAM
+// `scheduler-key-type`) signs its assignments and pushes.
+const fixture = (src) => (process.env.TEST_SIG_TYPE
+  ? src.replace(/"rsa-pss-sha(512|256)"/g, JSON.stringify(process.env.TEST_SIG_TYPE)) : src);
 const bundle = [
   'rng = (function()', read('lib/rng.lua'), 'end)()',
-  read('protocol/test/rng_test.lua'),
+  fixture(read('protocol/test/rng_test.lua')),
 ].join('\n');
 
 function verdict(text) {

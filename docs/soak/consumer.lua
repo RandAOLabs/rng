@@ -7,7 +7,7 @@
 --   RNG-Result / RNG-Error  from the beacon
 
 local json = require(".json")
-local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
 local RESULT_HISTORY = 40
 
 local function fresh()

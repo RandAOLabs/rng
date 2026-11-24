@@ -17,7 +17,7 @@
 -- vendor/json.lua, vendor/jsonenc.lua and lib/rng.lua (global `rng`).
 
 local json = require(".json")
-local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
 local CHECKPOINT_EVERY = 1000 -- lua-patch@1.0: messages between full-state checkpoints
 local ROUND_HISTORY = 8      -- finalized round records kept in published state
 -- Replays: the scheduler assigns a signed message at most once per process
@@ -359,7 +359,7 @@ end
 function TargetRefusal(msg, req)
   local c = type(msg) == "table" and (msg.commitments or msg.Commitments) or nil
   if type(c) ~= "table" or next(c) == nil then return nil end
-  local algs = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+  local algs = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
   local signatures, ids = {}, {}
   for id, s in pairs(c) do
     if type(s) == "table" and s.committer and algs[s.type or s.alg] then

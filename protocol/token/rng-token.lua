@@ -42,7 +42,7 @@ TokenAccountCount = TokenAccountCount or 0
 TokenRevision = TokenRevision or 0
 TokenCheckpointRevision = TokenCheckpointRevision or 0
 
-local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
 
 local function int(v, default)
   if v == nil then return default end
@@ -710,7 +710,7 @@ end
 function TargetRefusal(msg, req)
   local c = type(msg) == "table" and (msg.commitments or msg.Commitments) or nil
   if type(c) ~= "table" or next(c) == nil then return nil end
-  local algs = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+  local algs = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
   local signatures, ids = {}, {}
   for id, s in pairs(c) do
     if type(s) == "table" and s.committer and algs[s.type or s.alg] then
