@@ -5,6 +5,7 @@
 // token's computed slot has reached it. Round trip is send -> computed.
 //
 //   node deploy/saturate.mjs --image hbnode:<tag> [--port 18241] [--seconds 30] [--concurrency 32]
+//   node deploy/saturate.mjs --node http://<bench-node>:8734 --remote ...   a remote bench node
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,14 +13,13 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as hb from '../validator/vendor/hbclient.mjs';
+import { benchNode, startBenchNode } from './bench-target.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const arg = (name, dflt) => { const i = process.argv.indexOf(name); return i === -1 ? dflt : process.argv[i + 1]; };
 const IMAGE = arg('--image');
 const PORT = Number(arg('--port', 18241));
-const NODE = `http://127.0.0.1:${PORT}`;
-if (!IMAGE) throw new Error('--image <local image>: this starts its own node');
 const SECONDS = Number(arg('--seconds', 30));
 const CONCURRENCY = Number(arg('--concurrency', 32));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -28,33 +28,9 @@ const rsa = () => ({ kty: 'RSA', ...crypto.generateKeyPairSync('rsa', { modulusL
 const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : null; };
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rng-saturate-'));
-const CONTAINER = 'rng-saturate';
-const docker = (...a) => execFileSync('docker', a, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).toString();
-const lmdb = { 'store-module': 'hb_store_lmdb', name: '/app/cache-mainnet/lmdb', capacity: 8 * 1024 ** 3, sync: false,
-  'ao-types': 'store-module="atom", capacity="integer"' };
-const config = {
-  'scheduling-mode': 'local_confirmation', 'scheduler-lookahead': false, 'scheduler-publish-remote': false,
-  'force-signed': false, 'store-all-signed': false,
-  'rate-limit-requests': 100000, 'rate-limit-period': 60, 'rate-limit-max': 100000, 'rate-limit-min': -100000,
-  'process-snapshot-time': 900, 'process-snapshot-slots': 1000, 'process-snapshot-target': false,
-  'process-delta-checkpoint-slots': 1000,
-  store: [lmdb, { 'store-module': 'hb_store_fs', name: '/app/cache-mainnet', 'ao-types': 'store-module="atom"' }],
-};
-fs.mkdirSync(path.join(dir, 'node', 'keys'), { recursive: true });
-fs.writeFileSync(path.join(dir, 'node', 'keys', 'node-key.json'), JSON.stringify(rsa()), { mode: 0o600 });
-fs.writeFileSync(path.join(dir, 'node', 'node-config.json'), JSON.stringify(config));
-try { docker('rm', '-f', CONTAINER); } catch { /* none */ }
-docker('create', '--name', CONTAINER, '-p', `127.0.0.1:${PORT}:10000`, '-e', 'HB_PORT=10000',
-  '-e', 'HB_KEY=/app/keys/node-key.json', '-e', 'HB_CONFIG=/app/node-config.json', '-e', 'HB_PRINT=error', IMAGE);
-docker('cp', path.join(dir, 'node', 'keys'), `${CONTAINER}:/app/keys`);
-docker('cp', path.join(dir, 'node', 'node-config.json'), `${CONTAINER}:/app/node-config.json`);
-docker('start', CONTAINER);
-process.on('exit', () => { try { docker('rm', '-f', CONTAINER); } catch { /* gone */ } });
-for (let i = 0; ; i++) {
-  try { if ((await fetch(`${NODE}/~meta@1.0/info/address`, { signal: AbortSignal.timeout(2000) })).ok) break; } catch { /* starting */ }
-  if (i > 90) throw new Error(`${IMAGE} did not come up`);
-  await sleep(1000);
-}
+const NODE = IMAGE
+  ? await startBenchNode({ image: IMAGE, port: PORT, name: 'rng-saturate', dir, log: () => {} })
+  : benchNode(arg('--node', process.env.HB_NODE));
 
 const deployer = rsa();
 fs.writeFileSync(path.join(dir, 'deployer.json'), JSON.stringify(deployer), { mode: 0o600 });
@@ -98,7 +74,7 @@ for (let i = 0; i < 600; i++) { if (await computedSlot() >= maxSlot) break; awai
 const tDone = Date.now();
 const acks = sent.map((s) => s.acked - s.at);
 const report = {
-  device, image: IMAGE, concurrency: CONCURRENCY, messages: sent.length,
+  device, node: NODE, image: IMAGE ?? null, concurrency: CONCURRENCY, messages: sent.length,
   confirmedPerSecond: Number((sent.length / ((tDone - t0) / 1000)).toFixed(1)),
   scheduledPerSecond: Number((sent.length / ((tSent - t0) / 1000)).toFixed(1)),
   drainMs: tDone - tSent, sendAckMs: { p50: pct(acks, 0.5), p95: pct(acks, 0.95) },
