@@ -7,6 +7,8 @@
 //
 //   node deploy/anyhonest-e2e.mjs --image hbnode:<tag> [--port 18221] [--seconds 60]
 //        [--every-ms 250] [--sample-ms 100] [--validators 3] [--fair N] [--keep]
+//   ... --node http://<bench-node>:<port> --remote   a remote BENCH node (never a live one:
+//     deploy/bench-target.mjs refuses those); deploy.mjs needs PARALITH_MONO for wasm-patch spawns
 //
 // --fair N: then spawns fair play (deploy.mjs spawn-fair / configure-fair, the
 // deployer as a wallet game) and times N draws one after another: Fair.Open,
@@ -26,16 +28,14 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as hb from '../validator/vendor/hbclient.mjs';
 import { commitHash, newSecret } from '../lib/js/fair-client.ts';
+import { benchNode, startBenchNode } from './bench-target.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const arg = (name, dflt) => { const i = process.argv.indexOf(name); return i === -1 ? dflt : process.argv[i + 1]; };
 const IMAGE = arg('--image');
 const PORT = Number(arg('--port', 18221));
-const NODE = IMAGE ? `http://127.0.0.1:${PORT}` : process.env.HB_NODE;
-if (!NODE || !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(NODE)) {
-  throw new Error('pass --image, or HB_NODE as a local node (http://127.0.0.1:<port>): this spawns and spends');
-}
+const NODE = IMAGE ? `http://127.0.0.1:${PORT}` : benchNode(arg('--node', process.env.HB_NODE));
 const SECONDS = Number(arg('--seconds', 60));
 const EVERY_MS = Number(arg('--every-ms', 250));
 const SAMPLE_MS = Number(arg('--sample-ms', 100));
@@ -55,37 +55,7 @@ log(`work dir ${dir}`);
 
 // 0. With --image: a fresh single node that schedules and delivers locally.
 const CONTAINER = 'rng-anyhonest-e2e';
-const docker = (...a) => execFileSync('docker', a, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).toString();
-if (IMAGE) {
-  const lmdb = { 'store-module': 'hb_store_lmdb', name: '/app/cache-mainnet/lmdb', capacity: 8 * 1024 ** 3, sync: false,
-    'ao-types': 'store-module="atom", capacity="integer"' };
-  const config = {
-    'scheduling-mode': 'local_confirmation', 'scheduler-lookahead': false, 'scheduler-publish-remote': false,
-    'force-signed': false, 'store-all-signed': false,
-    'rate-limit-requests': 100000, 'rate-limit-period': 60, 'rate-limit-max': 100000, 'rate-limit-min': -100000,
-    // The production nodes' snapshot cadence (paralith-mono infra/nodes/node-config.v011.json): the
-    // default snapshots a process every slot, which for wasm-patch is its whole linear memory.
-    'process-snapshot-time': 900, 'process-snapshot-slots': 1000, 'process-snapshot-target': false,
-    'process-delta-checkpoint-slots': 1000,
-    store: [lmdb, { 'store-module': 'hb_store_fs', name: '/app/cache-mainnet', 'ao-types': 'store-module="atom"' }],
-  };
-  fs.mkdirSync(path.join(dir, 'node', 'keys'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'node', 'keys', 'node-key.json'), JSON.stringify(rsa()), { mode: 0o600 });
-  fs.writeFileSync(path.join(dir, 'node', 'node-config.json'), JSON.stringify(config));
-  try { docker('rm', '-f', CONTAINER); } catch { /* none */ }
-  docker('create', '--name', CONTAINER, '-p', `127.0.0.1:${PORT}:10000`, '-e', 'HB_PORT=10000',
-    '-e', 'HB_KEY=/app/keys/node-key.json', '-e', 'HB_CONFIG=/app/node-config.json', '-e', 'HB_PRINT=error', IMAGE);
-  docker('cp', path.join(dir, 'node', 'keys'), `${CONTAINER}:/app/keys`);
-  docker('cp', path.join(dir, 'node', 'node-config.json'), `${CONTAINER}:/app/node-config.json`);
-  docker('start', CONTAINER);
-  if (!process.argv.includes('--keep')) process.on('exit', () => { try { docker('rm', '-f', CONTAINER); } catch { /* gone */ } });
-  for (let i = 0; ; i++) {
-    try { if ((await fetch(`${NODE}/~meta@1.0/info/address`, { signal: AbortSignal.timeout(2000) })).ok) break; } catch { /* starting */ }
-    if (i > 90) throw new Error(`${IMAGE} did not come up; docker logs ${CONTAINER}`);
-    await sleep(1000);
-  }
-  log(`node ${IMAGE} up at ${NODE}`);
-}
+if (IMAGE) await startBenchNode({ image: IMAGE, port: PORT, name: CONTAINER, dir, keep: process.argv.includes('--keep'), log });
 
 // 1. Token and beacon through deploy.mjs, exactly as a deploy runs them.
 const deployer = rsa();
