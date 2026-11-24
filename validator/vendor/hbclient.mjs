@@ -400,7 +400,8 @@ function jwkToPrivateKey(jwk) {
 }
 function pubKeyBuf(jwk) { return b64urlDec(jwk.n); }              // raw modulus
 export function ownerToAddress(nB64url) { return b64url(sha256(b64urlDec(nB64url))); }
-export function jwkToAddress(jwk) { return ownerToAddress(jwk.n); }
+/** An RSA key's address is the SHA-256 of its modulus, an Ed25519 (OKP) key's of its public key. */
+export function jwkToAddress(jwk) { return ownerToAddress(jwk.kty === 'OKP' ? jwk.x : jwk.n); }
 
 function rsaPssSign(jwk, data) {
   return crypto.sign('sha512', data, {
@@ -677,10 +678,19 @@ export async function postSigned(node, path, msg, jwk, opts = {}) {
   return res;
 }
 
-/** Look up a node's own scheduler address. */
+/**
+ * The address a process names to be scheduled on `node`: its scheduling key
+ * (HyperBEAM `scheduler-key-type`, Ed25519 on our nodes), which is not the
+ * node's own key (`/~meta@1.0/info/address`). Throws unless the node answers
+ * with an address: a node too old to publish one has no key to name.
+ */
 export async function nodeAddress(node) {
-  const r = await send(node, '/~meta@1.0/info/address', 'GET', { accept: 'text/plain' });
-  return r.body.toString().trim();
+  const r = await send(node, '/~meta@1.0/info/scheduler-address', 'GET', { accept: 'text/plain' });
+  const address = r.body.toString().trim();
+  if (!/^[A-Za-z0-9_-]{43}$/.test(address)) {
+    throw new Error(`${node} published no scheduler-address (HTTP ${r.status})`);
+  }
+  return address;
 }
 
 /**

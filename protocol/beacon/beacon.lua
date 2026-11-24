@@ -72,7 +72,7 @@ local EXECUTED_KEEP = 256    -- DAO proposals remembered as executed (see markEx
 -- it (selective abort), so that costs them a week's delay.
 local ABANDON_CAP_MS = 7 * 86400000
 
-local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+local SIGNATURE_ALGS = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
 
 local MAX_FEE = 1000000 -- RNG per signer or protocol share of one request
 
@@ -197,7 +197,7 @@ end
 function TargetRefusal(msg, req)
   local c = type(msg) == "table" and (msg.commitments or msg.Commitments) or nil
   if type(c) ~= "table" or next(c) == nil then return nil end
-  local algs = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true }
+  local algs = { ["rsa-pss-sha512"] = true, ["rsa-pss-sha256"] = true, ["ed25519-sha512"] = true }
   local signatures, ids = {}, {}
   for id, s in pairs(c) do
     if type(s) == "table" and s.committer and algs[s.type or s.alg] then
