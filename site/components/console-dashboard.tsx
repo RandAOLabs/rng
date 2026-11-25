@@ -20,11 +20,12 @@ type Cell = "empty" | "locked" | "lit" | "crack";
 // fades in as NEXT while the others step down one slot; a round that leaves
 // the slots slides out below and fades (`out` is when it left).
 type Track = { round: number; slot: number; out?: number; commit: Cell[]; reveal: Cell[]; done: boolean; value?: string };
-const SLOTS = ["NEXT", "CURRENT", "RESOLVED"];
+const SLOTS = ["Next", "Current", "Resolved"];
 const ROWS = SLOTS.length;
-const OUT_MS = 800;
+// The CSS slide takes 300 ms; drop the row once it is out of view.
+const OUT_MS = 400;
 
-const STAGES = ["COMMIT", "REVEAL", "COMBINE", "VERIFY"];
+const STAGES = ["Commit", "Reveal", "Combine", "Verify"];
 
 // Process state serialises sets as either address lists or address-keyed maps.
 const members = (set: unknown) => new Set(Array.isArray(set) ? set.map(String) : Object.keys(set ?? {}));
@@ -68,22 +69,22 @@ function roundRate(recent: Recent[]): number | undefined {
 }
 
 // A text gauge for the pace against the 2 rounds/s target:
-// `[··|··●··|··] ON_PACE`. Each side spans 1 round/s; the bars mark ±10%.
+// `[··|··●··|··] on pace`. Each side spans 1 round/s; the bars mark ±10%.
 export function paceScale(rate: number, target = 2): string {
   const half = 5;
   const offset = Math.max(-half, Math.min(half, Math.round(((rate - target) / target) * half * 2)));
   const cells = Array.from({ length: half * 2 + 1 }, (_, i) => (i === half + offset ? "●" : "·"));
   const bar = `[${cells.slice(0, half - 1).join("")}|${cells.slice(half - 1, half + 2).join("")}|${cells.slice(half + 2).join("")}]`;
-  const label = rate < target * 0.9 ? "SLOW" : rate > target * 1.1 ? "FAST" : "ON_PACE";
+  const label = rate < target * 0.9 ? "slow" : rate > target * 1.1 ? "fast" : "on pace";
   return `${bar} ${label.padEnd(7)}`;
 }
 
 // Fixed width so the rate, gauge and label never shift as the numbers change.
 export function paceText(rate?: number): string {
-  const width = paceScale(2).length + 13;
-  if (!rate) return "MEASURING".padEnd(width);
+  const width = paceScale(2).length + 7;
+  if (!rate) return "Measuring".padEnd(width);
   const shown = Math.min(rate, 99.9).toFixed(1).padStart(4);
-  return `${shown}_PER_SEC ${paceScale(rate)}`;
+  return `${shown}/s ${paceScale(rate)}`;
 }
 
 function RoundTrack({ track, ok }: { track: Track; ok: boolean }) {
@@ -101,7 +102,7 @@ function RoundTrack({ track, ok }: { track: Track; ok: boolean }) {
       <div className={`stage-box ${state[0]}`}>{track.commit.map((c, i) => <span key={i} className={`cell ${c}`} />)}</div>
       <div className={`stage-box ${state[1]}`}>{track.reveal.map((c, i) => <span key={i} className={`cell ${c}`} />)}</div>
       <div className={`stage-box ${state[2]}`}>{track.done ? <span className="merge" /> : track.reveal.map((_, i) => <span key={i} className="cell empty" />)}</div>
-      <div className={`stage-box ${state[3]}`}>{track.done ? <span className="verdict"><b>{ok ? "PASS" : "WAIT"}</b><code>{track.value?.slice(0, 10)}</code></span> : <span className="verdict pending">—</span>}</div>
+      <div className={`stage-box ${state[3]}`}>{track.done ? <span className="verdict"><b>{ok ? "Pass" : "Wait"}</b><code>{track.value?.slice(0, 10)}</code></span> : <span className="verdict pending">—</span>}</div>
     </div>
   );
 }
@@ -110,11 +111,11 @@ function BeaconPipeline({ validators, tracks, ok, total, rate }: { validators: V
   return (
     <div className="pipe">
       <div className="pipe-total">
-        <div><span>TOTAL_ROUNDS</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
+        <div><span>Total rounds</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
         <small className="pipe-pace">{paceText(rate)}</small>
       </div>
       <div className="pipe-head">
-        <div><span>VALIDATORS</span><b>{validators.length || "—"}</b></div>
+        <div><span>Validators</span><b>{validators.length || "—"}</b></div>
         {STAGES.map((stage) => <div key={stage}><span>{stage}</span></div>)}
       </div>
       <div className="tracks">{tracks.map((t) => <RoundTrack key={t.round} track={t} ok={ok} />)}</div>
@@ -178,16 +179,19 @@ export function ConsoleDashboard() {
         <div className="home-message">
           <h1>Verifiable randomness</h1>
           <p>Inspect live beacon rounds or generate a value from a seed.</p>
-          <a className="button invert" href="/try">Open the RNG console</a>
+          <a className="button primary" href="/try">Open the RNG console</a>
         </div>
 
-        <a className="rng-visual live-beacon" href="/how" aria-label="Live Any-Honest beacon. Open how it works.">
-          {(!unavailable || tracks.length > 0) && <BeaconPipeline validators={validators} tracks={tracks} ok={live} total={total} rate={rate} />}
+        <section className="rng-visual" aria-label="Live Any-Honest beacon">
+          <BeaconPipeline validators={validators} tracks={tracks} ok={live} total={total} rate={rate} />
           <ul className="beacon-feed">
             {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b>{p.ms ? `${p.ms}ms` : ""}</b></li>)}
           </ul>
-          <div className="home-status"><span className={live && !unavailable ? "signal on" : "signal"} /><strong>{unavailable ? "Beacon unavailable" : live ? "Round verified" : "Awaiting a verified round"}</strong><small>How the beacon works →</small></div>
-        </a>
+          <div className="home-status">
+            <p role="status"><span className={live && !unavailable ? "signal on" : "signal"} /><strong>{unavailable ? "Beacon unreachable" : live ? "Round verified" : "Awaiting a verified round"}</strong></p>
+            <a href="/how">How the beacon works →</a>
+          </div>
+        </section>
       </section>
 
       <SiteFooter />

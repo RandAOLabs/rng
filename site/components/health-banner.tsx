@@ -41,7 +41,7 @@ export function beaconHealth(body: BeaconHealthInput, stalledForMs = 0, rate?: R
   const status = body.health?.status
     ?? (all.length > 0 && eligible < minCommits ? "halted" : all.length > 0 && eligible * 2 < all.length ? "degraded" : "ok");
   if (status === "halted") {
-    return { status, message: `Rounds are halted: ${eligible} validator${eligible === 1 ? " is" : "s are"} eligible and a round needs ${minCommits}. Pending requests are refunded after the abandon window.` };
+    return { status, message: `Rounds are halted: ${eligible} validator${eligible === 1 ? " is" : "s are"} eligible and a round needs ${minCommits}.` };
   }
   if (status === "degraded") {
     return { status, message: `The beacon is degraded: only ${eligible} of ${all.length} validators are eligible right now.` };
@@ -76,13 +76,13 @@ export function HealthBanner() {
 
   if (view.status === "ok") return null;
   return (
-    <div role="status" className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--line)] bg-[#0c0c0c]/95 px-4 py-3 text-[12px] leading-relaxed text-[var(--white)] backdrop-blur">
-      <div className="mx-auto flex max-w-[1380px] flex-wrap items-center gap-x-3 gap-y-1">
-        <span className={view.status === "halted" ? "font-bold text-[#ff8a7a]" : "font-bold text-[#f0c674]"}>
+    <div role="status" className="health-banner">
+      <div>
+        <b className={view.status === "halted" ? "halted" : undefined}>
           {view.status === "halted" ? "Beacon halted" : view.status === "slow" ? "Beacon slow" : "Beacon degraded"}
-        </span>
-        <span className="text-[var(--gray)]">{view.message}</span>
-        <a href="/validators" className="text-[var(--white)] underline underline-offset-2">Run a validator</a>
+        </b>
+        <span>{view.message}</span>
+        <a href="/validators">Run a validator</a>
       </div>
     </div>
   );
