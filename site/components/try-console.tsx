@@ -11,7 +11,7 @@ import { SiteFooter, SiteHeader } from "./site-header";
 type Mode = "local" | "threshold" | "beacon" | "anyhonest" | "proof";
 type Status = {
   node: string; network: string; beacon: string; token: string; round: number; price: number;
-  unit: number; threshold: number; committeeSize: number; nativeVerification: boolean;
+  unit: number; threshold: number; committeeSize: number; nativeVerification: boolean; verificationMode?: string | null;
   groupKey: string; signature: string; message: string; value: string; verified: boolean;
   derivation?: string | null;
 };
@@ -32,10 +32,14 @@ const modes: Array<{ key: Mode; title: string }> = [
   { key: "proof", title: "Verify a round" },
 ];
 
+// Prices and counts render as "—" until the live process has answered.
+const rngAmount = (x?: number) => x === undefined ? "—" : `${x} RNG`;
+
 export function TryConsole() {
   const [mode, setMode] = useState<Mode>("beacon");
   const [status, setStatus] = useState<Status | null>(null);
   const [anyHonest, setAnyHonest] = useState<AnyHonestStatus>({ configured: false });
+  const [anyHonestLoaded, setAnyHonestLoaded] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [seed, setSeed] = useState("loot-chest-42");
   const [derived, setDerived] = useState("");
@@ -69,6 +73,7 @@ export function TryConsole() {
     const body = await response.json() as AnyHonestStatus & { error?: string };
     if (!response.ok) throw new Error(body.error || "Any-Honest status unavailable");
     setAnyHonest(body);
+    setAnyHonestLoaded(true);
     return body;
   }
 
@@ -120,15 +125,15 @@ export function TryConsole() {
     if (typeof reply.error === "string") throw new Error(reply.error);
   }
 
-  const onConnect = () => walletAction("CONNECTING_WALLET", async () => {
+  const onConnect = () => walletAction("Connecting wallet", async () => {
     const next = await connectWallet(); setAddress(next); await refreshAccount(next);
   });
-  const onFund = () => walletAction("FUNDING_FAST", async () => {
+  const onFund = () => walletAction("Funding Fast", async () => {
     if (!status || !address) throw new Error("connect a wallet first");
     rejectError((await sendMessage(status.node, status.token, { Action: "Transfer", Recipient: status.beacon, Quantity: String(status.price * 3 * status.unit), "X-For": address })).reply);
     await refreshAccount();
   });
-  const onRequest = () => walletAction("WAITING_FOR_FAST_ROUND", async () => {
+  const onRequest = () => walletAction("Waiting for the Fast round", async () => {
     if (!status || !address) throw new Error("connect a wallet first");
     const requestId = `console-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     // Tier "beacon" is the fast tier's internal id, accepted by the old and the new process.
@@ -171,6 +176,13 @@ export function TryConsole() {
   });
 
   const shownProof = proof ?? status;
+  const fastPrice = status?.price;
+  const unreachable = statusError ? <p className="status-line" role="status">Beacon unreachable</p> : null;
+  const beaconState = anyHonest.configured ? "Live" : statusError ? "Unreachable" : anyHonestLoaded ? "Not deployed" : "—";
+  const activeValidators = anyHonestLoaded ? anyHonest.validators?.filter((validator) => !validator.suspended && !validator.exiting).length : undefined;
+  const reserve = anyHonest.foundationReserveAtoms && anyHonest.unit ? `${(BigInt(anyHonest.foundationReserveAtoms) / BigInt(anyHonest.unit)).toString()} RNG` : "—";
+  const requestPrice = anyHonest.price ?? anyHonest.priceSchedule?.request;
+  const proofDevice = shownProof ? (shownProof.nativeVerification ? "~rng@1.0" : shownProof.verificationMode ?? "—") : "—";
 
   return (
     <main className="shell try-page">
@@ -190,17 +202,104 @@ export function TryConsole() {
       </section>
 
       <section className="try-workspace container"><div className="mode-workbench">
-        {mode === "local" && <div className="workbench-grid"><div><h2>Generate from a seed</h2><p className="muted">Free, immediate and replay-safe. Use it when the sender learning the result creates no advantage.</p><label className="field"><span>SEED</span><input value={seed} onChange={(event) => setSeed(event.target.value)} maxLength={4096} /></label><button className="button invert" onClick={derive} disabled={deriving || !seed}>{deriving ? "DERIVING..." : "Generate value"}</button></div><div className="terminal"><div className="terminal-bar"><span>stdout</span><span>~rng@1.0/derive</span></div><div className="terminal-body"><p><span className="prompt">&gt;</span> bytes=32 counter=0</p><code className="big-output">{derived || "waiting_for_input"}</code></div></div></div>}
+        {mode === "local" && <div className="workbench-grid">
+          <div>
+            <h2>Generate from a seed</h2>
+            <p className="muted">Free and replay-safe. The sender can predict the result.</p>
+            <label className="field"><span>Seed</span><input value={seed} onChange={(event) => setSeed(event.target.value)} maxLength={4096} /></label>
+            <button className="button primary" onClick={derive} disabled={deriving || !seed}>{deriving ? "Generating…" : "Generate value"}</button>
+          </div>
+          <div className="terminal">
+            <div className="terminal-bar"><span>stdout</span><span>~rng@1.0/derive</span></div>
+            <div className="terminal-body"><p><span className="prompt">&gt;</span> bytes=32 counter=0</p><code className="big-output">{derived || "—"}</code></div>
+          </div>
+        </div>}
 
-        {mode === "threshold" && <div><h2>Fast random</h2><p className="muted">Fast: 2-of-3 threshold BLS, about one message phase, safe unless 2 of 3 operators collude. Any-Honest: safe if any one validator is honest, slower. Fast is on demand, not a heartbeat: a round opens only when a paid request waits for it, and the committee signs nothing else. Better than local randomness, weaker than Any-Honest. One result costs {status?.price ?? 3} RNG; applications should prepay the balance so players never handle protocol credits.</p><ol className="wallet-steps"><li className={address ? "done" : "active"}><span>1</span><div><strong>CONNECT_WANDER</strong><small>{address ?? "authorize this console"}</small></div><button className="button" onClick={onConnect} disabled={Boolean(address) || Boolean(busy)}>{address ? "CONNECTED" : walletPresent ? "CONNECT" : "NO_WALLET"}</button></li><li className={(account?.tokenBalance ?? 0) >= ((status?.price ?? 3) * 3) ? "done" : address ? "active" : ""}><span>2</span><div><strong>GET_RNG</strong><small>wallet::{account?.tokenBalance ?? "—"}</small></div><a className="button" href={RNG_MARKET_URL} target="_blank" rel="noreferrer" title="RNG has a fixed supply and no faucet: buy it on the RNG/PUSD book">BUY_ON_PARALITH</a></li><li className={(account?.beaconBalance ?? 0) >= (status?.price ?? 3) ? "done" : account ? "active" : ""}><span>3</span><div><strong>FUND_FAST</strong><small>credit::{account?.beaconBalance ?? "—"}</small></div><button className="button" onClick={onFund} disabled={!account || account.tokenBalance < ((status?.price ?? 3) * 3) || Boolean(busy)}>FUND_{(status?.price ?? 3) * 3}</button></li><li className={(account?.beaconBalance ?? 0) >= (status?.price ?? 3) ? "active" : ""}><span>4</span><div><strong>REQUEST_RANDOM</strong><small>cost::{status?.price ?? 3}_RNG</small></div><button className="button invert" onClick={onRequest} disabled={!account || account.beaconBalance < (status?.price ?? 3) || Boolean(busy)}>EXECUTE</button></li></ol>{!walletPresent && <p className="notice">WANDER_NOT_FOUND :: <a href="https://wander.app" target="_blank" rel="noreferrer">install wallet</a></p>}{busy && <p className="notice" role="status">{busy} :: approve in Wander if prompted</p>}{draw && <output className="proof-output"><strong>{draw.value ? "RESULT_RECEIVED" : `WAITING_FOR_ROUND_${draw.round}`}</strong>{draw.value && <><span>{draw.verified ? "[ NATIVE_PROOF::PASS ]" : "[ PROOF::UNKNOWN ]"}</span><code>{draw.value}</code><small>round::{draw.round} request::{draw.requestId}</small></>}</output>}</div>}
+        {mode === "threshold" && <div>
+          <h2>Fast random</h2>
+          <p className="muted">2-of-3 threshold BLS on demand. Safe unless 2 of 3 operators collude.</p>
+          <ol className="wallet-steps">
+            <li className={address ? "done" : "active"}><span>1</span><div><strong>Connect Wander</strong><small>{address ?? "Not connected"}</small></div>
+              <button className="button" onClick={onConnect} disabled={Boolean(address) || Boolean(busy)}>{address ? "Connected" : walletPresent ? "Connect" : "No wallet"}</button></li>
+            <li className={(account?.tokenBalance ?? 0) >= ((status?.price ?? 3) * 3) ? "done" : address ? "active" : ""}><span>2</span><div><strong>Get RNG</strong><small>Wallet {account ? `${account.tokenBalance} RNG` : "—"}</small></div>
+              <a className="button" href={RNG_MARKET_URL} target="_blank" rel="noreferrer">Buy RNG</a></li>
+            <li className={(account?.beaconBalance ?? 0) >= (status?.price ?? 3) ? "done" : account ? "active" : ""}><span>3</span><div><strong>Fund Fast</strong><small>Credit {account ? `${account.beaconBalance} RNG` : "—"}</small></div>
+              <button className="button" onClick={onFund} disabled={!account || account.tokenBalance < ((status?.price ?? 3) * 3) || Boolean(busy)}>{fastPrice === undefined ? "Fund" : `Fund ${fastPrice * 3} RNG`}</button></li>
+            <li className={(account?.beaconBalance ?? 0) >= (status?.price ?? 3) ? "active" : ""}><span>4</span><div><strong>Request a value</strong><small>Costs {rngAmount(fastPrice)}</small></div>
+              <button className="button primary" onClick={onRequest} disabled={!account || account.beaconBalance < (status?.price ?? 3) || Boolean(busy)}>Request</button></li>
+          </ol>
+          {walletPresent === false && <p className="notice">Wander not found. <a href="https://wander.app" target="_blank" rel="noreferrer">Install Wander</a></p>}
+          {busy && <p className="notice" role="status">{busy}… Approve in Wander if asked.</p>}
+          {draw && <output className="proof-output"><strong>{draw.value ? "Result" : `Waiting for round ${draw.round}`}</strong>{draw.value && <><span>{draw.verified ? "Proof verified" : "Proof unknown"}</span><code>{draw.value}</code><small>Round {draw.round} · request {draw.requestId}</small></>}</output>}
+        </div>}
 
-        {mode === "beacon" && <div className="workbench-grid"><div><h2>Public beacon</h2><p className="muted">The RNG Foundation prepays two Any-Honest rounds every second. Public reads are observable; paid process subscriptions are the canonical bound delivery path.</p><div className="fact-stack"><div><span>STATUS</span><b>{anyHonest.configured ? "LIVE" : "CONNECTING"}</b></div><div><span>SOURCE</span><b>ANY-HONEST</b></div><div><span>PROOF</span><b>{anyHonest.proofValid ? "VERIFIED" : "WAIT"}</b></div></div><button className="button invert" disabled={walletPresent === null} onClick={() => void refreshAnyHonest().catch((problem) => setStatusError(problem instanceof Error ? problem.message : "status unavailable"))}>Refresh round</button></div><div className="terminal"><div className="terminal-bar"><span>beacon.feed</span><span>{anyHonest.proofValid ? "PASS" : "WAIT"}</span></div><div className="terminal-body"><p>mode......... {anyHonest.mode ?? "heartbeat"}</p><p>round........ {anyHonest.round ?? "—"}</p><p>validators... {anyHonest.validators?.filter((validator) => !validator.suspended && !validator.exiting).length ?? "—"}</p><p>round-cost... {anyHonest.priceSchedule?.round ?? 1} RNG</p><p>reserve...... {anyHonest.foundationReserveAtoms && anyHonest.unit ? `${(BigInt(anyHonest.foundationReserveAtoms) / BigInt(anyHonest.unit)).toString()} RNG` : "—"}</p><code className="big-output">{anyHonest.latest?.value ?? statusError ?? "awaiting verified round"}</code></div></div></div>}
+        {mode === "beacon" && <div className="workbench-grid">
+          <div>
+            <h2>Public beacon</h2>
+            <p className="muted">Two Any-Honest rounds a second, prepaid by the RNG Foundation.</p>
+            <div className="fact-stack">
+              <div><span>Status</span><b>{beaconState}</b></div>
+              <div><span>Source</span><b>Any-Honest</b></div>
+              <div><span>Proof</span><b>{anyHonestLoaded ? (anyHonest.proofValid ? "Verified" : "Waiting") : "—"}</b></div>
+            </div>
+          </div>
+          <div className="terminal">
+            <div className="terminal-bar"><span>beacon.feed</span><span>{anyHonest.proofValid ? "pass" : "wait"}</span></div>
+            <div className="terminal-body">
+              <p>mode......... {anyHonest.mode ?? "—"}</p>
+              <p>round........ {anyHonest.round ?? "—"}</p>
+              <p>validators... {activeValidators ?? "—"}</p>
+              <p>round-cost... {rngAmount(anyHonest.priceSchedule?.round)}</p>
+              <p>reserve...... {reserve}</p>
+              <code className="big-output">{anyHonest.latest?.value ?? "—"}</code>
+            </div>
+          </div>
+        </div>}
 
-        {mode === "anyhonest" && <div className="roadmap-workbench"><div><h2>Any-Honest randomness</h2><p className="lede">Every validator commits a time-lock puzzle before reveals begin. One honest hidden contribution keeps the round unpredictable; a missing reveal can be cracked later without changing the result.</p><div className="roadmap-status">{anyHonest.proofValid ? "Round verified" : "Awaiting verified round"}</div></div><div className="protocol-steps"><div><span>01</span><b>COMMIT</b><p>Validators lock fresh puzzle contributions.</p></div><div><span>02</span><b>REVEAL</b><p>Secrets open only after the commit window closes.</p></div><div><span>03</span><b>CRACK</b><p>Treasury pays a {anyHonest.priceSchedule?.crackBounty ?? 10} RNG verified-crack bounty.</p></div><div><span>04</span><b>COMBINE</b><p>Every canonical output becomes one round value.</p></div></div><div className="mt-6 max-w-[760px] space-y-3 text-[14px] leading-relaxed text-[var(--gray)]"><p className="m-0 text-[16px] text-[var(--white)]">Request one value</p><p className="m-0">One signed message pays {anyHonest.price ?? anyHonest.priceSchedule?.request ?? 4} RNG and binds your request to the round taking commits. Get RNG on the <a href={RNG_MARKET_URL} target="_blank" rel="noreferrer">RNG/PUSD orderbook</a>.</p><button className="button invert" onClick={onPayAndRequest} disabled={Boolean(busy) || !anyHonest.configured || !anyHonest.features?.includes("pay-and-request")}>{busy === "Requesting" ? "Waiting for the round..." : address ? "Pay and request" : "Connect and request"}</button>{!anyHonest.features?.includes("pay-and-request") && anyHonest.configured && <p className="m-0">Available once beacon v3 is live.</p>}{paid && <output className="proof-output"><strong>{paid.value ? `Round ${paid.round}` : "Waiting for your round"}</strong>{paid.value && <><span>{paid.valid ? "Value recomputed from the round: match" : "Value does not match the round"}</span><code>{paid.value}</code></>}<small>request::{paid.requestId}</small></output>}</div><div className="device-paths"><code>~rng@1.0/generator</code><code>~rng@1.0/verify-reveal</code><code>~rng@1.0/verify-crack</code><code>~rng@1.0/derive</code></div></div>}
+        {mode === "anyhonest" && <div className="roadmap-workbench">
+          <div>
+            <h2>Any-Honest randomness</h2>
+            <p className="muted">Safe if any one validator in the round is honest.</p>
+            <p className="roadmap-status" role="status"><span className={anyHonest.proofValid ? "signal on" : "signal"} />{anyHonest.proofValid ? "Round verified" : "Awaiting a verified round"}</p>
+          </div>
+          <div className="protocol-steps">
+            <div><span>01</span><b>Commit</b><p>Validators lock fresh puzzle contributions.</p></div>
+            <div><span>02</span><b>Reveal</b><p>Secrets open only after the commit window closes.</p></div>
+            <div><span>03</span><b>Crack</b><p>Treasury pays a {rngAmount(anyHonest.priceSchedule?.crackBounty)} verified-crack bounty.</p></div>
+            <div><span>04</span><b>Combine</b><p>Every canonical output becomes one round value.</p></div>
+          </div>
+          <div className="request-block">
+            <strong>Request one value</strong>
+            <p>One signed message pays {rngAmount(requestPrice)} for a value from the next round. Buy RNG on the <a href={RNG_MARKET_URL} target="_blank" rel="noreferrer">RNG/PUSD orderbook</a>.</p>
+            <button className="button primary" onClick={onPayAndRequest} disabled={Boolean(busy) || !anyHonest.configured || !anyHonest.features?.includes("pay-and-request")}>{busy === "Requesting" ? "Waiting for the round…" : address ? "Pay and request" : "Connect and request"}</button>
+            {!anyHonest.features?.includes("pay-and-request") && anyHonest.configured && <p>Available once beacon v3 is live.</p>}
+            {paid && <output className="proof-output"><strong>{paid.value ? `Round ${paid.round}` : "Waiting for your round"}</strong>{paid.value && <><span>{paid.valid ? "Value recomputed from the round: match" : "Value does not match the round"}</span><code>{paid.value}</code></>}<small>Request {paid.requestId}</small></output>}
+          </div>
+          <div className="device-paths"><code>~rng@1.0/generator</code><code>~rng@1.0/verify-reveal</code><code>~rng@1.0/verify-crack</code><code>~rng@1.0/derive</code></div>
+        </div>}
 
-        {mode === "proof" && <div className="workbench-grid"><div><h2>Verify a Fast round</h2><p className="muted">Fetch a retained round, verify its BLS signature against the group key, then recompute the domain-separated value.</p><label className="field"><span>ROUND // BLANK MEANS LATEST</span><input type="number" min="1" inputMode="numeric" value={proofRound} onChange={(event) => setProofRound(event.target.value)} placeholder={String(status?.round ?? 1)} /></label><button className="button invert" onClick={inspectProof} disabled={proofBusy}>{proofBusy ? "VERIFYING..." : "Verify round"}</button></div><div className="terminal"><div className="terminal-bar"><span>proof.explorer</span><span>{shownProof?.verified ? "PASS" : "WAIT"}</span></div><div className="terminal-body"><p>round........ {shownProof?.round ?? "—"}</p><p>device....... {shownProof?.nativeVerification ? "~rng@1.0" : "pending"}</p><p>signature.... {shownProof?.signature?.slice(0, 32) ?? "—"}...</p><p>group-key.... {shownProof?.groupKey?.slice(0, 32) ?? "—"}...</p><p>value........ {shownProof?.value ?? "—"}</p><p className={shownProof?.verified ? "pass" : "wait"}>proof......... {shownProof?.verified ? "VERIFIED" : statusError ?? "PENDING"}</p></div></div></div>}
+        {mode === "proof" && <div className="workbench-grid">
+          <div>
+            <h2>Verify a Fast round</h2>
+            <p className="muted">Checks a retained round&apos;s BLS signature and recomputes its value.</p>
+            <label className="field"><span>Round (latest if blank)</span><input type="number" min="1" inputMode="numeric" value={proofRound} onChange={(event) => setProofRound(event.target.value)} placeholder={status?.round ? String(status.round) : ""} /></label>
+            <button className="button primary" onClick={inspectProof} disabled={proofBusy}>{proofBusy ? "Verifying…" : "Verify round"}</button>
+            {unreachable}
+          </div>
+          <div className="terminal">
+            <div className="terminal-bar"><span>proof.explorer</span><span>{shownProof?.verified ? "pass" : "wait"}</span></div>
+            <div className="terminal-body">
+              <p>round........ {shownProof?.round || "—"}</p>
+              <p>device....... {proofDevice}</p>
+              <p>signature.... {shownProof?.signature ? `${shownProof.signature.slice(0, 32)}…` : "—"}</p>
+              <p>group-key.... {shownProof?.groupKey ? `${shownProof.groupKey.slice(0, 32)}…` : "—"}</p>
+              <p>value........ {shownProof?.value ?? "—"}</p>
+              <p className={shownProof?.verified ? "pass" : "wait"}>proof........ {shownProof?.verified ? "verified" : shownProof ? "pending" : "—"}</p>
+            </div>
+          </div>
+        </div>}
 
-        {error && <p className="error" role="alert">ERROR:: {error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
       </div></section>
       <SiteFooter />
     </main>

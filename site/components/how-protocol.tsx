@@ -6,16 +6,16 @@ import { SiteFooter, SiteHeader } from "./site-header";
 
 type Status = {
   network: string; round: number; threshold: number; committeeSize: number;
-  price: number; nativeVerification: boolean; verified: boolean; value: string;
+  price: number; nativeVerification: boolean; verificationMode?: string; verified: boolean; value: string;
 };
 
 const surfaces = [
-  ["01", "LOCAL", "LIVE", "derive", "free"],
-  ["02", "FAST", "LIVE / ON DEMAND", "verify-bls", "3 RNG"],
-  ["03", "BEACON", "LIVE / 1 SEC", "beacon", "read free"],
-  ["04", "ANY-HONEST", "LIVE", "verify-reveal + verify-crack", "4 RNG"],
-  ["05", "PROOF", "LIVE", "verify", "free"],
-];
+  ["01", "Local", "Live", "derive", "Free"],
+  ["02", "Fast", "Live · on demand", "verify-bls", null],
+  ["03", "Beacon", "Live · 2/s", "beacon", "Free to read"],
+  ["04", "Any-Honest", "Live", "verify-reveal + verify-crack", "Per request"],
+  ["05", "Proof", "Live", "verify", "Free"],
+] as const;
 
 export function HowProtocol() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -26,6 +26,8 @@ export function HowProtocol() {
       if (response.ok) setStatus(await response.json() as Status);
     } catch { /* The device map remains useful offline. */ }
   });
+
+  const device = status ? (status.nativeVerification ? "~rng@1.0" : status.verificationMode ?? "—") : "—";
 
   return (
     <main className="shell compact-page">
@@ -38,11 +40,25 @@ export function HowProtocol() {
             <div className="table-row" key={name}>
               <span>{index}</span><b>{name}</b><span className="surface-status">{state}</span>
               <code><small>Operation</small>/{operation}</code>
-              <span><small>Cost</small>{name === "FAST" && status ? String(status.price) + " RNG" : cost}</span>
+              <span><small>Cost</small>{cost ?? (status ? `${status.price} RNG` : "—")}</span>
             </div>
           ))}
         </div>
-        <div className="how-lower"><div className="flow-panel"><p className="board-label">Fast request</p><div className="flow-line"><span>Request lock</span><i>→</i><span>2/3 BLS</span><i>→</i><span>~rng@1.0</span><i>→</i><span>Value</span></div><p>Any-Honest replaces the committee signature step with time-lock commit, reveal, crack, and combine.</p></div><dl className="compact-live" id="live"><div><dt>NETWORK</dt><dd>{status?.network ?? "—"}</dd></div><div><dt>ROUND</dt><dd>{status?.round ?? "—"}</dd></div><div><dt>THRESHOLD</dt><dd>{status ? `${status.threshold}/${status.committeeSize}` : "—"}</dd></div><div><dt>DEVICE</dt><dd>{status?.nativeVerification ? "~rng@1.0" : "—"}</dd></div><div><dt>PROOF</dt><dd className={status?.verified ? "pass" : "wait"}>{status?.verified ? "PASS" : "WAIT"}</dd></div><div className="value"><dt>VALUE</dt><dd>{status?.value ?? "—"}</dd></div></dl></div>
+        <div className="how-lower">
+          <div className="flow-panel">
+            <p className="board-label">Fast request</p>
+            <div className="flow-line"><span>Request lock</span><i>→</i><span>2/3 BLS</span><i>→</i><span>~rng@1.0</span><i>→</i><span>Value</span></div>
+            <p>Any-Honest swaps the committee signature for commit, reveal, crack and combine.</p>
+          </div>
+          <dl className="compact-live" id="live">
+            <div><dt>Network</dt><dd>{status?.network ?? "—"}</dd></div>
+            <div><dt>Fast round</dt><dd>{status?.round ? status.round.toLocaleString("en-US") : "—"}</dd></div>
+            <div><dt>Threshold</dt><dd>{status ? `${status.threshold}/${status.committeeSize}` : "—"}</dd></div>
+            <div><dt>Verification</dt><dd>{device}</dd></div>
+            <div className="wide"><dt>Proof</dt><dd className={status?.verified ? "pass" : "wait"}>{status ? (status.verified ? "Pass" : "Waiting") : "—"}</dd></div>
+            <div className="value"><dt>Value</dt><dd>{status?.value ?? "—"}</dd></div>
+          </dl>
+        </div>
       </section>
       <SiteFooter />
     </main>
