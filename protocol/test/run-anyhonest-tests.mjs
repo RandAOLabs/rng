@@ -178,8 +178,26 @@ const bundle = [
   read('protocol/beacon/anyhonest.lua'),
   fixtures,
   transcriptHook(),
+  recordHook(),
   fixture(read('protocol/test/anyhonest_test.lua')),
 ].join('\n');
+
+/** RNG_RECORD=<file>: every request the suite hands compute(), in order, as a
+ *  JSON array (protocol/test/vm-parity.mjs replays it on both VMs). */
+function recordHook() {
+  if (!process.env.RNG_RECORD) return '';
+  return `do
+  local inner, enc = compute, encode -- the suite swaps encode for a throwing stub
+  RngRecorded = {}
+  compute = function(b, req, env)
+    if req ~= nil then RngRecorded[#RngRecorded + 1] = enc(req) end
+    return inner(b, req, env)
+  end
+end`;
+}
+const RECORD_MARK = '\n<<<RNG-RECORD>>>\n';
+const tail = () => (!process.env.RNG_RECORD ? evalTail('rngtest')
+  : `\nlocal __v = rngtest()\nreturn __v .. ${JSON.stringify(RECORD_MARK)} .. "[" .. table.concat(RngRecorded, ",") .. "]"`);
 
 function verdict(text) {
   console.log(text);
@@ -200,9 +218,16 @@ if (live !== -1) {
   const pid = addr('timelock-tests');
   const result = await handle(null, {
     Id: 'eval-timelock-tests', Target: pid, Owner: pid, From: pid, Tags: [{ name: 'Action', value: 'Eval' }],
-    Data: bundle + evalTail('rngtest'), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+    Data: bundle + tail(), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
   }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
   if (result.Error) { console.error(result.Error); process.exit(1); }
   const out = result.Output?.data;
-  verdict(typeof out === 'string' ? out : out?.output ?? JSON.stringify(out));
+  let text = typeof out === 'string' ? out : out?.output ?? JSON.stringify(out);
+  if (process.env.RNG_RECORD) {
+    const at = text.indexOf(RECORD_MARK);
+    if (at === -1) { console.error('no record'); process.exit(1); }
+    fs.writeFileSync(process.env.RNG_RECORD, text.slice(at + RECORD_MARK.length));
+    text = text.slice(0, at);
+  }
+  verdict(text);
 }

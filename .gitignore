@@ -24,3 +24,4 @@ docs/soak/data/
 
 # deploy: the live-rate samples verify/watch keep between runs
 deploy/*.rate-samples.json
+.parity/
