@@ -1,58 +1,50 @@
 "use client";
 
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useState } from "react";
 import { useLivePoll } from "../hooks/use-live-poll";
 import { connectWallet } from "../lib/wallet";
 import {
   describeAction, duration, ownersLabel, percent, tally, tokens, yapUrl,
   type DaoInfo, type DaoProposal, type DaoStake, type GovOwners,
 } from "../app/api/dao/model";
+import { Section, Stat, Stats } from "./page-section";
 import { SiteFooter, SiteHeader } from "./site-header";
 
 type DaoStatus = { configured: boolean; status?: string; process?: string; node?: string; beacon?: string;
-  info?: DaoInfo; proposals: DaoProposal[]; error?: string };
+  info?: DaoInfo; proposals?: DaoProposal[] };
 // beaconinfo via /api/anyhonest. The v3 governance fields are absent on a v2 beacon.
 type Beacon = { configured: boolean; process?: string; round?: number; unit?: number;
   foundationReserveAtoms?: string; treasuryAtoms?: string; mode?: string; paused?: boolean;
   gov?: GovOwners; successor?: string; successorAck?: boolean; features?: string[] };
 
-const h1: CSSProperties = { fontFamily: "var(--display)", fontSize: 30, lineHeight: 1.2, letterSpacing: "-.01em", textTransform: "none" };
-const h2: CSSProperties = { fontFamily: "var(--display)", fontSize: 20, lineHeight: 1.3, letterSpacing: 0, textTransform: "none", marginBottom: 12 };
 const short = (a?: string) => a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—";
 const when = (ms?: number) => ms ? new Date(ms).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "—";
+const rng = (amount: string) => amount === "—" ? amount : `${amount} RNG`;
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="border-t border-[var(--line)] py-8">
-      <h2 style={h2}>{title}</h2>
-      <div className="space-y-3 text-[14px] leading-relaxed text-[var(--gray)]">{children}</div>
-    </section>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="border border-[var(--line)] bg-[#0c0c0c] p-3">
-      <dt className="text-[11px] text-[var(--dim)]">{label}</dt>
-      <dd className="m-0 mt-1 break-all text-[15px] text-[var(--white)] tabular-nums">{value}</dd>
-    </div>
-  );
+// A failed read returns null so the page keeps its last good state.
+async function readJson<T>(url: string): Promise<T | null> {
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    return response.ok ? await response.json() as T : null;
+  } catch { return null; }
 }
 
 export function DaoConsole() {
-  const [dao, setDao] = useState<DaoStatus>({ configured: false, proposals: [] });
-  const [beacon, setBeacon] = useState<Beacon>({ configured: false });
+  const [dao, setDao] = useState<DaoStatus>();
+  const [beacon, setBeacon] = useState<Beacon>();
+  const [daoDown, setDaoDown] = useState(false);
+  const [beaconDown, setBeaconDown] = useState(false);
   const [address, setAddress] = useState<string | null>(null);
   const [stake, setStake] = useState<DaoStake | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
-    const [daoResponse, beaconResponse] = await Promise.all([
-      fetch("/api/dao", { cache: "no-store" }), fetch("/api/anyhonest", { cache: "no-store" }),
-    ]);
-    setDao(await daoResponse.json() as DaoStatus);
-    setBeacon(await beaconResponse.json() as Beacon);
+    const [nextDao, nextBeacon] = await Promise.all([readJson<DaoStatus>("/api/dao"), readJson<Beacon>("/api/anyhonest")]);
+    if (nextDao) setDao(nextDao);
+    if (nextBeacon) setBeacon(nextBeacon);
+    setDaoDown(!nextDao);
+    setBeaconDown(!nextBeacon);
   }
 
   useLivePoll(refresh, 5_000);
@@ -73,69 +65,68 @@ export function DaoConsole() {
     setStake(body.stake ?? null);
   });
 
-  const info = dao.info;
+  const info = dao?.info;
+  const proposals = dao?.proposals ?? [];
   const denom = info?.Denomination ?? 6;
-  const unitDigits = Math.round(Math.log10(beacon.unit ?? 1_000_000));
-  const v3 = beacon.features?.includes("gov") ?? false;
-  const beaconPid = dao.beacon || beacon.process || "";
+  const unitDigits = Math.round(Math.log10(beacon?.unit ?? 1_000_000));
+  const v3 = beacon?.features?.includes("gov") ?? false;
+  const beaconPid = dao?.beacon || beacon?.process || "";
+  const yap = dao?.process && dao.node ? yapUrl(dao.process, dao.node) : null;
 
   return (
     <main className="shell">
       <SiteHeader active="dao" />
       <div className="container pb-24">
-        <section className="py-10">
-          <h1 style={h1}>RNG DAO</h1>
-          <div className="mt-4 max-w-[760px] space-y-3 text-[15px] leading-relaxed text-[var(--gray)]">
-            <p className="m-0">RNG holders govern the beacon through a YapDAO <code>stake-dao/1</code> process. Stake RNG to vote. A passed proposal sends one message, usually a <code>Gov.*</code> action to the beacon. Fees, pause and resume apply on receipt; anything that moves money or code takes effect at least 24 hours later, and validators may leave with their bond meanwhile.</p>
-            <p className="m-0">This page is read-only. Staking, proposing and voting happen on YapDAO.</p>
-            {dao.process && dao.node && <p className="m-0"><a className="button invert" href={yapUrl(dao.process, dao.node)} target="_blank" rel="noreferrer">Vote on yapdao.com</a></p>}
-          </div>
+        <section className="page-intro">
+          <h1>RNG DAO</h1>
+          <p>RNG holders govern the beacon by staking on YapDAO.</p>
+          {yap && <a className="button primary" href={yap} target="_blank" rel="noreferrer">Vote on yapdao.com</a>}
         </section>
 
         <Section title="Beacon governance">
-          {!beacon.configured && <p className="m-0">The beacon is not deployed on this network yet.</p>}
-          {beacon.configured && !v3 && <p className="m-0">This beacon predates DAO governance. The fields below fill in once beacon v3 is live.</p>}
-          <dl className="m-0 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            <Stat label="Owners" value={v3 ? ownersLabel(beacon.gov) : "—"} />
-            <Stat label="DAO" value={beacon.gov?.dao ? short(beacon.gov.dao) : "—"} />
-            <Stat label="Mode" value={beacon.paused ? "Paused" : beacon.mode ?? "—"} />
-            <Stat label="Reserve" value={`${tokens(beacon.foundationReserveAtoms, unitDigits)} RNG`} />
-            <Stat label="Treasury" value={`${tokens(beacon.treasuryAtoms, unitDigits)} RNG`} />
-            <Stat label="Successor" value={beacon.successor ? `${short(beacon.successor)}${beacon.successorAck ? " (acked)" : ""}` : "None"} />
-          </dl>
+          {beaconDown && <p className="status-line" role="status">Beacon unreachable</p>}
+          {beacon && !beacon.configured && <p>The beacon is not deployed on this network yet.</p>}
+          {beacon?.configured && !v3 && <p>This beacon predates DAO governance.</p>}
+          <Stats cols={6}>
+            <Stat label="Owners" value={v3 ? ownersLabel(beacon?.gov) : "—"} />
+            <Stat label="DAO" value={beacon?.gov?.dao ? short(beacon.gov.dao) : "—"} />
+            <Stat label="Mode" value={beacon?.paused ? "Paused" : beacon?.mode ?? "—"} />
+            <Stat label="Reserve" value={rng(tokens(beacon?.foundationReserveAtoms, unitDigits))} />
+            <Stat label="Treasury" value={rng(tokens(beacon?.treasuryAtoms, unitDigits))} />
+            <Stat label="Successor" value={!beacon?.configured ? "—" : beacon.successor ? `${short(beacon.successor)}${beacon.successorAck ? " (acked)" : ""}` : "None"} />
+          </Stats>
         </Section>
 
         <Section title="The DAO">
-          {!dao.configured && <p className="m-0">{dao.status === "not-stake-dao" ? "The configured DAO process is not a stake-dao/1 DAO." : "The RNG DAO is not deployed on this network yet."}</p>}
-          {info && <>
-            <dl className="m-0 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              <Stat label="Staked" value={`${tokens(info.TotalStaked, denom)} ${info.Ticker}`} />
-              <Stat label="Stakers" value={info.Stakers} />
-              <Stat label="Open proposals" value={`${info.OpenProposals} / ${info.MaxActiveProposals}`} />
-              <Stat label="To propose" value={`${tokens(info.ProposalRequirement ?? info.ProposalThreshold, denom)} staked + ${tokens(info.ProposalDeposit, denom)} deposit`} />
-              <Stat label="Voting period" value={duration(info.VotingPeriod)} />
-              <Stat label="Unstake delay" value={duration(info.UnstakeDelay)} />
-            </dl>
-            <p className="m-0">Quorum {percent(info.QuorumBps)} of staked RNG. A proposal passes with more than {percent(info.PassBps)} yes, and is vetoed above {percent(info.VetoBps)} veto.</p>
-          </>}
-          {address && <p className="m-0">Your stake ({short(address)}): {tokens(stake?.active ?? "0", denom)} active, {tokens(stake?.cooling ?? "0", denom)} cooling{stake?.releaseAt ? `, withdrawable ${when(stake.releaseAt)}` : ""}.</p>}
-          {!address && dao.configured && <button className="button" onClick={() => void connect()} disabled={Boolean(busy)}>Show my stake</button>}
+          {daoDown && <p className="status-line" role="status">DAO unreachable</p>}
+          {dao && !dao.configured && <p>{dao.status === "not-stake-dao" ? "The configured DAO process is not a stake-dao/1 DAO." : "The RNG DAO is not deployed on this network yet."}</p>}
+          <Stats cols={6}>
+            <Stat label="Staked" value={info ? `${tokens(info.TotalStaked, denom)} ${info.Ticker}` : "—"} />
+            <Stat label="Stakers" value={info?.Stakers ?? "—"} />
+            <Stat label="Open proposals" value={info ? `${info.OpenProposals} / ${info.MaxActiveProposals}` : "—"} />
+            <Stat label="To propose" value={info ? `${tokens(info.ProposalRequirement ?? info.ProposalThreshold, denom)} + ${tokens(info.ProposalDeposit, denom)} deposit` : "—"} />
+            <Stat label="Voting period" value={info ? duration(info.VotingPeriod) : "—"} />
+            <Stat label="Unstake delay" value={info ? duration(info.UnstakeDelay) : "—"} />
+          </Stats>
+          {info && <p>Quorum {percent(info.QuorumBps)} of staked RNG. Passes above {percent(info.PassBps)} yes; vetoed above {percent(info.VetoBps)} veto.</p>}
+          {address && <p>Your stake ({short(address)}): {tokens(stake?.active ?? "0", denom)} active, {tokens(stake?.cooling ?? "0", denom)} cooling{stake?.releaseAt ? `, withdrawable ${when(stake.releaseAt)}` : ""}.</p>}
+          {!address && dao?.configured && <div><button className="button" onClick={() => void connect()} disabled={Boolean(busy)}>Show my stake</button></div>}
         </Section>
 
         <Section title="Proposals">
-          {dao.proposals.length === 0 && <p className="m-0">No proposals yet.</p>}
-          <div className="space-y-3">{dao.proposals.slice(0, 20).map((p) => {
+          {!dao ? <p>—</p> : proposals.length === 0 && <p>No proposals yet.</p>}
+          {proposals.length > 0 && <div className="cards">{proposals.slice(0, 20).map((p) => {
             const t = tally(p);
             const act = describeAction(p.action, beaconPid);
             return (
-              <article key={p.id} className="border border-[var(--line)] p-4">
-                <p className="m-0 text-[12px] text-[var(--dim)]">#{p.id} · {p.status}{p.status === "active" ? ` · ends ${when(p.endsAt)} · would be ${t.outcome}` : ""}</p>
-                <p className="m-0 mt-1 text-[15px] text-[var(--white)]">{p.title}</p>
-                <p className="m-0 mt-1 text-[12px]">Yes {tokens(p.yes, denom)} · No {tokens(p.no, denom)} · Veto {tokens(p.veto, denom)} · Abstain {tokens(p.abstain, denom)} · quorum {t.quorumMet ? "met" : `${tokens(p.quorum, denom)} needed`} · {p.voters} voters</p>
-                {act && <p className="m-0 mt-2 break-all text-[12px]"><code>{act.name}</code> {act.args} → {act.toBeacon ? "beacon" : short(p.action?.process)}{act.executed ? " · executed" : ""}</p>}
-                {dao.process && dao.node && p.status === "active" && <p className="m-0 mt-2 text-[12px]"><a className="underline underline-offset-2" href={yapUrl(dao.process, dao.node)} target="_blank" rel="noreferrer">Vote on YapDAO</a></p>}
+              <article key={p.id} className="card">
+                <p className="card-meta">#{p.id} · {p.status}{p.status === "active" ? ` · ends ${when(p.endsAt)} · would be ${t.outcome}` : ""}</p>
+                <p className="card-title">{p.title}</p>
+                <p className="card-meta">Yes {tokens(p.yes, denom)} · No {tokens(p.no, denom)} · Veto {tokens(p.veto, denom)} · Abstain {tokens(p.abstain, denom)} · quorum {t.quorumMet ? "met" : `${tokens(p.quorum, denom)} needed`} · {p.voters} voters</p>
+                {act && <p className="card-meta"><code>{act.name}</code> {act.args} → {act.toBeacon ? "beacon" : short(p.action?.process)}{act.executed ? " · executed" : ""}</p>}
+                {yap && p.status === "active" && <p><a href={yap} target="_blank" rel="noreferrer">Vote on YapDAO</a></p>}
               </article>);
-          })}</div>
+          })}</div>}
         </Section>
         {busy && <p className="notice" role="status">{busy}…</p>}
         {error && <p className="error" role="alert">{error}</p>}
