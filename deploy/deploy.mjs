@@ -18,6 +18,7 @@
 //   grant <address> <rng>                   plain RNG transfer from the deployer
 //   bond-for <rng> <address...|validators.json>  Transfer X-Bond X-For each validator
 //   gov <Gov.Action> [Tag=Value ...]        any wallet-path Gov.* on the beacon (Pause, Resume, Set-Successor, ...)
+//   gov-old <Gov.Action> [Tag=Value ...]    the same on the retired predecessor beacon (Set-Successor, Move-Reserve)
 //   resend-ack                              Resend-Successor-Ack to the predecessor
 // Owners (vendor/gov.lua). The launch wallet bootstraps; at launch the DAO becomes the ONLY owner.
 // The DAO's money/code actions carry Effective-At >= receipt + 24 h (dao-propose fills $EFFECTIVE_AT)
@@ -1038,6 +1039,17 @@ async function main(argv) {
       if (/^Gov\.(Set-Dao|Renounce-Wallet)$/.test(action)) throw new Error('use `set-dao` / `renounce-wallet`');
       const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
       return send(state.beacon, action, { tags });
+    },
+    // The same, on the beacon this one replaced (its genesis predecessor, now
+    // retired in state): Gov.Set-Successor / Gov.Move-Reserve at a handover.
+    async 'gov-old'(action, ...kv) {
+      if (!/^Gov\.[A-Za-z-]+$/.test(action || '')) throw new Error('gov-old <Gov.Action> [Tag=Value ...]');
+      const old = state.predecessor;
+      if (!isPid(old) || !(state.retired || []).some((r) => r.role === 'beacon' && r.pid === old)) {
+        throw new Error(`gov-old: predecessor ${old || '""'} is not a beacon this state retired`);
+      }
+      const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
+      return send(old, action, { tags });
     },
     'resend-ack': () => send(state.beacon, 'Resend-Successor-Ack'),
 
