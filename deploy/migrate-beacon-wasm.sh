@@ -33,7 +33,7 @@ case "${1:-}" in
     [ "$(info $OLD beaconinfo .successor)" = '""' ] || die "the old beacon already names a successor"
     echo "old beacon: round $(info $OLD beaconinfo .round), reserve $(info $OLD beaconinfo .foundationReserveAtoms) atoms, wallet co-owns"
     [ "$(st .beacon)" = "$OLD" ] || die "state beacon is $(st .beacon), not $OLD"
-    RNG_DRY_RUN=1 D spawn-beacon --replace >/dev/null && echo "spawn-beacon --replace: dry run ok (wasm-patch, pinned runtime)"
+    RNG_DRY_RUN=1 RNG_SCHEDULER=$(st .scheduler) RNG_DEPLOYER=$(st .deployer) D spawn-beacon --replace >/dev/null && echo "spawn-beacon --replace: dry run ok (wasm-patch, pinned runtime)"
     echo "Check the node build carries env.wp_rng_* (hyperbeam 547c0f57d) before 'spawn'." ;;
   spawn)
     [ "$(st .beacon)" = "$OLD" ] || die "already spawned: state beacon is $(st .beacon)"
