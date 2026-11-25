@@ -23,7 +23,7 @@ export function SiteHeader({ active }: Props) {
     <header className="topbar">
       <a className="brand" href="/" aria-label="RNG Labs home">
         <Image className="brand-logo" src="/rng.png" width={48} height={48} alt="" priority unoptimized />
-        <span className="brand-copy"><strong>RNG_LABS</strong></span>
+        <span className="brand-copy"><strong>RNG Labs</strong></span>
       </a>
       <nav className="nav-rail" aria-label="Main navigation">{links}</nav>
       <button type="button" className="site-menu" popoverTarget="site-drawer" aria-label="Open navigation">
@@ -31,7 +31,7 @@ export function SiteHeader({ active }: Props) {
       </button>
       <div id="site-drawer" popover="auto" aria-label="Site menu">
         <div className="drawer-heading"><strong>RNG Labs</strong><button type="button" popoverTarget="site-drawer" popoverTargetAction="hide" aria-label="Close navigation">×</button></div>
-        <nav aria-label="Main navigation">{links}</nav>
+        <nav aria-label="Menu">{links}</nav>
       </div>
     </header>
   );
@@ -39,6 +39,6 @@ export function SiteHeader({ active }: Props) {
 
 export function SiteFooter() {
   return (
-    <footer className="footer"><strong>RNG_LABS // CIPHERPLAY_INC</strong><span>HYPERBEAM_RNG_V3 :: MAINNET</span></footer>
+    <footer className="footer"><strong>RNG Labs · CipherPlay</strong><span>HyperBEAM RNG v3 · Mainnet</span></footer>
   );
 }
