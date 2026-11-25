@@ -310,7 +310,12 @@ test('dry-run plan prints the whole v3 sequence and sends nothing', () => {
   assert.deepEqual(spawns.map((l) => l.role), ['token', 'dao', 'beacon', 'fair', 'fast']);
   assert.ok(spawns.every((l) => l.scheduler === pid('sched')), 'one scheduler');
   const [token, dao, beacon, fair, fast] = spawns.map((l) => l.pid);
-  assert.deepEqual(spawns.map((l) => l.executionDevice), Array(5).fill('lua-patch@1.0'), 'every process on lua-patch@1.0');
+  assert.deepEqual(spawns.map((l) => l.executionDevice),
+    ['wasm-patch@1.0', 'lua-patch@1.0', 'wasm-patch@1.0', 'wasm-patch@1.0', 'wasm-patch@1.0'],
+    'the contracts on wasm-patch@1.0, the DAO on lua-patch@1.0');
+  const pin = JSON.parse(fs.readFileSync(path.join(ROOT, 'deploy/wasm-runtime.json'), 'utf8'));
+  assert.ok(spawns.filter((l) => l.executionDevice === 'wasm-patch@1.0').every((l) => l.imageSha256 === pin.sha256),
+    'every wasm-patch spawn names the pinned runtime');
   assert.match(spawns[0].prelude, new RegExp(`\\["${DEPLOYER}"\\] = 1000000000000000,`));
   assert.equal(spawns[1].definition['dao-token'], token);
   const sends = lines.filter((l) => l.op === 'send');

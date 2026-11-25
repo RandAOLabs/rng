@@ -4,9 +4,11 @@
 // (validator/daemon.mjs), and paid requests. Proves rounds advance and
 // measures them. Never point it at a live node: it spawns and spends.
 //
-//   node deploy/fast-e2e.mjs --image hbnode:<tag> [--port 18201] [--seconds 60] [--every-ms 250] [--keep]
+//   node deploy/fast-e2e.mjs --image hbnode:<tag> [--port 18201] [--seconds 60] [--every-ms 250] [--sample-ms 250] [--keep]
 //     starts its own node (docker container rng-fast-e2e) and removes it after
 //   HB_NODE=http://127.0.0.1:<port> node deploy/fast-e2e.mjs ...
+//   ... --node http://<bench-node>:<port> --remote   a remote BENCH node (never a live one:
+//     deploy/bench-target.mjs refuses those); deploy.mjs needs PARALITH_MONO for wasm-patch spawns
 //     an already running local node; it must have an LMDB store, or it will
 //     not deliver the token's Credit-Notice (push answers 421)
 //
@@ -20,18 +22,18 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as bls from '../validator/bls.mjs';
 import * as hb from '../validator/vendor/hbclient.mjs';
+import { fastSeenKey, fastSeenRound } from '../lib/js/fast.ts';
+import { benchNode, startBenchNode } from './bench-target.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const arg = (name, dflt) => { const i = process.argv.indexOf(name); return i === -1 ? dflt : process.argv[i + 1]; };
 const IMAGE = arg('--image');
 const PORT = Number(arg('--port', 18201));
-const NODE = IMAGE ? `http://127.0.0.1:${PORT}` : process.env.HB_NODE;
-if (!NODE || !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(NODE)) {
-  throw new Error('pass --image, or HB_NODE as a local node (http://127.0.0.1:<port>): this spawns and spends');
-}
+const NODE = IMAGE ? `http://127.0.0.1:${PORT}` : benchNode(arg('--node', process.env.HB_NODE));
 const SECONDS = Number(arg('--seconds', 60));
 const EVERY_MS = Number(arg('--every-ms', 250));
+const SAMPLE_MS = Number(arg('--sample-ms', 250)); // how often the round is read: the round trip's resolution
 const UNIT = 1_000_000n;
 const PRICE = 3n; // signerFee 1 x 2 signers + protocolFee 1
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -45,33 +47,7 @@ log(`work dir ${dir}`);
 
 // 0. With --image: a fresh single node that schedules and delivers locally.
 const CONTAINER = 'rng-fast-e2e';
-const docker = (...a) => execFileSync('docker', a, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).toString();
-if (IMAGE) {
-  const lmdb = { 'store-module': 'hb_store_lmdb', name: '/app/cache-mainnet/lmdb', capacity: 8 * 1024 ** 3, sync: false,
-    'ao-types': 'store-module="atom", capacity="integer"' };
-  const config = {
-    'scheduling-mode': 'local_confirmation', 'scheduler-lookahead': false, 'scheduler-publish-remote': false,
-    'force-signed': false, 'store-all-signed': false,
-    'rate-limit-requests': 100000, 'rate-limit-period': 60, 'rate-limit-max': 100000, 'rate-limit-min': -100000,
-    store: [lmdb, { 'store-module': 'hb_store_fs', name: '/app/cache-mainnet', 'ao-types': 'store-module="atom"' }],
-  };
-  fs.mkdirSync(path.join(dir, 'node', 'keys'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'node', 'keys', 'node-key.json'), JSON.stringify(rsa()), { mode: 0o600 });
-  fs.writeFileSync(path.join(dir, 'node', 'node-config.json'), JSON.stringify(config));
-  try { docker('rm', '-f', CONTAINER); } catch { /* none */ }
-  docker('create', '--name', CONTAINER, '-p', `127.0.0.1:${PORT}:10000`, '-e', 'HB_PORT=10000',
-    '-e', 'HB_KEY=/app/keys/node-key.json', '-e', 'HB_CONFIG=/app/node-config.json', '-e', 'HB_PRINT=error', IMAGE);
-  docker('cp', path.join(dir, 'node', 'keys'), `${CONTAINER}:/app/keys`);
-  docker('cp', path.join(dir, 'node', 'node-config.json'), `${CONTAINER}:/app/node-config.json`);
-  docker('start', CONTAINER);
-  if (!process.argv.includes('--keep')) process.on('exit', () => { try { docker('rm', '-f', CONTAINER); } catch { /* gone */ } });
-  for (let i = 0; ; i++) {
-    try { if ((await fetch(`${NODE}/~meta@1.0/info/address`, { signal: AbortSignal.timeout(2000) })).ok) break; } catch { /* starting */ }
-    if (i > 90) throw new Error(`${IMAGE} did not come up; docker logs ${CONTAINER}`);
-    await sleep(1000);
-  }
-  log(`node ${IMAGE} up at ${NODE}`);
-}
+if (IMAGE) await startBenchNode({ image: IMAGE, port: PORT, name: CONTAINER, dir, keep: process.argv.includes('--keep'), log });
 
 // 1. Keys: the deployer, three provider wallets, a fresh 2-of-3 DKG.
 const deployer = rsa();
@@ -129,7 +105,7 @@ const sampler = (async () => {
   while (sampling) {
     const info = await key('beaconinfo').catch(() => null);
     if (info) samples.push({ at: Date.now(), round: info.round, pending: info.pendingCount });
-    await sleep(250);
+    await sleep(SAMPLE_MS);
   }
 })();
 
@@ -154,20 +130,27 @@ const deadline = Date.now() + 180_000;
 let st;
 for (;;) {
   st = await key('beaconstate');
-  const bound = sent.map((s) => st?.seen?.[`${me}|${s.id}`]);
+  // Each shard still needed, read once (a shard holds many requests).
+  const need = [...new Set(sent.filter((x) => x.round === undefined).map((x) => fastSeenKey(me, x.id)))];
+  const shards = Object.fromEntries(await Promise.all(need.map(async (k) => [k, await key(k)])));
+  for (const x of sent) if (x.round === undefined) x.round = fastSeenRound(shards[fastSeenKey(me, x.id)], me, x.id);
+  const bound = sent.map((x) => x.round);
   if (bound.every((r) => r !== undefined) && Math.max(...bound.map(Number)) <= st.round) break;
   if (Date.now() > deadline) break;
   await sleep(500);
 }
 sampling = false;
 await sampler.catch(() => {});
+// The loop above can see the last round final before the sampler does: one
+// last sample, so those requests count (at this later time, an upper bound).
+samples.push({ at: Date.now(), round: st?.round ?? 0 });
 stop();
 
 // Round trip per request: sent -> the first sample at which its round was final.
 const latencies = [];
 const unserved = [];
 for (const s of sent) {
-  const r = Number(st?.seen?.[`${me}|${s.id}`]);
+  const r = Number(s.round);
   const hit = samples.find((x) => x.at >= s.at && x.round >= r);
   if (!Number.isFinite(r) || !hit) unserved.push(s.id); else latencies.push(hit.at - s.at);
 }
@@ -178,6 +161,7 @@ const spanS = first && last && last.at > first.at ? (last.at - first.at) / 1000 
 const rounds = finalRound - before;
 const report = {
   node: NODE, fast, requests: sent.length, served: latencies.length, unserved: unserved.length,
+  ...(unserved.length ? { unservedIds: unserved.slice(0, 10).map((id) => ({ id, round: sent.find((x) => x.id === id)?.round ?? null })) } : {}),
   rounds, roundsPerSecond: spanS ? Number(((rounds - 1) / spanS).toFixed(3)) : null,
   requestsPerRound: rounds ? Number((latencies.length / rounds).toFixed(2)) : null,
   roundTripMs: { p50: pct(latencies, 0.5), p95: pct(latencies, 0.95), max: pct(latencies, 1) },
@@ -185,6 +169,8 @@ const report = {
   workDir: dir,
 };
 console.log(JSON.stringify(report, null, 1));
+// --out <file>: the report as one JSON document (stdout is indented, then a PASS/FAIL line).
+if (arg('--out')) fs.writeFileSync(arg('--out'), JSON.stringify(report));
 const ok = rounds > 1 && unserved.length === 0 && latencies.length === sent.length;
 if (!ok) { console.error('FAIL: the fast tier did not serve every paid request'); process.exit(1); }
 console.log(`PASS: ${rounds} fast rounds, ${report.roundsPerSecond} rounds/s, request round trip p50 ${report.roundTripMs.p50} ms p95 ${report.roundTripMs.p95} ms`);

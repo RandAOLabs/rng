@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+// Confirmed messages per second for one RNG process on a LOCAL node: spawn a
+// throwaway token (deploy.mjs, on $RNG_DEVICE), then keep --concurrency
+// signed Transfers in flight for --seconds; a message counts once the
+// token's computed slot has reached it. Round trip is send -> computed.
+//
+//   node deploy/saturate.mjs --image hbnode:<tag> [--port 18241] [--seconds 30] [--concurrency 32]
+//   node deploy/saturate.mjs --node http://<bench-node>:8734 --remote ...   a remote bench node
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import * as hb from '../validator/vendor/hbclient.mjs';
+import { benchNode, startBenchNode } from './bench-target.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, '..');
+const arg = (name, dflt) => { const i = process.argv.indexOf(name); return i === -1 ? dflt : process.argv[i + 1]; };
+const IMAGE = arg('--image');
+const PORT = Number(arg('--port', 18241));
+const SECONDS = Number(arg('--seconds', 30));
+const CONCURRENCY = Number(arg('--concurrency', 32));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rsa = () => ({ kty: 'RSA', ...crypto.generateKeyPairSync('rsa', { modulusLength: 4096, publicExponent: 65537 })
+  .privateKey.export({ format: 'jwk' }) });
+const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : null; };
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rng-saturate-'));
+const NODE = IMAGE
+  ? await startBenchNode({ image: IMAGE, port: PORT, name: 'rng-saturate', dir, log: () => {} })
+  : benchNode(arg('--node', process.env.HB_NODE));
+
+const deployer = rsa();
+fs.writeFileSync(path.join(dir, 'deployer.json'), JSON.stringify(deployer), { mode: 0o600 });
+const statePath = path.join(dir, 'state.json');
+const env = { ...process.env, HB_NODE: NODE, HB_WALLET: path.join(dir, 'deployer.json'), RNG_STATE: statePath };
+execFileSync(process.execPath, [path.join(HERE, 'deploy.mjs'), 'spawn-token', path.join(HERE, 'allocations-deployer.json')],
+  { env, cwd: ROOT, stdio: ['ignore', 'pipe', 'inherit'] });
+const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+const token = state.token;
+const device = state.processes[token].executionDevice;
+const recipients = Array.from({ length: 64 }, (_, i) => crypto.createHash('sha256').update(`r${i}`).digest('base64url').slice(0, 43));
+
+/** The token's computed slot (hyperbuddy's per-process slot log). */
+async function computedSlot() {
+  const r = await fetch(`${NODE}/~hyperbuddy@1.0/slots?pid=${token}`).then((x) => x.json()).catch(() => null);
+  const p = (r?.processes || []).find((x) => x.pid === token);
+  return Number.isFinite(Number(p?.computed_slot)) ? Number(p.computed_slot) : -1;
+}
+
+// Warm up: the process is computed before timing.
+await hb.sendMessage({ node: NODE, jwk: deployer, process: token, action: 'Transfer', tags: { Recipient: recipients[0], Quantity: '1' } });
+const sent = []; // { slot, at }
+let stop = Date.now() + SECONDS * 1000;
+let n = 0;
+async function worker() {
+  while (Date.now() < stop) {
+    const at = Date.now();
+    const id = ++n;
+    try {
+      const res = await hb.sendMessage({ node: NODE, jwk: deployer, process: token, action: 'Transfer',
+        tags: { Recipient: recipients[id % recipients.length], Quantity: '1' } });
+      sent.push({ slot: Number(res?.slot), at, acked: Date.now() });
+    } catch { /* counted as not sent */ }
+  }
+}
+const t0 = Date.now();
+await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+const tSent = Date.now();
+const maxSlot = Math.max(...sent.map((s) => s.slot).filter(Number.isFinite));
+for (let i = 0; i < 600; i++) { if (await computedSlot() >= maxSlot) break; await sleep(100); }
+const tDone = Date.now();
+const acks = sent.map((s) => s.acked - s.at);
+const report = {
+  device, node: NODE, image: IMAGE ?? null, concurrency: CONCURRENCY, messages: sent.length,
+  confirmedPerSecond: Number((sent.length / ((tDone - t0) / 1000)).toFixed(1)),
+  scheduledPerSecond: Number((sent.length / ((tSent - t0) / 1000)).toFixed(1)),
+  drainMs: tDone - tSent, sendAckMs: { p50: pct(acks, 0.5), p95: pct(acks, 0.95) },
+};
+console.log(JSON.stringify(report));
+process.exit(0);

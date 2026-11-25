@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
 import * as bls from '../../validator/bls.mjs';
 import { fastRequestValue } from '../../lib/js/derive.ts';
+import { fastSeenShard } from '../../lib/js/fast.ts';
+import { orderPrelude, transcriptHook, evalTail, sameFixtures } from './order-check.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -54,6 +56,7 @@ F.out1 = requestValue(F.value1, F.game, F.req1);
 F.out2 = requestValue(F.value1, F.game, F.req2);
 F.outPay = requestValue(F.value3, F.wallet, 'pay-1');
 F.outPayGame = requestValue(F.value3, F.game, 'pay-1');
+F.seenShardPay1 = fastSeenShard(`${F.wallet}|pay-1`);
 // The client verifier (lib/js/derive.ts) picks the rule from the round record.
 if (await fastRequestValue({ value: F.value3, derivation: 'hyperbeam/rng/fast/v2/request' }, F.wallet, 'pay-1') !== F.outPay
   || await fastRequestValue({ value: F.value3 }, F.wallet, 'pay-1') !== sha(`hyperbeam/rng/v1/request|${F.value3}|pay-1`)) {
@@ -66,9 +69,10 @@ F.config = JSON.stringify({ self: F.beacon, token: F.token, threshold: 2,
 const luaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const luaValue = (v) => Array.isArray(v) ? `{ ${v.map(luaValue).join(', ')} }`
   : typeof v === 'number' ? String(v) : luaString(v);
-const fixtures = `F = { ${Object.entries(F).map(([k, v]) => `${k} = ${luaValue(v)}`).join(',\n  ')} }`;
+const fixtures = sameFixtures(() => `F = { ${Object.entries(F).map(([k, v]) => `${k} = ${luaValue(v)}`).join(',\n  ')} }`);
 
 const bundle = [
+  orderPrelude(),
   read('protocol/vendor/json.lua'),
   'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
@@ -79,6 +83,7 @@ const bundle = [
   read('protocol/vendor/gov.lua'),
   read('protocol/beacon/beacon.lua'),
   fixtures,
+  transcriptHook(),
   fixture(read('protocol/test/beacon_test.lua')),
 ].join('\n');
 
@@ -97,11 +102,11 @@ if (live !== -1) {
   if (res.status !== 200) { console.error(`${node}: HTTP ${res.status}\n${body.slice(0, 3000)}`); process.exit(1); }
   verdict(body);
 } else {
-  const handle = await AoLoader(fs.readFileSync(AOS_WASM), { format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024 });
+  const handle = await AoLoader(fs.readFileSync(AOS_WASM), { format: 'wasm32-unknown-emscripten', computeLimit: process.env.RNG_PAIRS ? 9e15 : 9e12, memoryLimit: 512 * 1024 * 1024 });
   const pid = addr('beacon-tests');
   const result = await handle(null, {
     Id: 'eval-beacon-tests', Target: pid, Owner: pid, From: pid, Tags: [{ name: 'Action', value: 'Eval' }],
-    Data: bundle + '\nreturn rngtest()', 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+    Data: bundle + evalTail('rngtest'), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
   }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
   if (result.Error) { console.error(result.Error); process.exit(1); }
   const out = result.Output?.data;

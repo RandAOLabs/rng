@@ -133,7 +133,51 @@ end
 local function key(game, session, player) return game .. "|" .. session .. "|" .. player end
 local function touch(st) st.changes = (st.changes or 0) + 1 end
 
+--- An observer the process sets (fair.lua) so it can publish per game: called
+--- with (game) when a game's sessions or account may have changed, and with
+--- (game, key, session|false) when a session is added or dropped. A game that
+--- embeds this library sets none.
+fair.watch = nil
+local function mark(game, k, s) local w = fair.watch; if w then w(game, k, s) end end
+
+--- st.sessions[k] = s (or nil), told to the observer.
+local function setSession(st, k, s, game)
+  st.sessions[k] = s
+  mark(game, k, s or false)
+end
+
+--- `k` is refused as Session-Done until `untilMs`. The queue keeps the keys in
+--- the order they expire (times only grow), so expiring is never a scan.
+local function forget(st, k, untilMs)
+  st.done[k] = untilMs
+  st.doneQueue = st.doneQueue or {}
+  local q = st.doneQueue
+  q[#q + 1] = { k, untilMs }
+end
+
+local function expireDone(st, now)
+  local q = st.doneQueue
+  if q == nil then
+    -- A state from before the queue: build it once, in expiry order.
+    q = {}
+    for k, untilMs in pairs(st.done) do q[#q + 1] = { k, untilMs } end
+    table.sort(q, function(a, b) if a[2] ~= b[2] then return a[2] < b[2] end return a[1] < b[1] end)
+    st.doneQueue = q
+  end
+  local n = 0
+  while n < #q and q[n + 1][2] < now do n = n + 1 end
+  if n == 0 then return end
+  for i = 1, n do
+    local k, untilMs = q[i][1], q[i][2]
+    if st.done[k] == untilMs then st.done[k] = nil end
+  end
+  local total = #q
+  for i = 1, total - n do q[i] = q[i + n] end
+  for i = total, total - n + 1, -1 do q[i] = nil end
+end
+
 local function account(st, game)
+  mark(game)
   st.accounts = st.accounts or {}
   local a = st.accounts[game]
   if not a then a = { balance = 0, reserved = 0, nonce = 0 }; st.accounts[game] = a end
@@ -236,10 +280,11 @@ local function gameEntry(st, game, now)
     if not idle then return nil end
     for _, k in ipairs(st.byGame[idle] or {}) do
       local gone = st.sessions[k]
-      st.sessions[k] = nil
-      if gone then st.done[k] = now + GUARD_MS end
+      setSession(st, k, nil, idle)
+      if gone then forget(st, k, now + GUARD_MS) end
     end
-    for k, untilMs in pairs(st.done) do if untilMs < now then st.done[k] = nil end end
+    expireDone(st, now)
+    mark(idle)
     st.byGame[idle] = nil
     st.games[idle] = nil -- its balance stays in st.accounts
     st.gameCount = st.gameCount - 1
@@ -271,6 +316,7 @@ function fair.open(st, p)
   local k = key(p.game, p.session, p.player)
   if st.sessions[k] then return nil, "Session-Taken" end
   if st.done[k] then return nil, "Session-Done" end
+  mark(p.game)
   local existing = st.games and st.games[p.game]
   local sp = p.session .. "|" .. p.player
   if existing and existing.allow[sp] and existing.allow[sp] >= now then
@@ -332,7 +378,7 @@ function fair.commit(st, p)
   local o = batch(st, st.next)
   local s = { game = p.game, session = p.session, player = p.player, commit = p.commit, status = "committed",
     batch = o.batch, windowMs = st.windowMs, committedAt = now, reserve = held, notify = g.process == true or nil }
-  st.sessions[k] = s
+  setSession(st, k, s, p.game)
   o.keys[#o.keys + 1] = k
   st.open = st.open + 1
   return withPump(st, now, { committed = true, session = fair.view(s) })
@@ -396,6 +442,7 @@ function fair.onResult(st, p)
   for _, k in ipairs(o.keys) do
     local s = st.sessions[k]
     if s and s.status == "committed" then
+      mark(s.game)
       s.status, s.round, s.requestId, s.beaconValue = "reveal-due", o.round, o.requestId, o.value
       s.v = fair.sessionValue(o.value, s.game, s.session)
       s.revealBy = now + s.windowMs
@@ -420,7 +467,11 @@ function fair.onError(st, p)
   touch(st)
   local into = batch(st, st.next)
   local merged = {}
-  for _, k in ipairs(failed.keys) do merged[#merged + 1] = k; local s = st.sessions[k]; if s then s.batch = into.batch end end
+  for _, k in ipairs(failed.keys) do
+    merged[#merged + 1] = k
+    local s = st.sessions[k]
+    if s then s.batch = into.batch; mark(s.game) end
+  end
   for _, k in ipairs(into.keys) do merged[#merged + 1] = k end
   into.keys = merged
   st.batches[tostring(out.batch)] = nil
@@ -438,6 +489,7 @@ local function find(st, p)
 end
 
 local function resolve(st, s, now, status, secret, final, slot)
+  mark(s.game)
   s.status, s.secret, s.final, s.resolvedAt = status, secret, final, now
   st.open = st.open - 1
   touch(st)
@@ -449,10 +501,10 @@ local function resolve(st, s, now, status, secret, final, slot)
   while #list > st.keep do
     local old = table.remove(list, 1)
     local gone = st.sessions[old]
-    st.sessions[old] = nil
-    if gone then st.done[old] = now + GUARD_MS end
+    setSession(st, old, nil, s.game)
+    if gone then forget(st, old, now + GUARD_MS) end
   end
-  for k, untilMs in pairs(st.done) do if untilMs < now then st.done[k] = nil end end
+  expireDone(st, now)
   remember(st, "session:" .. key(s.game, s.session, s.player), slot)
   -- A wallet game (or a session from before `notify` existed) is not pushed to.
   if s.notify ~= true then return nil end
@@ -554,6 +606,7 @@ function fair.withdraw(st, p)
   if p.quantity == nil or p.quantity == "" then return nil, "Missing-Quantity" end
   local amount = int(p.quantity)
   if not amount then return nil, "Bad-Quantity" end
+  mark(p.game)
   local a = st.accounts and st.accounts[p.game]
   local g = st.games and st.games[p.game]
   if g then prune(st, p.game, g, p.now) end

@@ -567,7 +567,16 @@ local function genesis(base)
     return nil, "Genesis allocations are missing"
   end
   local rows, sum = {}, 0
-  for address, atoms in pairs(alloc) do
+  -- Sorted, as lua-patch@1.0 (Luerl) walks `pairs`: which bad row a refusal
+  -- names must not depend on the VM's table order (wasm-patch@1.0 is PUC).
+  local addresses = {}
+  for address in pairs(alloc) do addresses[#addresses + 1] = address end
+  table.sort(addresses, function(a, b)
+    if type(a) ~= type(b) then return type(a) < type(b) end
+    return a < b
+  end)
+  for _, address in ipairs(addresses) do
+    local atoms = alloc[address]
     if not isAoAddress(address) then
       return nil, "Genesis allocation to an invalid address"
     end

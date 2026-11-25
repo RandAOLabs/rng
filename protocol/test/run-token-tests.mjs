@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
+import { orderPrelude, transcriptHook, evalTail } from './order-check.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -24,6 +25,7 @@ const F = {
 const luaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const fixtures = `F = { ${Object.entries(F).map(([k, v]) => `${k} = ${luaString(v)}`).join(', ')} }`;
 const bundle = [
+  orderPrelude(),
   read('protocol/vendor/json.lua'),
   'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
@@ -31,6 +33,7 @@ const bundle = [
   'Owner = nil',
   read('protocol/token/rng-token.lua'),
   fixtures,
+  transcriptHook(),
   fixture(read('protocol/test/token_test.lua')),
 ].join('\n');
 
@@ -45,12 +48,12 @@ if (live !== -1) {
   if (res.status !== 200) { console.error(`${node}: HTTP ${res.status}\n${text.slice(0, 2000)}`); process.exit(1); }
 } else {
   const handle = await AoLoader(fs.readFileSync(AOS_WASM), {
-    format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024,
+    format: 'wasm32-unknown-emscripten', computeLimit: process.env.RNG_PAIRS ? 9e15 : 9e12, memoryLimit: 512 * 1024 * 1024,
   });
   const pid = addr('token-tests');
   const result = await handle(null, {
     Id: 'eval-token-tests', Target: pid, Owner: pid, From: pid,
-    Tags: [{ name: 'Action', value: 'Eval' }], Data: bundle + '\nreturn runTokenTests()',
+    Tags: [{ name: 'Action', value: 'Eval' }], Data: bundle + evalTail('runTokenTests'),
     'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
   }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
   if (result.Error) throw new Error(result.Error);

@@ -67,7 +67,18 @@ local function fund(game, atoms, o)
   end
   return r, ob
 end
-local function accounts() return json.decode(base.fairaccounts or "{}") end
+--- Sessions and accounts are published in shards (fairsessions-<n>,
+--- fairaccounts-<n>): every shard of `prefix`, merged by game.
+local function merged(prefix)
+  local out = {}
+  for k, v in pairs(base) do
+    if type(k) == "string" and k:sub(1, #prefix) == prefix and type(v) == "string" then
+      for g, x in pairs(json.decode(v)) do out[g] = x end
+    end
+  end
+  return out
+end
+local function accounts() return merged("fairaccounts-") end
 local function held()
   local n = 0
   for _, a in pairs(accounts()) do
@@ -76,7 +87,7 @@ local function held()
   end
   return n
 end
-local function sessions(game) return (json.decode(base.fairsessions)[game or F.game]) or {} end
+local function sessions(game) return merged("fairsessions-")[game or F.game] or {} end
 local function batches() return json.decode(base.fairbatches) end
 local function sessionOf(name, player, game)
   for _, s in ipairs(sessions(game)) do if s.session == name and (not player or s.player == player) then return s end end
@@ -565,14 +576,14 @@ local function runFairTests()
   configure({ maxOpen = 8 })
 
   -- Restore: a fresh VM rebuilds from fairstate.
-  local before = base.fairsessions
+  local before = encode(merged("fairsessions-"))
   local gamesBefore = Fair.state.gameCount
-  local accountsBefore, seqBefore2 = base.fairaccounts, Fair.state.transferSeq
+  local accountsBefore, seqBefore2 = encode(merged("fairaccounts-")), Fair.state.transferSeq
   Fair = { rev = 0, owner = "", state = fair.new() }
   send(wallet(F.stranger, { Action = "Get-Info" }))
   check("restored metered, token and price", Fair.state.metered == true and Fair.state.token == F.token
     and Fair.state.price == 4000000)
-  eq("restored balances", base.fairaccounts, accountsBefore)
+  eq("restored balances", encode(merged("fairaccounts-")), accountsBefore)
   eq("restored transfer sequence", Fair.state.transferSeq, seqBefore2)
   check("restored reference guard", fund(F.game, 1000000000, { reference = "t100" }).duplicate == true)
   check("restored integers", math.type(Fair.state.accounts[F.game].balance) == "integer")
@@ -615,7 +626,7 @@ local function runFairTests()
   check("restored game registry", gamesBefore > 0 and Fair.state.gameCount == gamesBefore
     and Fair.state.games[F.game] ~= nil, Fair.state.gameCount)
   eq("restored beacon", Fair.state.beacon, F.beacon)
-  eq("restored sessions", json.decode(base.fairsessions)[F.game][1].commit, json.decode(before)[F.game][1].commit)
+  eq("restored sessions", merged("fairsessions-")[F.game][1].commit, json.decode(before)[F.game][1].commit)
 
   -- A replayed signed Fair.Open or Fair.Commit never reaches the process:
   -- the scheduler assigns a signed message once.

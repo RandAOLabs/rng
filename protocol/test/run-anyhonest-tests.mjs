@@ -8,6 +8,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import AoLoader from '@permaweb/ao-loader';
+import { orderPrelude, transcriptHook, evalTail, sameFixtures } from './order-check.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -161,9 +162,10 @@ const luaString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"
 const lua = (v) => Array.isArray(v) ? `{ ${v.map(lua).join(', ')} }`
   : typeof v === 'object' ? `{ ${Object.entries(v).map(([k, x]) => `[${luaString(k)}] = ${lua(x)}`).join(', ')} }`
   : typeof v === 'number' ? String(v) : typeof v === 'boolean' ? String(v) : luaString(v);
-const fixtures = `F = ${lua(F)}\nP = ${lua(P)}\nDEVICE_FIELDS = ${lua(FIELDS)}`;
+const fixtures = sameFixtures(() => `F = ${lua(F)}\nP = ${lua(P)}\nDEVICE_FIELDS = ${lua(FIELDS)}`);
 
 const bundle = [
+  orderPrelude(),
   read('protocol/vendor/json.lua'),
   'local jsonx = (function()', read('protocol/vendor/jsonenc.lua'), 'end)()',
   'encode, jsonObject = jsonx.encode, jsonx.object',
@@ -175,8 +177,27 @@ const bundle = [
   read('protocol/vendor/gov.lua'),
   read('protocol/beacon/anyhonest.lua'),
   fixtures,
+  transcriptHook(),
+  recordHook(),
   fixture(read('protocol/test/anyhonest_test.lua')),
 ].join('\n');
+
+/** RNG_RECORD=<file>: every request the suite hands compute(), in order, as a
+ *  JSON array (protocol/test/vm-parity.mjs replays it on both VMs). */
+function recordHook() {
+  if (!process.env.RNG_RECORD) return '';
+  return `do
+  local inner, enc = compute, encode -- the suite swaps encode for a throwing stub
+  RngRecorded = {}
+  compute = function(b, req, env)
+    if req ~= nil then RngRecorded[#RngRecorded + 1] = enc(req) end
+    return inner(b, req, env)
+  end
+end`;
+}
+const RECORD_MARK = '\n<<<RNG-RECORD>>>\n';
+const tail = () => (!process.env.RNG_RECORD ? evalTail('rngtest')
+  : `\nlocal __v = rngtest()\nreturn __v .. ${JSON.stringify(RECORD_MARK)} .. "[" .. table.concat(RngRecorded, ",") .. "]"`);
 
 function verdict(text) {
   console.log(text);
@@ -193,13 +214,20 @@ if (live !== -1) {
   if (res.status !== 200) { console.error(`${node}: HTTP ${res.status}\n${body.slice(0, 3000)}`); process.exit(1); }
   verdict(body);
 } else {
-  const handle = await AoLoader(fs.readFileSync(AOS_WASM), { format: 'wasm32-unknown-emscripten', computeLimit: 9e12, memoryLimit: 512 * 1024 * 1024 });
+  const handle = await AoLoader(fs.readFileSync(AOS_WASM), { format: 'wasm32-unknown-emscripten', computeLimit: process.env.RNG_PAIRS ? 9e15 : 9e12, memoryLimit: 512 * 1024 * 1024 });
   const pid = addr('timelock-tests');
   const result = await handle(null, {
     Id: 'eval-timelock-tests', Target: pid, Owner: pid, From: pid, Tags: [{ name: 'Action', value: 'Eval' }],
-    Data: bundle + '\nreturn rngtest()', 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
+    Data: bundle + tail(), 'Block-Height': '1', Timestamp: '1700000000000', Module: 'aos', Cron: false,
   }, { Process: { Id: pid, Owner: pid, Tags: [] }, Module: { Id: 'aos', Tags: [] } });
   if (result.Error) { console.error(result.Error); process.exit(1); }
   const out = result.Output?.data;
-  verdict(typeof out === 'string' ? out : out?.output ?? JSON.stringify(out));
+  let text = typeof out === 'string' ? out : out?.output ?? JSON.stringify(out);
+  if (process.env.RNG_RECORD) {
+    const at = text.indexOf(RECORD_MARK);
+    if (at === -1) { console.error('no record'); process.exit(1); }
+    fs.writeFileSync(process.env.RNG_RECORD, text.slice(at + RECORD_MARK.length));
+    text = text.slice(0, at);
+  }
+  verdict(text);
 }

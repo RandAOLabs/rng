@@ -382,6 +382,10 @@ function runBeaconTests()
   credited = credited + 3
   check("pay and request binds round 3", r.round == 3 and r.credited == 3 and r.balance == 0 and next(ob) == nil, r.error)
   eq("the wallet's round is in seen", Beacon.seen[F.wallet .. "|pay-1"], 3)
+  -- Published in its shard, by the rule lib/js fastSeenKey computes.
+  local shard = base["beaconseen-" .. F.seenShardPay1] and json.decode(base["beaconseen-" .. F.seenShardPay1])
+  check("the wallet's round is published in its beaconseen shard (lib/js agrees on the shard)",
+    shard and shard[F.wallet .. "|pay-1"] and shard[F.wallet .. "|pay-1"][1] == 3, F.seenShardPay1)
   r = credit(F.wallet, 3 * U, "t3", { ["X-Request-Id"] = "pay-1" })
   eq("the same notice again is a duplicate", r.duplicate, true)
   -- Another requester with the same Request-Id in the same round.
@@ -888,6 +892,29 @@ function runBeaconTests()
   check("a replayed signed message is refused by the scheduler, uncharged", r.status == 409 and Beacon.balances[F.game] == before, r.error)
   r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-400" }))
   check("a remembered id is a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
+  -- `seen` lives in its shards, not in beaconstate: every live id once, with
+  -- its round and forget-at, and nothing else; a cold VM rebuilds the same
+  -- window (same queue order) from them.
+  local published, extra = 0, 0
+  for k, v in pairs(base) do
+    if type(k) == "string" and k:sub(1, 11) == "beaconseen-" and v ~= nil then
+      for key, e in pairs(json.decode(v)) do
+        published = published + 1
+        if Beacon.seen[key] ~= e[1] then extra = extra + 1 end
+      end
+    end
+  end
+  check("seen is out of beaconstate", json.decode(base.beaconstate).seen == nil
+    and json.decode(base.beaconstate).seenQueue == nil)
+  check("every live id is published once in its shard, and nothing else",
+    published == count(Beacon.seen) and extra == 0, published .. " vs " .. count(Beacon.seen))
+  local queueBefore = encode(Beacon.seenQueue)
+  Beacon = { rev = 0 }
+  send(wallet(F.stranger, { Action = "Get-Info" }))
+  check("a cold VM rebuilds the window from the shards", encode(Beacon.seenQueue) == queueBefore
+    and count(Beacon.seen) == #Beacon.seenQueue, encode(Beacon.seenQueue):sub(1, 200))
+  r = send(delivery(F.game, { Action = "Request-Random", ["Request-Id"] = "b-400" }))
+  check("after the rebuild a remembered id is still a duplicate", r.duplicate == true and Beacon.balances[F.game] == before)
   check("history bounded", #json.decode(base.beaconhistory).rounds <= 1024 and #Beacon.history > 100, #Beacon.history)
   check("rounds bounded", count(Beacon.rounds) <= 32)
 

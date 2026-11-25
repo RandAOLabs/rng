@@ -527,14 +527,15 @@ export async function main(argv = process.argv.slice(2)) {
   const jwk = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'validator-wallet.json'), 'utf8'));
   const me = jwkToAddress(jwk);
   const io = await nodeIo(cfg, jwk);
-  const beaconOf = () => {
-    if (isPid(flags.beacon)) return flags.beacon;
+  // The beacon the running loop watches (configured, or the successor it moved to).
+  const watched = () => {
     try {
       const f = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'beacon.json'), 'utf8'));
       if (f.configured === cfg.beacon && isPid(f.beacon)) return f.beacon;
     } catch { /* not moved */ }
     return cfg.beacon;
   };
+  const beaconOf = () => (isPid(flags.beacon) ? flags.beacon : watched());
   const setFlag = (f, on) => {
     const file = path.join(cfg.dataDir, f);
     if (on) fs.writeFileSync(file, new Date().toISOString()); else fs.rmSync(file, { force: true });
@@ -561,7 +562,9 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (cmd === 'pause' || cmd === 'resume') { setFlag('pause', cmd === 'pause'); out(`${cmd}d: the running validator picks this up on its next pass`); return 0; }
   if (cmd === 'exit') {
-    if (isPid(flags.beacon) && flags.beacon !== beaconOf()) {
+    // (Compared with the watched beacon: beaconOf() IS --beacon, so comparing
+    // with it never took this path and an old beacon's exit was never sent.)
+    if (isPid(flags.beacon) && flags.beacon !== watched()) {
       // An old beacon this loop no longer watches: one step per call.
       const info = await io.readInfo(flags.beacon), mine = findMine(info.validators, me);
       const action = mine?.exiting ? 'Finalize-Exit' : 'Exit';

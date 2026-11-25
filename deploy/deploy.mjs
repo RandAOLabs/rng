@@ -2,19 +2,23 @@
 // stake-dao/1), the permissionless beacon and fair play. docs/PERMISSIONLESS.md.
 //
 // v3 (state: RNG_STATE, default deploy/v3-testnet.json):
-//   spawn-token <allocations.json>          RNG with GenesisAllocations (sealed after slot 1), lua-patch@1.0
+// $RNG_DEVICE: the token, beacon, fair and fast tier run on wasm-patch@1.0 (PUC Lua 5.3 compiled to
+// WASM, AOT on the node; the runtime deploy/wasm-runtime.json pins), or lua-patch@1.0 when
+// RNG_DEVICE=lua-patch@1.0. The same 5.3b bundle either way. The DAO keeps lua-patch@1.0.
+//   spawn-token <allocations.json>          RNG with GenesisAllocations (sealed after slot 1), $RNG_DEVICE
 //   spawn-dao [--lua53a]                    the RNG DAO, stake-dao/1 staking RNG (lua-patch@1.0; needs PARALITH_MONO)
-//   spawn-beacon [--lua53a]                 the v3 beacon (lua-patch@1.0 by default)
+//   spawn-beacon [--lua53a]                 the v3 beacon ($RNG_DEVICE by default)
 //   genesis-configure [params.json]         deployer Gov.Configure naming the token (locks token/unit/self/predecessor)
 //   fund-reserve <rng> | fund-treasury <rng>  deployer Transfer with X-Foundation / X-Treasury
 //   fund <rng> [for]                        a beacon balance (X-For)
-//   spawn-fair | configure-fair [windowMs]  fair play on lua-patch@1.0 (token, beacon requestPrice from v3-params.json)
+//   spawn-fair | configure-fair [windowMs]  fair play on $RNG_DEVICE (token, beacon requestPrice from v3-params.json)
 //   fund-fair <rng>                         the fair process's beacon float (X-For = fair; not spent:
 //                                           every bound batch is topped up from the games' balances)
 //   fund-game <rng> <game>                  prepay a game's fair-play balance (X-Fair-Game); any game
 //   grant <address> <rng>                   plain RNG transfer from the deployer
 //   bond-for <rng> <address...|validators.json>  Transfer X-Bond X-For each validator
 //   gov <Gov.Action> [Tag=Value ...]        any wallet-path Gov.* on the beacon (Pause, Resume, Set-Successor, ...)
+//   gov-old <Gov.Action> [Tag=Value ...]    the same on the retired predecessor beacon (Set-Successor, Move-Reserve)
 //   resend-ack                              Resend-Successor-Ack to the predecessor
 // Owners (vendor/gov.lua). The launch wallet bootstraps; at launch the DAO becomes the ONLY owner.
 // The DAO's money/code actions carry Effective-At >= receipt + 24 h (dao-propose fills $EFFECTIVE_AT)
@@ -32,7 +36,7 @@
 //                                           average < RNG_MIN_RATE, default 1.8 rounds/s); exits 1 when one needs a look
 //   expect-code <beacon|fair|fast> <root> <version>   record an upgrade the DAO installed as the build verify expects
 // Fast tier (on-demand 2-of-3 threshold BLS, beacon/beacon.lua; not a heartbeat):
-//   spawn-fast                              the fast-tier process (lua-patch@1.0)
+//   spawn-fast                              the fast-tier process ($RNG_DEVICE)
 //   genesis-configure-fast [committee.json] deployer Gov.Configure: v3 token, the existing committee
 //                                           (deploy/committee.json), fees; locks token/unit/self
 //   fund-fast <rng> [for]                   a fast-tier balance (X-For)
@@ -72,6 +76,37 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
+
+export const WASM_PATCH = 'wasm-patch@1.0';
+export const LUA_PATCH = 'lua-patch@1.0';
+/** wasm-patch@1.0's ABI, and the fuel a slot may burn (the device's default,
+ *  written into the definition so it is on record): 1e11, ~1,000 ms of guest
+ *  work; the heaviest RNG slot measured is far below it (docs/WASM_PATCH.md). */
+export const WASM_PATCH_ABI = '1';
+export const WASM_FUEL_PER_SLOT = '100000000000';
+/** The device the token, beacon, fair and fast tier spawn on (RNG_DEVICE). */
+export function contractDevice(env = process.env) {
+  const device = env.RNG_DEVICE || WASM_PATCH;
+  if (device !== WASM_PATCH && device !== LUA_PATCH) {
+    throw new Error(`RNG_DEVICE must be ${WASM_PATCH} or ${LUA_PATCH}, not ${device}`);
+  }
+  return device;
+}
+/** The pinned wasm-lua runtime (deploy/wasm-runtime.json): its hash always;
+ *  its bytes, checked against the pin and its imports, unless `hashOnly`. The
+ *  file is WASM_LUA_RUNTIME, else `pm`'s backend/native/wasm-lua/<file>. */
+export function rngRuntime({ pm, env = process.env, hashOnly = false } = {}) {
+  const pin = JSON.parse(fs.readFileSync(path.join(HERE, 'wasm-runtime.json'), 'utf8'));
+  if (hashOnly) return { sha256: pin.sha256 };
+  const file = env.WASM_LUA_RUNTIME || path.join(pm, 'backend', 'native', 'wasm-lua', pin.file);
+  const bytes = fs.readFileSync(file);
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  if (sha256 !== pin.sha256) throw new Error(`${file} has sha256 ${sha256}, deploy/wasm-runtime.json pins ${pin.sha256}`);
+  const imports = WebAssembly.Module.imports(new WebAssembly.Module(bytes)).map((i) => `${i.module}.${i.name}`);
+  const missing = pin.imports.filter((i) => !imports.includes(i));
+  if (missing.length) throw new Error(`${file} does not import ${missing.join(', ')}: no rng@1.0 for the beacons`);
+  return { file, bytes, sha256 };
+}
 // LF only: a bundle (and its code root) is the same bytes on every checkout.
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -728,6 +763,19 @@ async function main(argv) {
   };
   const log = (o) => console.log(JSON.stringify(DRY ? { dryRun: true, ...o } : o));
   const placeholder = (role) => `DRY${role}`.replace(/[^A-Za-z0-9]/g, '').padEnd(43, '_').slice(0, 43);
+  const CONTRACT_DEVICE = contractDevice();
+
+  /** A wasm-patch@1.0 process's fields beside its module: the pinned runtime's
+   *  image (put on this node once, paralith-mono wasm-runtime.mjs) and hash,
+   *  the ABI and the fuel per slot. */
+  async function wasmPatchSpawnFields() {
+    const base = { 'wasm-patch-abi': WASM_PATCH_ABI, 'fuel-per-slot': WASM_FUEL_PER_SLOT };
+    if (DRY) return { image: placeholder('image'), 'image-sha256': rngRuntime({ hashOnly: true }).sha256, ...base };
+    const runtime = rngRuntime({ pm: PM });
+    const { runtimeImage } = await imp('backend/native/wasm-runtime.mjs');
+    const image = await runtimeImage({ node: NODE, jwk, runtime, log: (m) => console.error(m) });
+    return { image, 'image-sha256': runtime.sha256, ...base };
+  }
 
   async function pinScheduler() {
     const env = process.env.RNG_SCHEDULER;
@@ -742,7 +790,9 @@ async function main(argv) {
 
   async function spawn(role, { name, ticker, lua, executionDevice = 'lua@5.3a', extra = {} }) {
     const scheduler = await pinScheduler();
-    const rec = { role, name, executionDevice, scheduler, sourceBytes: Buffer.byteLength(lua), sourceSha256: sha256(lua) };
+    const fields = executionDevice === WASM_PATCH ? await wasmPatchSpawnFields() : {};
+    const rec = { role, name, executionDevice, scheduler, sourceBytes: Buffer.byteLength(lua), sourceSha256: sha256(lua),
+      ...(fields['image-sha256'] ? { imageSha256: fields['image-sha256'] } : {}) };
     let pid;
     // Only spawn-* --replace gets here with the role deployed: retire the old one.
     if (isPid(state[role])) {
@@ -755,11 +805,12 @@ async function main(argv) {
     } else {
       pid = metadata
         ? await (await imp('backend/native/hbclient.mjs')).spawnProcess({ node: NODE, jwk, lua, scheduler, executionDevice,
-          name, ...(ticker ? { ticker } : {}), 'app-name': 'RNG', metadata })
-        : await hb.spawnProcess({ node: NODE, jwk, lua, scheduler, executionDevice, name });
+          name, ...(ticker ? { ticker } : {}), 'app-name': 'RNG', metadata, ...fields })
+        : await hb.spawnProcess({ node: NODE, jwk, lua, scheduler, executionDevice, name, ...fields });
       log({ op: 'spawn', pid, ...rec });
     }
-    state.processes[pid] = { role, scheduler, executionDevice, sourceSha256: rec.sourceSha256, at: new Date().toISOString() };
+    state.processes[pid] = { role, scheduler, executionDevice, sourceSha256: rec.sourceSha256,
+      ...(rec.imageSha256 ? { imageSha256: rec.imageSha256 } : {}), at: new Date().toISOString() };
     state[role] = pid;
     // The audited build: the spawn module (gov.code "" v0 until an upgrade installs).
     if (PROTOCOL_ROLES.includes(role)) {
@@ -845,7 +896,7 @@ async function main(argv) {
       state.genesis = { rows: alloc.rows, reserveRng: alloc.reserveRng, treasuryRng: alloc.treasuryRng,
         validatorRng: alloc.validatorRng };
       const scheduler = await pinScheduler();
-      const pid = await spawn('token', { name: alloc.ticker, ticker: alloc.ticker, executionDevice: 'lua-patch@1.0',
+      const pid = await spawn('token', { name: alloc.ticker, ticker: alloc.ticker, executionDevice: CONTRACT_DEVICE,
         lua: tokenPatchSource(prelude, me, scheduler), extra: { prelude } });
       await send(pid, 'Info');
       return alloc;
@@ -916,7 +967,7 @@ async function main(argv) {
       const lua53a = flag('--lua53a');
       const scheduler = await pinScheduler();
       const pid = await spawn('beacon', { name: 'RNG-Any-Honest-Beacon-v3',
-        executionDevice: lua53a ? 'lua@5.3a' : 'lua-patch@1.0',
+        executionDevice: lua53a ? 'lua@5.3a' : CONTRACT_DEVICE,
         lua: lua53a ? anyHonestSource() : anyHonestPatchSource(me, scheduler) });
       await send(pid, 'Get-Info');
       return pid;
@@ -957,7 +1008,7 @@ async function main(argv) {
     async 'spawn-fair'() {
       if (state.fair && !flag('--replace')) throw new Error(`fair already deployed (${state.fair})`);
       const scheduler = await pinScheduler();
-      const pid = await spawn('fair', { name: 'RNG-Fair-Play', executionDevice: 'lua-patch@1.0',
+      const pid = await spawn('fair', { name: 'RNG-Fair-Play', executionDevice: CONTRACT_DEVICE,
         lua: fairPatchSource(me, scheduler) });
       await send(pid, 'Get-Info');
       return pid;
@@ -988,6 +1039,17 @@ async function main(argv) {
       if (/^Gov\.(Set-Dao|Renounce-Wallet)$/.test(action)) throw new Error('use `set-dao` / `renounce-wallet`');
       const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
       return send(state.beacon, action, { tags });
+    },
+    // The same, on the beacon this one replaced (its genesis predecessor, now
+    // retired in state): Gov.Set-Successor / Gov.Move-Reserve at a handover.
+    async 'gov-old'(action, ...kv) {
+      if (!/^Gov\.[A-Za-z-]+$/.test(action || '')) throw new Error('gov-old <Gov.Action> [Tag=Value ...]');
+      const old = state.predecessor;
+      if (!isPid(old) || !(state.retired || []).some((r) => r.role === 'beacon' && r.pid === old)) {
+        throw new Error(`gov-old: predecessor ${old || '""'} is not a beacon this state retired`);
+      }
+      const tags = Object.fromEntries(kv.map((a) => a.split(/=(.*)/s).slice(0, 2)));
+      return send(old, action, { tags });
     },
     'resend-ack': () => send(state.beacon, 'Resend-Successor-Ack'),
 
@@ -1103,7 +1165,7 @@ async function main(argv) {
     async 'spawn-fast'() {
       if (state.fast && !flag('--replace')) throw new Error(`fast tier already deployed (${state.fast})`);
       const scheduler = await pinScheduler();
-      const pid = await spawn('fast', { name: 'RNG-Fast-Threshold', executionDevice: 'lua-patch@1.0',
+      const pid = await spawn('fast', { name: 'RNG-Fast-Threshold', executionDevice: CONTRACT_DEVICE,
         lua: fastPatchSource(me, scheduler) });
       await send(pid, 'Get-Info');
       return pid;
@@ -1135,7 +1197,8 @@ async function main(argv) {
       const end = t0 + Number(timeoutS) * 1000;
       for (;;) {
         const st = await key(state.fast, 'beaconstate');
-        const bound = ids.map((id) => st?.seen?.[`${me}|${id}`]);
+        const { fastSeenKey, fastSeenRound } = await import('../lib/js/fast.ts');
+        const bound = await Promise.all(ids.map(async (id) => fastSeenRound(await key(state.fast, fastSeenKey(me, id)), me, id)));
         const served = bound.filter((r) => r !== undefined && Number(r) <= Number(st?.round));
         if (served.length === n) {
           const result = { fast: state.fast, served: n, round: st.round, seconds: (Date.now() - t0) / 1000 };
