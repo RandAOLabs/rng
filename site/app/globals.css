@@ -89,13 +89,16 @@ h2 { font-size: 22px; line-height: 1.25; }
 .rng-visual { position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; justify-items: center; min-width: 0; height: 100%; max-height: 620px; padding: 34px; border: 1px solid var(--line); background: radial-gradient(circle at center, #171717 0, #080808 46%, #030303 72%); overflow: hidden; }
 .home-status { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 16px; width: 100%; }
 .home-status p { display: flex; align-items: center; gap: 10px; }
+.home-status-copy { display: grid; min-width: 0; gap: 4px; }
+.home-status-copy small { color: var(--gray); font-size: 12px; font-variant-numeric: tabular-nums; }
 .home-status a { display: inline-flex; align-items: center; min-height: 32px; color: var(--gray); text-decoration: none; transition: color .15s var(--ease); }
 .home-status a:hover { color: var(--white); }
 .pipe { --tag: 64px; position: relative; z-index: 2; display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: 100%; height: 100%; min-height: 220px; margin-bottom: 22px; }
 .pipe-total { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; padding-bottom: 14px; color: var(--gray); font-size: 12px; }
 .pipe-total > div { display: flex; align-items: baseline; gap: 12px; }
 .pipe-total b { color: var(--white); font-size: 28px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.pipe-pace { color: var(--gray); font-size: 12px; white-space: pre; font-variant-numeric: tabular-nums; }
+.pipe-pace { display: grid; gap: 4px; color: var(--gray); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pipe-pace b { color: var(--white); font-size: inherit; }
 .pipe-head, .track { display: grid; grid-template-columns: var(--tag) repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pipe-head { padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .pipe-head div { display: grid; gap: 4px; align-content: end; justify-items: center; color: var(--gray); }
@@ -104,6 +107,8 @@ h2 { font-size: 22px; line-height: 1.25; }
 .tracks { position: relative; overflow: hidden; }
 /* Rows move by transform and settle well inside the ~500 ms between rounds. */
 .track { position: absolute; top: 0; left: 0; right: 0; height: calc(100% / 3); align-items: center; transform: translateY(calc(var(--slot) * 100%)); transition: transform .3s var(--ease), opacity .2s var(--ease); animation: fade-in .2s ease-out; }
+.rng-visual[data-stale="true"] .track.live .track-tag span,
+.rng-visual[data-stale="true"] .stage-box.active::after { animation-play-state: paused; }
 .track.out { opacity: 0; pointer-events: none; }
 .track-tag { display: grid; gap: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .track-tag b { color: var(--white); font-weight: 400; }

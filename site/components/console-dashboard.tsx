@@ -2,16 +2,9 @@
 
 import { useRef, useState, type CSSProperties } from "react";
 import { useLivePoll } from "../hooks/use-live-poll";
+import { beaconViewStatus, updateBeaconView, verifiedRoundAge, type Beacon, type BeaconView, type InFlight, type Recent, type Validator } from "../lib/beacon-panel";
 import { SiteFooter, SiteHeader } from "./site-header";
 
-type Round = {
-  round: number; value: string; opened?: number; finalizedAt?: number;
-  commits: Record<string, string>; outputs: Record<string, { via: "reveal" | "crack" }>;
-};
-type InFlight = { round: number; committed?: unknown; revealed?: unknown };
-type Validator = { address: string; ready?: boolean; suspended?: boolean; exiting?: boolean };
-type Recent = { round: number; value: string; opened?: number; finalizedAt?: number };
-type Beacon = { configured: boolean; round?: number; proofValid?: boolean; latest?: Round; recent?: Recent[]; validators?: Validator[]; open?: InFlight; revealing?: InFlight[] };
 type Pulse = { round: number; value: string; ms?: number };
 type Cell = "empty" | "locked" | "lit" | "crack";
 // Three fixed slots, top to bottom: NEXT (the newest round in flight), CURRENT
@@ -24,6 +17,8 @@ const SLOTS = ["Next", "Current", "Resolved"];
 const ROWS = SLOTS.length;
 // The CSS slide takes 300 ms; drop the row once it is out of view.
 const OUT_MS = 400;
+const EMPTY_VIEW: BeaconView = { now: 0 };
+const utcTime = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", timeStyle: "medium" });
 
 const STAGES = ["Commit", "Reveal", "Combine", "Verify"];
 
@@ -59,15 +54,6 @@ function toTracks(beacon: Beacon, validators: Validator[]): Track[] {
   return tracks;
 }
 
-// Rounds per second over the finalized rounds the beacon still lists.
-function roundRate(recent: Recent[]): number | undefined {
-  const done = recent.filter((r) => r.finalizedAt).sort((x, y) => x.round - y.round);
-  if (done.length < 2) return undefined;
-  const first = done[0], last = done[done.length - 1];
-  const seconds = (last.finalizedAt! - first.finalizedAt!) / 1000;
-  return seconds > 0 ? (last.round - first.round) / seconds : undefined;
-}
-
 // A text gauge for the pace against the 2 rounds/s target:
 // `[··|··●··|··] on pace`. Each side spans 1 round/s; the bars mark ±10%.
 export function paceScale(rate: number, target = 2): string {
@@ -82,12 +68,12 @@ export function paceScale(rate: number, target = 2): string {
 // Fixed width so the rate, gauge and label never shift as the numbers change.
 export function paceText(rate?: number): string {
   const width = paceScale(2).length + 7;
-  if (!rate) return "Measuring".padEnd(width);
+  if (rate === undefined) return "Measuring pace".padEnd(width);
   const shown = Math.min(rate, 99.9).toFixed(1).padStart(4);
   return `${shown}/s ${paceScale(rate)}`;
 }
 
-function RoundTrack({ track, ok }: { track: Track; ok: boolean }) {
+function RoundTrack({ track }: { track: Track }) {
   const committed = track.commit.some((c) => c !== "empty");
   const revealed = track.done || track.reveal.every((c) => c !== "empty");
   const state = [
@@ -102,23 +88,23 @@ function RoundTrack({ track, ok }: { track: Track; ok: boolean }) {
       <div className={`stage-box ${state[0]}`}>{track.commit.map((c, i) => <span key={i} className={`cell ${c}`} />)}</div>
       <div className={`stage-box ${state[1]}`}>{track.reveal.map((c, i) => <span key={i} className={`cell ${c}`} />)}</div>
       <div className={`stage-box ${state[2]}`}>{track.done ? <span className="merge" /> : track.reveal.map((_, i) => <span key={i} className="cell empty" />)}</div>
-      <div className={`stage-box ${state[3]}`}>{track.done ? <span className="verdict"><b>{ok ? "Pass" : "Wait"}</b><code>{track.value?.slice(0, 10)}</code></span> : <span className="verdict pending">—</span>}</div>
+      <div className={`stage-box ${state[3]}`}>{track.done ? <span className="verdict"><b>Pass</b><code>{track.value?.slice(0, 10)}</code></span> : <span className="verdict pending">—</span>}</div>
     </div>
   );
 }
 
-function BeaconPipeline({ validators, tracks, ok, total, rate }: { validators: Validator[]; tracks: Track[]; ok: boolean; total?: number; rate?: number }) {
+function BeaconPipeline({ validators, tracks, total, rate, paused }: { validators: Validator[]; tracks: Track[]; total?: number; rate?: number; paused: boolean }) {
   return (
     <div className="pipe">
       <div className="pipe-total">
-        <div><span>Total rounds</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
-        <small className="pipe-pace">{paceText(rate)}</small>
+        <div><span>Last verified round</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
+        <small className="pipe-pace"><span>Observed pace · 30s</span><b>{paused ? "Pace paused" : paceText(rate).trimEnd()}</b></small>
       </div>
       <div className="pipe-head">
         <div><span>Validators</span><b>{validators.length || "—"}</b></div>
         {STAGES.map((stage) => <div key={stage}><span>{stage}</span></div>)}
       </div>
-      <div className="tracks">{tracks.map((t) => <RoundTrack key={t.round} track={t} ok={ok} />)}</div>
+      <div className="tracks">{tracks.map((t) => <RoundTrack key={t.round} track={t} />)}</div>
     </div>
   );
 }
@@ -128,48 +114,50 @@ export function ConsoleDashboard() {
   const [validators, setValidators] = useState<Validator[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
 
-  const [total, setTotal] = useState<number>();
-  const [live, setLive] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
-  const [rate, setRate] = useState<number>();
-  const seen = useRef(0);
+  const current = useRef(EMPTY_VIEW);
+  const [view, setView] = useState(EMPTY_VIEW);
 
-  // Reads take longer than a round, so three staggered lanes keep a fresh
-  // sample arriving every ~half second; stale responses are dropped.
+  // One bounded read at a time. The API's recent list fills in rounds between reads.
   useLivePoll(async () => {
+    let body: Beacon | null = null;
     try {
-      const response = await fetch("/api/anyhonest", { cache: "no-store" });
-      if (!response.ok) { setUnavailable(true); return; }
-      const body = await response.json() as Beacon;
-      setUnavailable(!body.configured);
-      const round = body.round ?? 0;
-      if (round < seen.current) return;
-      seen.current = round;
-      // The active set: validators ready for rounds now. A slashed or paused one
-      // drops out of the count until it rejoins; a new one adds to it.
-      const active = (body.validators ?? []).filter((v) => !v.exiting && !v.suspended && v.ready !== false);
-      setValidators(active);
-      setTotal(body.latest?.round);
-      setLive(Boolean(body.proofValid));
-      const next = toTracks(body, active);
-      setTracks((prev) => {
-        const shown = new Set(next.map((t) => t.round));
-        const now = Date.now();
-        // A round that left the slots slides out below, then is dropped once faded.
-        const leaving = prev.filter((t) => !shown.has(t.round) && (!t.out || now - t.out < OUT_MS))
-          .map((t) => t.out ? t : { ...t, slot: ROWS, out: now });
-        return [...next, ...leaving];
-      });
-      // Backfill rounds that finalized between samples.
-      const recent = body.recent ?? (body.latest ? [body.latest] : []);
-      setRate((prev) => roundRate(recent) ?? prev);
-      setFeed((prev) => {
-        const known = new Set(prev.map((p) => p.round));
-        const added = recent.filter((r) => !known.has(r.round)).map(toPulse);
-        return added.length ? [...added, ...prev].sort((x, y) => y.round - x.round).slice(0, 3) : prev;
-      });
-    } catch { setUnavailable(true); }
-  }, 150, 3, 450);
+      const response = await fetch("/api/anyhonest", { cache: "no-store", signal: AbortSignal.timeout(4_000) });
+      if (response.ok) body = await response.json() as Beacon;
+    } catch { /* Retain the last verified snapshot while retrying. */ }
+
+    const state = current.current;
+    const updated = updateBeaconView(state, body, Date.now());
+    current.current = updated;
+    setView(updated);
+    const snapshot = updated.lastVerified;
+    if (!snapshot || snapshot === state.lastVerified) return;
+
+    const beacon = snapshot.beacon;
+    // Validators that left, paused or were suspended cannot join new rounds.
+    const active = (beacon.validators ?? []).filter((v) => !v.exiting && !v.suspended && v.ready !== false);
+    const processChanged = state.lastVerified?.beacon.process !== beacon.process;
+    setValidators(active);
+    const next = toTracks(beacon, active);
+    setTracks((prev) => {
+      const shown = new Set(next.map((track) => track.round));
+      const leaving = (processChanged ? [] : prev)
+        .filter((track) => !shown.has(track.round) && (!track.out || updated.now - track.out < OUT_MS))
+        .map((track) => track.out ? track : { ...track, slot: ROWS, out: updated.now });
+      return [...next, ...leaving];
+    });
+    setFeed((prev) => {
+      const pulses = new Map((processChanged ? [] : prev).map((pulse) => [pulse.round, pulse]));
+      for (const round of [...(beacon.recent ?? []), beacon.latest]) {
+        pulses.set(round.round, toPulse(round));
+      }
+      return [...pulses.values()].sort((a, b) => b.round - a.round).slice(0, 3);
+    });
+  }, 300);
+
+  const status = beaconViewStatus(view);
+  const verified = view.lastVerified;
+  const stale = status !== "Round verified";
+  const lastGap = view.lastOutage && (view.checkedAt ?? view.now) - view.lastOutage.at < 5 * 60_000 ? view.lastOutage : undefined;
 
   return (
     <main className="shell home-page">
@@ -182,13 +170,18 @@ export function ConsoleDashboard() {
           <a className="button primary" href="/try">Open the RNG console</a>
         </div>
 
-        <section className="rng-visual" aria-label="Live Any-Honest beacon">
-          <BeaconPipeline validators={validators} tracks={tracks} ok={live} total={total} rate={rate} />
-          <ul className="beacon-feed">
+        <section className="rng-visual" aria-label="Live Any-Honest beacon" data-stale={stale}>
+          <BeaconPipeline validators={validators} tracks={tracks} total={verified?.beacon.latest.round} rate={view.pace?.rate} paused={view.failedSince !== undefined || view.issue === "proof"} />
+          <ul className="beacon-feed" aria-label="Recent finalized rounds reported by the beacon">
             {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b>{p.ms ? `${p.ms}ms` : ""}</b></li>)}
           </ul>
           <div className="home-status">
-            <p role="status"><span className={live && !unavailable ? "signal on" : "signal"} /><strong>{unavailable ? "Beacon unreachable" : live ? "Round verified" : "Awaiting a verified round"}</strong></p>
+            <div className="home-status-copy">
+              <p role="status"><span className={stale ? "signal" : "signal on"} aria-hidden="true" /><strong>{status}</strong></p>
+              {verified && <small>{verified.at === verified.beacon.latest.finalizedAt ? "Finalized" : "First verified"} <time dateTime={new Date(verified.at).toISOString()}>{utcTime.format(verified.at)} UTC</time> · {Math.floor(verifiedRoundAge(view) / 1000)}s ago</small>}
+              {view.issue === "proof" && view.failedSince !== undefined && <small>Latest proof check failed</small>}
+              {lastGap && <small>Last reported gap: {Math.round(lastGap.gapMs / 1000)}s at <time dateTime={new Date(lastGap.at).toISOString()}>{utcTime.format(lastGap.at)} UTC</time></small>}
+            </div>
             <a href="/how">How the beacon works →</a>
           </div>
         </section>

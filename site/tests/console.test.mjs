@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto, { createHash } from 'node:crypto';
 import * as fair from '../../lib/js/fair-client.ts';
+import { beaconViewStatus, updateBeaconView } from '../lib/beacon-panel.ts';
 import * as history from '../../lib/js/history.ts';
 import { beaconHealth, trackRate, SLOW_MS } from '../components/health-banner.tsx';
 import { estimateEarnings } from '../components/validator-guide.tsx';
@@ -309,4 +310,70 @@ test('wallet messages follow the node and process from status and require a rece
   calls.length = 0;
   await assert.rejects(sendMessage(node, process, tags), /valid slot/);
   assert.equal(calls.length, 1);
+});
+
+
+const beaconRound = (round, finalizedAt) => ({
+  round, finalizedAt, value: "verified", commits: {}, outputs: {},
+});
+const beaconSample = (round, at, extra = {}) => ({
+  configured: true, process: "active", latest: beaconRound(round, at), proofValid: true,
+  checkedAt: new Date(at).toISOString(), ...extra,
+});
+
+test("beacon transport and proof failures preserve the last verified round", () => {
+  const start = 80_000;
+  const live = updateBeaconView({ now: 0 }, beaconSample(80, start), start);
+  const firstMiss = updateBeaconView(live, null, start + 500);
+  assert.equal(beaconViewStatus(firstMiss), "Retrying beacon");
+  assert.equal(firstMiss.lastVerified, live.lastVerified);
+
+  const stale = updateBeaconView(firstMiss, beaconSample(79, start - 500), start + 1_000);
+  assert.equal(beaconViewStatus(stale), "Retrying beacon");
+  assert.equal(stale.lastVerified, live.lastVerified);
+
+  const unreachable = updateBeaconView(stale, null, start + 6_500);
+  assert.equal(beaconViewStatus(unreachable), "Beacon unreachable");
+  const invalid = updateBeaconView(unreachable, beaconSample(81, start + 7_000, { proofValid: false }), start + 7_000);
+  assert.equal(beaconViewStatus(invalid), "Round proof failed");
+  assert.equal(invalid.lastVerified, live.lastVerified);
+  assert.equal(invalid.pace, undefined);
+
+  const missedAfterProof = updateBeaconView(invalid, null, start + 7_100);
+  assert.equal(beaconViewStatus(missedAfterProof), "Retrying beacon");
+  assert.equal(missedAfterProof.issue, "proof");
+  assert.equal(missedAfterProof.lastVerified, live.lastVerified);
+
+  const recovered = updateBeaconView(missedAfterProof, beaconSample(82, start + 7_500), start + 7_500);
+  assert.equal(beaconViewStatus(recovered), "Round verified");
+  assert.equal(recovered.lastVerified.beacon.latest.round, 82);
+  assert.equal(recovered.failedSince, undefined);
+});
+
+test("beacon pace counts observed finalizations and requires a covered window", () => {
+  const start = 80_000;
+  let view = { now: 0 };
+  let recent;
+  for (let i = 0; i <= 60; i++) {
+    const at = start + i * 500;
+    // Only these rounds finalized, with skipped ordinal IDs in between.
+    recent = Array.from({ length: Math.min(i + 1, 8) }, (_, j) => beaconRound((i - j + 1) * 2, at - j * 500));
+    view = updateBeaconView(view, beaconSample((i + 1) * 2, at, { recent }), at);
+    if (i < 60) assert.equal(view.pace.rate, undefined);
+  }
+  assert.equal(view.pace.rate, 2);
+
+  const checkAt = start + 45_000;
+  const waiting = updateBeaconView(view, beaconSample(122, checkAt, { latest: recent[0], recent }), checkAt);
+  assert.equal(beaconViewStatus(waiting), "Waiting for a new round");
+  assert.equal(waiting.pace.rate, 1);
+
+  const stoppedAt = start + 60_000;
+  const stopped = updateBeaconView(waiting, beaconSample(122, stoppedAt, { latest: recent[0], recent }), stoppedAt);
+  assert.equal(stopped.pace.rate, 0);
+
+  const newAt = start + 62_000;
+  const fresh = updateBeaconView(stopped, beaconSample(240, newAt), newAt);
+  assert.equal(beaconViewStatus(fresh), "Round verified");
+  assert.equal(fresh.pace.rate, undefined);
 });
