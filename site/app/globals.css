@@ -98,6 +98,7 @@ h2 { font-size: 22px; line-height: 1.25; }
 .pipe-total > div { display: flex; align-items: baseline; gap: 12px; }
 .pipe-total b { color: var(--white); font-size: 28px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .pipe-pace { display: grid; gap: 4px; color: var(--gray); font-size: 12px; font-variant-numeric: tabular-nums; }
+.beacon-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .pipe-pace b { color: var(--white); font-size: inherit; }
 .pipe-head, .track { display: grid; grid-template-columns: var(--tag) repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pipe-head { padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
@@ -131,6 +132,8 @@ h2 { font-size: 22px; line-height: 1.25; }
 .verdict b { color: var(--white); font-weight: 700; }
 .verdict code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--gray); }
 .verdict.pending { color: var(--dim); }
+.beacon-feed-wrap { width: 100%; }
+.beacon-round-time { display: block; margin-bottom: 4px; color: var(--gray); font-size: 12px; text-align: right; }
 .beacon-feed { position: relative; z-index: 4; display: grid; gap: 2px; width: 100%; margin: 0 0 12px; padding: 0; list-style: none; font-size: 12px; font-variant-numeric: tabular-nums; }
 .beacon-feed li { display: grid; grid-template-columns: 7ch 1fr auto; gap: 10px; color: var(--gray); opacity: .55; }
 .beacon-feed li.fresh { color: var(--white); opacity: 1; animation: feed-in .2s var(--ease); }

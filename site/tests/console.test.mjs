@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto, { createHash } from 'node:crypto';
 import * as fair from '../../lib/js/fair-client.ts';
-import { beaconViewStatus, updateBeaconView } from '../lib/beacon-panel.ts';
+import { beaconPace, beaconViewStatus, paceBand, updateBeaconView } from '../lib/beacon-panel.ts';
 import * as history from '../../lib/js/history.ts';
 import { beaconHealth, trackRate, SLOW_MS } from '../components/health-banner.tsx';
 import { estimateEarnings } from '../components/validator-guide.tsx';
@@ -376,4 +376,29 @@ test("beacon pace counts observed finalizations and requires a covered window", 
   const fresh = updateBeaconView(stopped, beaconSample(240, newAt), newAt);
   assert.equal(beaconViewStatus(fresh), "Round verified");
   assert.equal(fresh.pace.rate, undefined);
+});
+
+
+test("beacon pace shows a fresh snapshot before the fully observed window", () => {
+  const at = 90_000;
+  const recent = Array.from({ length: 8 }, (_, i) => beaconRound(90 - i, at - i * 500));
+  const view = updateBeaconView({ now: 0 }, beaconSample(90, at, { recent }), at);
+  assert.deepEqual(beaconPace(view), { rate: 2, windowMs: 3500, snapshot: true });
+
+  const sparse = updateBeaconView({ now: 0 }, beaconSample(90, at), at);
+  assert.equal(beaconPace(sparse), undefined);
+  const interrupted = updateBeaconView(view, null, at + 200);
+  assert.equal(beaconPace(interrupted), undefined);
+
+  const late = updateBeaconView({ now: 0 }, beaconSample(90, at + 7_000, {
+    latest: recent[0], recent,
+  }), at + 7_000);
+  assert.equal(beaconPace(late), undefined);
+});
+
+test("pace bands keep the original thresholds", () => {
+  assert.equal(paceBand(1.79), "Slow");
+  assert.equal(paceBand(1.8), "On par");
+  assert.equal(paceBand(2.2), "On par");
+  assert.equal(paceBand(2.21), "Fast");
 });

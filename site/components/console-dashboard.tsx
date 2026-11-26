@@ -2,7 +2,7 @@
 
 import { useRef, useState, type CSSProperties } from "react";
 import { useLivePoll } from "../hooks/use-live-poll";
-import { beaconViewStatus, updateBeaconView, verifiedRoundAge, type Beacon, type BeaconView, type InFlight, type Recent, type Validator } from "../lib/beacon-panel";
+import { beaconPace, beaconViewStatus, paceBand, updateBeaconView, verifiedRoundAge, type Beacon, type BeaconView, type InFlight, type PaceReading, type Recent, type Validator } from "../lib/beacon-panel";
 import { SiteFooter, SiteHeader } from "./site-header";
 
 type Pulse = { round: number; value: string; ms?: number };
@@ -25,9 +25,10 @@ const STAGES = ["Commit", "Reveal", "Combine", "Verify"];
 // Process state serialises sets as either address lists or address-keyed maps.
 const members = (set: unknown) => new Set(Array.isArray(set) ? set.map(String) : Object.keys(set ?? {}));
 
-const toPulse = (r: Recent): Pulse => ({
-  round: r.round, value: r.value, ms: r.opened && r.finalizedAt ? r.finalizedAt - r.opened : undefined,
-});
+function toPulse(round: Recent): Pulse {
+  const ms = (round.finalizedAt ?? NaN) - (round.opened ?? NaN);
+  return { round: round.round, value: round.value, ms: Number.isFinite(ms) && ms >= 0 ? ms : undefined };
+}
 
 function toTracks(beacon: Beacon, validators: Validator[]): Track[] {
   const latest = beacon.latest;
@@ -54,23 +55,24 @@ function toTracks(beacon: Beacon, validators: Validator[]): Track[] {
   return tracks;
 }
 
-// A text gauge for the pace against the 2 rounds/s target:
-// `[··|··●··|··] on pace`. Each side spans 1 round/s; the bars mark ±10%.
-export function paceScale(rate: number, target = 2): string {
-  const half = 5;
-  const offset = Math.max(-half, Math.min(half, Math.round(((rate - target) / target) * half * 2)));
-  const cells = Array.from({ length: half * 2 + 1 }, (_, i) => (i === half + offset ? "●" : "·"));
-  const bar = `[${cells.slice(0, half - 1).join("")}|${cells.slice(half - 1, half + 2).join("")}|${cells.slice(half + 2).join("")}]`;
-  const label = rate < target * 0.9 ? "slow" : rate > target * 1.1 ? "fast" : "on pace";
-  return `${bar} ${label.padEnd(7)}`;
-}
+function BeaconPace({ reading, paused }: { reading?: PaceReading; paused: boolean }) {
+  if (!reading) {
+    return <small className="pipe-pace"><span>Observed pace · 30s</span><b>{paused ? "Pace paused" : "Measuring pace"}</b></small>;
+  }
 
-// Fixed width so the rate, gauge and label never shift as the numbers change.
-export function paceText(rate?: number): string {
-  const width = paceScale(2).length + 7;
-  if (rate === undefined) return "Measuring pace".padEnd(width);
-  const shown = Math.min(rate, 99.9).toFixed(1).padStart(4);
-  return `${shown}/s ${paceScale(rate)}`;
+  const band = paceBand(reading.rate);
+  const dots = ["Slow", "On par", "Fast"].map((label) => band === label ? "·●·" : "···").join("|");
+  const rate = reading.rate.toFixed(2);
+  const label = reading.snapshot ? `Pace snapshot · ${(reading.windowMs / 1000).toFixed(1)}s` : "Observed pace · 30s";
+  return (
+    <small className="pipe-pace">
+      <span>{label}</span>
+      <b className="pace-reading">
+        <span className="beacon-sr">{rate} rounds per second, {band}</span>
+        <span aria-hidden="true">{rate}/s [{dots}] {band}</span>
+      </b>
+    </small>
+  );
 }
 
 function RoundTrack({ track }: { track: Track }) {
@@ -93,12 +95,12 @@ function RoundTrack({ track }: { track: Track }) {
   );
 }
 
-function BeaconPipeline({ validators, tracks, total, rate, paused }: { validators: Validator[]; tracks: Track[]; total?: number; rate?: number; paused: boolean }) {
+function BeaconPipeline({ validators, tracks, total, reading, paused }: { validators: Validator[]; tracks: Track[]; total?: number; reading?: PaceReading; paused: boolean }) {
   return (
     <div className="pipe">
       <div className="pipe-total">
         <div><span>Last verified round</span><b>{total?.toLocaleString("en-US") ?? "—"}</b></div>
-        <small className="pipe-pace"><span>Observed pace · 30s</span><b>{paused ? "Pace paused" : paceText(rate).trimEnd()}</b></small>
+        <BeaconPace reading={reading} paused={paused} />
       </div>
       <div className="pipe-head">
         <div><span>Validators</span><b>{validators.length || "—"}</b></div>
@@ -171,10 +173,13 @@ export function ConsoleDashboard() {
         </div>
 
         <section className="rng-visual" aria-label="Live Any-Honest beacon" data-stale={stale}>
-          <BeaconPipeline validators={validators} tracks={tracks} total={verified?.beacon.latest.round} rate={view.pace?.rate} paused={view.failedSince !== undefined || view.issue === "proof"} />
-          <ul className="beacon-feed" aria-label="Recent finalized rounds reported by the beacon">
-            {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b>{p.ms ? `${p.ms}ms` : ""}</b></li>)}
-          </ul>
+          <BeaconPipeline validators={validators} tracks={tracks} total={verified?.beacon.latest.round} reading={beaconPace(view)} paused={view.failedSince !== undefined || view.issue === "proof" || view.issue === "unconfigured"} />
+          <div className="beacon-feed-wrap">
+            {feed.length > 0 && <span className="beacon-round-time">Open to finality</span>}
+            <ul className="beacon-feed" aria-label="Recent finalized rounds reported by the beacon">
+              {feed.map((p, i) => <li key={p.round} className={i === 0 ? "fresh" : undefined}><span>#{p.round}</span><code>{p.value.slice(0, 24)}</code><b title="Finalized time minus the beacon’s recorded opening time">{p.ms === undefined ? "" : p.ms + " ms"}</b></li>)}
+            </ul>
+          </div>
           <div className="home-status">
             <div className="home-status-copy">
               <p role="status"><span className={stale ? "signal" : "signal on"} aria-hidden="true" /><strong>{status}</strong></p>

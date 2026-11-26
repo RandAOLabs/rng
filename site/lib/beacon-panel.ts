@@ -1,5 +1,6 @@
 export const PACE_WINDOW_MS = 30_000;
 const ROUND_STALE_MS = 6_000;
+const MIN_SNAPSHOT_MS = 2_000;
 const UNREACHABLE_MS = 6_000;
 
 export type Recent = { round: number; value: string; opened?: number; finalizedAt?: number };
@@ -12,7 +13,8 @@ export type Beacon = {
   recent?: Recent[]; validators?: Validator[]; open?: InFlight; revealing?: InFlight[]; lastOutage?: Outage;
 };
 type Verified = { beacon: Beacon & { latest: Round }; at: number; checkedAt: number; receivedAt: number };
-type Pace = { coverageFrom: number; lastSample: Set<number>; rounds: Map<number, number>; rate?: number };
+export type PaceReading = { rate: number; windowMs: number; snapshot: boolean };
+type Pace = { coverageFrom: number; lastSample: Set<number>; rounds: Map<number, number>; rate?: number; snapshot?: PaceReading };
 export type BeaconView = {
   now: number; checkedAt?: number; issue?: "proof" | "awaiting" | "unconfigured";
   failedSince?: number; lastVerified?: Verified; lastOutage?: Outage; pace?: Pace;
@@ -33,7 +35,18 @@ function observedPace(previous: Pace | undefined, rows: Recent[], checkedAt: num
   const rounds = new Map(connected ? previous.rounds : undefined);
   for (const [round, at] of sample) rounds.set(round, at);
   for (const [round, at] of rounds) if (at <= start) rounds.delete(round);
-  return { coverageFrom, lastSample, rounds, rate: coverageFrom <= start ? rounds.size / (PACE_WINDOW_MS / 1000) : undefined };
+  if (coverageFrom <= start) {
+    return { coverageFrom, lastSample, rounds, rate: rounds.size / (PACE_WINDOW_MS / 1000) };
+  }
+
+  // The first observed round opens the measured interval. Count only later
+  // finalizations and label this shorter span until the full window is covered.
+  const windowMs = checkedAt - coverageFrom;
+  const latestAt = Math.max(...sample.values());
+  const snapshot = windowMs >= MIN_SNAPSHOT_MS && checkedAt - latestAt < ROUND_STALE_MS && rounds.size > 1
+    ? { rate: (rounds.size - 1) / (windowMs / 1000), windowMs, snapshot: true }
+    : undefined;
+  return { coverageFrom, lastSample, rounds, snapshot };
 }
 
 export function updateBeaconView(previous: BeaconView, beacon: Beacon | null, now: number): BeaconView {
@@ -68,6 +81,16 @@ export function updateBeaconView(previous: BeaconView, beacon: Beacon | null, no
     lastVerified: { beacon: { ...beacon, latest }, at, checkedAt, receivedAt: now },
     pace: observedPace(switched ? undefined : previous.pace, [...(beacon.recent ?? []), latest], checkedAt),
   };
+}
+
+export function beaconPace(view: BeaconView): PaceReading | undefined {
+  if (view.failedSince !== undefined || view.issue) return undefined;
+  const pace = view.pace;
+  return pace?.rate === undefined ? pace?.snapshot : { rate: pace.rate, windowMs: PACE_WINDOW_MS, snapshot: false };
+}
+
+export function paceBand(rate: number): "Slow" | "On par" | "Fast" {
+  return rate < 1.8 ? "Slow" : rate > 2.2 ? "Fast" : "On par";
 }
 
 export function verifiedRoundAge(view: BeaconView): number {
