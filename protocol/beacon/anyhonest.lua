@@ -440,6 +440,148 @@ local function actor(msg, base)
   return fromProcess
 end
 
+-- BEGIN hypertoken admission (Paralith packages/hypertoken/lua/admission.lua)
+local RequestAdmit = (function(...)
+--- admission.lua -- which PROCESS sent a message: exactly what this process's
+--- own scheduler admitted for the slot being computed, and nothing else
+--- (docs/FOREIGN_SCHEDULERS.md).
+---
+--- A process has no key, so a push names its origin in `from-*` stamps that the
+--- delivering node writes. Whoever signed the body says nothing about origin:
+--- a foreign node can sign anything. What counts is the Assignment (`req`)
+--- that THIS process's scheduler signs for the slot. When its door admits a
+--- delivery under node policy (infra/nodes/trust.json) -- its own push
+--- (`local`), a trusted scheduler's (`trusted`), or one it recomputed from the
+--- sender's archived schedule (`verified`) -- it writes `admit-*` keys beside
+--- the body. The rule is one comparison, the same for all three:
+---
+---   the body's from-process, from-entry and from-slot (every spelling of each
+---   agreeing, the slot narrowed to an integer) equal admit-process,
+---   admit-entry and admit-slot on the Assignment.
+---
+--- `admit-*` keys inside a BODY are never read; only `rawget(req, ...)` is. A
+--- stamped body the scheduler did not admit names no process, and is not its
+--- signer's word either (a node that relays a push must not act as itself).
+--- A wallet is still named by its own real signature, in each contract.
+---
+--- `capture(req)` runs once at every compute entry and sets the one global,
+--- `Admitted`. Every copy of this module in a bundle reads that same global,
+--- so the `(msg, base)` callers of each contract's `sourceProcess` stay as
+--- they are.
+---
+--- Loaded as `(function(...) <this file> end)()`. Returns a table. ASCII only;
+--- Luerl-safe: no goto, no table.move, every number narrowed.
+
+local A = {}
+
+--- The keys the rule reads, each as `admit-<key>` off the Assignment. The
+--- scheduler writes more (`admit-outbox-key`, `-scheduler`, `-policy`,
+--- `-policy-epoch`); they stay on the signed Assignment as evidence, and no
+--- contract decision reads them.
+A.KEYS = { "process", "slot", "entry" }
+
+local function int(v)
+  return math.tointeger(tonumber(v))
+end
+
+local function isId(s)
+  return type(s) == "string" and #s == 43 and s:match("^[%w_%-]+$") ~= nil
+end
+
+--- `from-process`, `From_Process` and `FromProcess` are one name.
+local function norm(name)
+  return (tostring(name):lower():gsub("[-_]", ""))
+end
+
+--- The raw body under a tag view that keeps it as `__raw`, or the body itself.
+local function raw(msg)
+  if type(msg) ~= "table" then return {} end
+  local mt = getmetatable(msg)
+  if type(mt) == "table" and type(rawget(mt, "__raw")) == "table" then return rawget(mt, "__raw") end
+  return msg
+end
+
+--- Every `from-*` stamp on a body by normalised name, and true when two
+--- spellings of one stamp disagree, which believes nothing.
+function A.stamps(msg)
+  local out, clash = {}, false
+  for k, v in pairs(raw(msg)) do
+    if type(k) == "string" and v ~= nil and v ~= "" then
+      local n = norm(k)
+      if n ~= "from" and n:sub(1, 4) == "from" then
+        if out[n] ~= nil and out[n] ~= v then clash = true end
+        out[n] = v
+      end
+    end
+  end
+  return out, clash
+end
+
+--- Does the body carry any `from-*` stamp? Then it is a process delivery and
+--- never a wallet's own word, whether or not it was admitted.
+function A.pushed(msg)
+  return next((A.stamps(msg))) ~= nil
+end
+
+--- Read this slot's admission off the Assignment; nil when there is none.
+--- Call it first thing in compute, every slot.
+function A.capture(req)
+  local a = nil
+  if type(req) == "table" and rawget(req, "admit-process") ~= nil then
+    a = {}
+    for _, k in ipairs(A.KEYS) do a[k] = rawget(req, "admit-" .. k) end
+  end
+  Admitted = a
+  return a
+end
+
+--- The process a body came from when this slot's admission names exactly it;
+--- otherwise nil and why.
+function A.source(msg)
+  local a = Admitted
+  if type(a) ~= "table" then return nil, "Not admitted by this process's scheduler" end
+  local s, clash = A.stamps(msg)
+  if clash then return nil, "Conflicting from-* stamps" end
+  if not isId(s.fromprocess) or s.fromprocess ~= a.process then
+    return nil, "from-process is not what this slot admitted"
+  end
+  if type(s.fromentry) ~= "string" or s.fromentry ~= a.entry then
+    return nil, "from-entry is not what this slot admitted"
+  end
+  local slot = int(s.fromslot)
+  if slot == nil or slot ~= int(a.slot) then return nil, "from-slot is not what this slot admitted" end
+  return s.fromprocess
+end
+
+--- Who acts: the admitted process for a stamped body, nobody for a stamped
+--- body that was not admitted (nil and the admission's reason, so a refusal
+--- can say which stamp failed), and `signer(msg)` (the contract's own: one
+--- real signature, `type` OR `alg`) for an unstamped one.
+function A.actor(msg, signer)
+  if A.pushed(msg) then return A.source(msg) end
+  return signer(msg)
+end
+
+return A
+end)()
+-- END hypertoken admission
+
+local function requestActor(msg, base, raw, req)
+  local admitted = RequestAdmit.capture(req)
+  if not RequestAdmit.pushed(raw) then return actor(msg, base) end
+  if admitted or (type(req) == "table" and
+      (rawget(req, "admit-slot") ~= nil or rawget(req, "admit-entry") ~= nil)) then
+    local sender = RequestAdmit.source(raw)
+    FromProcess = sender ~= nil
+    return sender
+  end
+  -- A legacy same-node delivery still has the receiving scheduler's signature.
+  local sender = actor(msg, base)
+  if FromProcess then return sender end
+  return nil
+end
+
+
 local function isAoAddress(s) return type(s) == "string" and #s == 43 and s:match("^[%w_%-]+$") ~= nil end
 
 
@@ -2280,7 +2422,13 @@ function compute(base, req)
     local saved = snapshot()
     local ok, out = pcall(function()
       advance(now)
-      local from = actor(msg, base)
+      local verb = verbName(msg.Action or "none")
+      local from
+      if verb == "Request-Random" then
+        from = requestActor(msg, base, raw, req)
+      else
+        from = actor(msg, base)
+      end
       Who = Gov.ownerOf(base, type(raw) == "table" and raw or nil)
       Gov.prune(govQueue(), now)
       -- The DAO executes a proposal once: a redelivered Gov.* with the same
@@ -2291,7 +2439,6 @@ function compute(base, req)
           return reply(base, { duplicate = true, proposal = tostring(proposal) })
         end
       end
-      local verb = verbName(msg.Action or "none")
       if tostring(verb):lower():sub(1, 4) == "gov." then
         local t, late = Gov.clock(now)
         if not t then return fail(base, late) end
