@@ -1,13 +1,14 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- full reloads avoid broken Vinext client navigation */
 import Image from "next/image";
 
-type ActivePage = "why" | "how" | "try" | "dao" | "validators" | "docs";
+type ActivePage = "why" | "how" | "try" | "use" | "dao" | "validators" | "docs";
 type Props = { active?: ActivePage };
 
 const navigation: Array<{ key: ActivePage; label: string; href: string }> = [
   { key: "why", label: "Overview", href: "/why" },
   { key: "how", label: "Protocol", href: "/how" },
   { key: "try", label: "Console", href: "/try" },
+  { key: "use", label: "Use it", href: "/use" },
   { key: "dao", label: "DAO", href: "/dao" },
   { key: "validators", label: "Validators", href: "/validators" },
   { key: "docs", label: "Docs", href: "/docs" },
