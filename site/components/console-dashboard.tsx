@@ -57,18 +57,17 @@ function toTracks(beacon: Beacon, validators: Validator[]): Track[] {
 
 function BeaconPace({ reading, paused }: { reading?: PaceReading; paused: boolean }) {
   if (!reading) {
-    return <small className="pipe-pace"><span>Observed pace · 30s</span><b>{paused ? "Pace paused" : "Measuring pace"}</b></small>;
+    return <small className="pipe-pace"><span>Round pace</span><b>{paused ? "Pace paused" : "Measuring pace"}</b></small>;
   }
 
   const band = paceBand(reading.rate);
   const dots = ["Slow", "On par", "Fast"].map((label) => band === label ? "·●·" : "···").join("|");
   const rate = reading.rate.toFixed(2);
-  const label = reading.snapshot ? `Pace snapshot · ${(reading.windowMs / 1000).toFixed(1)}s` : "Observed pace · 30s";
   return (
     <small className="pipe-pace">
-      <span>{label}</span>
+      <span>Round pace</span>
       <b className="pace-reading">
-        <span className="beacon-sr">{rate} rounds per second, {band}</span>
+        <span className="beacon-sr">{rate} rounds per second, {band}{reading.snapshot ? ", recent sample" : ""}</span>
         <span aria-hidden="true">{rate}/s [{dots}] {band}</span>
       </b>
     </small>
